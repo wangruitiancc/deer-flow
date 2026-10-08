@@ -183,7 +183,7 @@ function mockStreamMessages(
   responseMessage: Record<string, unknown> = {
     type: "ai",
     id: "msg-ai-1",
-    content: "Hello from DeerFlow!",
+    content: "Hello from Matrix-Law!",
   },
 ) {
   const submittedMessages = inputMessages
@@ -1493,7 +1493,7 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
 
 /**
  * Build a minimal SSE stream that the LangGraph SDK can parse.
- * The stream returns a single AI message: "Hello from DeerFlow!".
+ * The stream returns a single AI message: "Hello from Matrix-Law!".
  */
 export function handleRunStream(
   route: Route,
@@ -1508,7 +1508,7 @@ export function handleRunStream(
   const responseMessage = options?.responseMessage ?? {
     type: "ai",
     id: "msg-ai-1",
-    content: "Hello from DeerFlow!",
+    content: "Hello from Matrix-Law!",
   };
   const events = [
     {

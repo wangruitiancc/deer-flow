@@ -1,0 +1,41 @@
+# MatrixFlow Law private OCR overlay.
+# Use only when config.yaml points the law extension OCR endpoint to
+# http://matrix-ocr:8090 and both OCR tokens are set to the same secret.
+
+services:
+  gateway:
+    environment:
+      - MATRIX_LAW_OCR_HTTP_TOKEN=${MATRIX_LAW_OCR_HTTP_TOKEN}
+      - NO_PROXY=${NO_PROXY:-}${NO_PROXY:+,}localhost,127.0.0.1,::1,gateway,frontend,nginx,provisioner,openviking,matrix-ocr,host.docker.internal
+      - no_proxy=${no_proxy:-}${no_proxy:+,}localhost,127.0.0.1,::1,gateway,frontend,nginx,provisioner,openviking,matrix-ocr,host.docker.internal
+    depends_on:
+      matrix-ocr:
+        condition: service_healthy
+
+  matrix-ocr:
+    build:
+      context: ../services/matrix-ocr
+      dockerfile: Dockerfile
+    container_name: deer-flow-matrix-ocr
+    environment:
+      - MATRIX_OCR_HTTP_TOKEN=${MATRIX_OCR_HTTP_TOKEN}
+      - MATRIX_OCR_BIND_HOST=0.0.0.0
+      - MATRIX_OCR_PORT=8090
+      - MATRIX_OCR_MAX_UPLOAD_BYTES=${MATRIX_OCR_MAX_UPLOAD_BYTES:-52428800}
+      - MATRIX_OCR_MAX_PAGES=${MATRIX_OCR_MAX_PAGES:-100}
+      - MATRIX_OCR_DPI=${MATRIX_OCR_DPI:-200}
+      - MATRIX_OCR_INTRA_OP_THREADS=${MATRIX_OCR_INTRA_OP_THREADS:-1}
+      - MATRIX_OCR_MAX_CONCURRENCY=${MATRIX_OCR_MAX_CONCURRENCY:-1}
+      - MATRIX_OCR_MAX_QUEUE=${MATRIX_OCR_MAX_QUEUE:-8}
+      - MATRIX_OCR_PROCESS_TIMEOUT_SECONDS=${MATRIX_OCR_PROCESS_TIMEOUT_SECONDS:-300}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=2147483648,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    networks:
+      - deer-flow
+    restart: unless-stopped

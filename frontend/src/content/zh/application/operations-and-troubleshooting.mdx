@@ -1,17 +1,17 @@
 ---
 title: 运维与排障
-description: 本页面涵盖运行 DeerFlow 应用的操作信息：日志记录、常见问题和维护任务。
+description: 本页面涵盖运行 Matrix-Law 应用的操作信息：日志记录、常见问题和维护任务。
 ---
 
 import { Callout } from "nextra/components";
 
 # 运维与排障
 
-本页面涵盖运行 DeerFlow 应用的操作信息：日志记录、常见问题和维护任务。
+本页面涵盖运行 Matrix-Law 应用的操作信息：日志记录、常见问题和维护任务。
 
 ## 日志
 
-DeerFlow 应用在 `logs/` 目录中写入每个服务的日志：
+Matrix-Law 应用在 `logs/` 目录中写入每个服务的日志：
 
 | 文件                 | 内容                                   |
 | -------------------- | -------------------------------------- |
@@ -34,7 +34,7 @@ log_level: debug # debug | info | warning | error
 
 ## 健康检查
 
-DeerFlow 暴露健康检查端点：
+Matrix-Law 暴露健康检查端点：
 
 ```bash
 # Gateway 健康状态
@@ -88,17 +88,17 @@ ls -la backend/.deer-flow/threads/
 
 **解决**：
 
-1. 确保 `backend/.deer-flow/` 对运行 DeerFlow 的进程可写。
-2. 在 Docker 部署中，验证卷挂载路径正确（`DEER_FLOW_ROOT` 设置为绝对路径）。
-3. 如果使用基于容器的沙箱，确认 Docker 已运行并且容器镜像已拉取。
+1. 确保 `backend/.deer-flow/` 对运行 Matrix-Law 的进程可写。
+2. 在本机两服务器候选中，确认模拟容器的数据卷已挂载。云端 systemd 服务由宿主机管理数据目录，不使用应用容器卷。
+3. 如果本机隔离测试单独启用了容器沙箱，确认测试用容器运行时和镜像可用；这不改变 Matrix-Law 云端服务的原生 systemd 部署方式。
 
 ---
 
 ### SQLite 报 `database is locked`
 
-**症状**：Docker 或团队部署中，多个用户同时使用时出现 `sqlite3.OperationalError: database is locked`。
+**症状**：多人并发使用时出现 `sqlite3.OperationalError: database is locked`。
 
-**原因**：SQLite 支持并发读取，但同一时间只有一个写入者。DeerFlow 的检查点写入和应用写入会共享同一个 SQLite 数据库文件，多用户并发时可能竞争文件锁。
+**原因**：SQLite 支持并发读取，但同一时间只有一个写入者。Matrix-Law 的检查点写入和应用写入会共享同一个 SQLite 数据库文件，多用户并发时可能竞争文件锁。
 
 **解决**：生产环境或多用户部署切换到 Postgres：
 
@@ -172,24 +172,18 @@ grep -i "mcp\|timeout" logs/gateway.log | tail -20
 - 旧的 `checkpointer.connection_string` 文件：如果你的部署仍配置独立 `checkpointer`。
 - `backend/agents/*/config.yaml`：自定义 Agent 配置。
 
-Docker 部署中，备份绑定挂载的宿主机路径，而不是容器内部文件系统。
+本机候选使用容器数据卷；备份候选时需备份其宿主机数据目录。云端目标使用宿主机管理的持久数据目录。
 
 ## 停止和重启服务
 
-```bash
-# 停止所有本地服务
-make stop
-
-# 重启（停止后重新启动）
-make stop && make dev
-```
-
-在 Docker 中：
+从 Matrix-Law 仓库根目录重启本机两服务器候选：
 
 ```bash
-docker compose -f docker/docker-compose-dev.yaml down
-docker compose -f docker/docker-compose-dev.yaml up
+./deploy/two-server/stop.sh
+./deploy/two-server/start.sh
 ```
+
+这些命令只管理本机模拟候选，不是云端服务运维命令。
 
 <Cards num={2}>
   <Cards.Card title="部署指南" href="/docs/application/deployment-guide" />

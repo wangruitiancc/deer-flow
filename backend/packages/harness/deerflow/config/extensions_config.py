@@ -116,7 +116,7 @@ class McpUserScopedAuthConfig(BaseModel):
     header: str = Field(default="Authorization", description="HTTP header to set with the resolved user credential")
     users: dict[str, str] = Field(
         default_factory=dict,
-        description="Map of DeerFlow user id to full credential header value (e.g. 'Bearer <token>'); values support $ENV_VAR references",
+        description="Map of Matrix-Law user id to full credential header value (e.g. 'Bearer <token>'); values support $ENV_VAR references",
     )
     on_missing: Literal["deny", "passthrough"] = Field(
         default="deny",
@@ -213,7 +213,7 @@ class McpServerConfig(BaseModel):
     oauth: McpOAuthConfig | None = Field(default=None, description="OAuth configuration (for sse or http type)")
     user_auth: McpUserScopedAuthConfig | None = Field(
         default=None,
-        description="Per-user credential injection (for sse or http type): map DeerFlow user ids to per-user credential header values",
+        description="Per-user credential injection (for sse or http type): map Matrix-Law user ids to per-user credential header values",
     )
     headers_from_context: McpContextHeadersConfig | None = Field(
         default=None,

@@ -6,6 +6,8 @@ This file provides guidance to AI coding agents (Claude Code, Codex, and others)
 
 DeerFlow Frontend is a Next.js 16 web interface for an AI agent system. It communicates with a LangGraph-based backend to provide thread-based AI conversations with streaming responses, artifacts, and a skills/tools system.
 
+Product-facing branding is Matrix-Law: use the Matrix-Law wordmark and `matrix-law-symbol.svg` in visible frontend surfaces. Do not expose the DeerFlow name or logo as the product brand. Keep internal API names, storage keys, event fields, and framework documentation technically accurate.
+
 **Stack**: Next.js 16, React 19, TypeScript 5.8, Tailwind CSS 4, pnpm 10.26.2. Requires Node.js 22+ and pnpm 10.26.2+.
 
 ### Core dependencies
@@ -38,7 +40,207 @@ Rstest runs them as two projects (`rstest.config.ts`). `*.test.ts` / `*.test.tsx
 
 E2E tests live under `tests/e2e/` and use Playwright with Chromium. They mock all backend APIs via `page.route()` network interception and test real page interactions (navigation, chat input, streaming responses). Config: `playwright.config.ts`.
 
+The separately configured `playwright.matrix-law-project-artifacts.config.ts` uses
+the isolated Docker stack at `127.0.0.1:2035` (or explicit `E2E_P1_URL` at the
+allowlisted pre-promotion `2036` candidate) with real cookie/CSRF authentication,
+PostgreSQL, MinIO and ClamAV. Its test seeds synthetic thread/file fixtures only;
+browser requests are not intercepted. Never point it at the main 2030 environment
+or persist auth traces. Run it through `scripts/pnpm.py` like other host consumers.
+The legal project tree owns only the mapping UI: an owned idle conversation is
+detached with its current mapping version before the native DeerFlow thread delete;
+another creator's conversation is detached only, and an owned busy thread cannot be
+deleted. Keep the two-step partial-failure message explicit, preserve saved project
+artifact versions, and return an active deleted thread route to its legal project.
+Backend matter permissions and optimistic concurrency remain authoritative.
+The graph-specific real-backend spec only allows 2035. It verifies native file edits,
+immutable graph versions, real SHA conflicts, unknown citation rejection, member
+revocation and database audit decisions with synthetic users; it never invokes a model.
+Its graph-source acceptance uploads a synthetic PDF through real scanning/storage,
+then seeds only normalized OCR output with the isolated-stack-guarded
+`docker/matrix-law-project-artifacts/seed_graph_ocr.py`. Citation APIs, rerun lineage,
+archive state and browser reauthorization are real; this does not test OCR accuracy.
+Run the existing note spec explicitly when verifying a pre-promotion 2036 candidate.
+The real template-picker spec also creates synthetic custom-template history through
+the deployed API and selects an explicit older version in the same native dialog.
+It verifies metadata-only reads and staged attachments without uploads/runs; it does
+not prove the subsequent model/tool delivery chain. Reopen the native artifacts panel
+after staging on desktop as well as mobile; staging deliberately closes that panel.
+The real template-management spec exercises blank creation, local Markdown import,
+rename/archive/restore and explicit historical sharing through deployed UI/API, on desktop
+and mobile. It checks bytes/history and cross-tenant denial without model runs or mocks.
+Do not run scanner-outage HTTP tests concurrently with these browser tests.
+
+`playwright.matrix-law-legacy-live.config.ts` is separate opt-in real-model acceptance,
+never included in ordinary synthetic regression. Launch it only through the sibling
+Matrix Law `scripts/verify_live_legal_graph.py --execute-model --with-legacy-ui` orchestrator:
+it verifies isolated-stack identity, temporarily supplies the existing model profile,
+and restores the non-callable placeholder in finally. The browser uses actual native
+conversion/composer/Send/uploads/run/artifact/save controls with synthetic users/materials,
+checks preserved original bytes, graph semantics and unmapped sources, and cancels its
+unfinished run on failure. Do not enable traces, persist cookies, or run against 2030.
+
+`playwright.matrix-law-template-live.config.ts` is another isolated opt-in acceptance,
+started only by `--execute-model --with-template-ui` in that same guarded orchestrator.
+It uses the actual template picker and ordinary Send without rewriting the prepared prompt,
+then checks exact blank-template bytes, native delivery receipts, right-panel preview and
+scanned project saving. Scope filename clicks to the native files tabpanel, not the chat's
+same-name changed-file summary. It cancels unfinished runs on failure; never enable traces.
+
+`playwright.matrix-law-custom-template-live.config.ts` requires the sibling opt-in
+`--execute-model --with-custom-template-ui` orchestrator and exact candidate image checks.
+It imports a synthetic legacy Markdown file through the actual UI, then chooses an older
+private version through the real picker/ordinary Send and verifies
+native delivery and BOM/CRLF bytes, then uses the native editor and explicit template
+append/new-copy/project-save dialogs. Exiting editing preserves source mode: select
+the native preview control before asserting Markdown headings. Do not mock APIs,
+rewrite the staged prompt, preserve auth traces, or point it at the main environment.
+
 ## Architecture
+
+Session 55 adds opt-in `playwright.matrix-law-authorities-live.config.ts`, launched only by
+the sibling `--execute-model --with-authorities-ui` (two records) or `--with-authorities-large-ui`
+orchestrator (500 records), with the exact authorities
+image pair, loopback/ownership/idle/migration guards and finally-restored placeholder model.
+The test imports synthetic legacy refs through the existing UI and ordinary Send; it must
+not rewrite the staged prompt or seed output files. Require both complete byte-identical
+outputs, native validation and present_files delivery receipts, then scanned project save
+and read-only history/download for both files. Over 1 MiB, explicitly load the native full file
+before expecting legal preview; never parse a truncated range. Cancel only this test's unfinished runs on failure; no mocks,
+customer material or auth traces. A passing sample is not official verification or bulk import.
+The first real-model run failed: the authority output lost its trailing LF. Keep the exact
+byte assertion; do not trim or retry to a lucky pass. A native byte-transfer/domain-validation
+handoff now requests `law_import_authorities(files)` (session 58 source only). Pass the
+two current uploads paths, never body text or caller-selected output/scope arguments;
+unavailable/failed imports must not fall back to transcription or automatic retries.
+The live spec matches the call ID and exact input pair to its code receipt, compares both
+output bytes/SHA and flags, and separately requires actual native present_files delivery
+events, visible file cards and scanned history. A separate model present_files/read_file
+call is no longer required: the deterministic tool owns those native operations. The
+acceptance helper has failure tests; they are not real-model evidence. Session 59 deploys
+the `legal-authorities-import-v1` pair, bounded 16 MiB native write budget and exact image
+guards on 2035 after backup/restore verification. Session 60 passes one exact-import live case
+and 10 service UI tests. Session 61 passes 500-record dual-file save/history/download after
+fixing Law ingress 413; restore the placeholder. Legal verification and full migration remain.
+
+Session 54 deploys authorities 48–53 on isolated 2035. Disable the legacy-import trigger
+using its existing blocked state (with a reason) until project readiness/permission permits
+opening; otherwise the scope-key refresh closes a just-opened dialog. Keep the second
+authorization and stale-scope checks on staging. The real-backend authorities spec covers
+desktop/mobile selection, exact downloads, zero-run native staging, then explicitly seeded
+downloaded fixture bytes for native editing/scanned project versions/immutable history and
+outsider denial. It is not real-model generation. The combined config now includes ten tests.
+Never run scanner-outage injection concurrently. Deployment details are in the sibling
+Matrix Law docs/design/candidate2035-legal-authorities-deployment.md; old model acceptance
+guards still reject this pair; only the separate authorities mode explicitly accepts it.
+
+Session 53 adds `LegacyAuthoritiesImportPreview` and `LegalAuthoritiesImportHandoff` in the
+existing saved-project-artifacts toolbar. Local selection/conversion/downloads must retain the
+complete report and original fields; old paths/HTML are inert. Pin the selection to identity,
+membership, thread/mapping and policy context; changed scope unmounts the preview and aborts
+late callbacks. Reset explicit privacy confirmation on replacement/failure. Reauthorize the
+context and active project's identity plus native upload limits on staging; check the current
+scope, run state and empty composer again after awaits. Never overwrite existing text/files.
+Stage both complete native Files or neither through PromptInputProvider; only normal Send
+uploads/runs, and fixed composer instructions contain no private record/path/filename values.
+Downloads use revoked object URLs; no persisted source/report/selection state. Fixed dialog
+header/target/confirmation/footer with a separately scrolling body must work on short screens.
+These controls are deployed on 2035 with synthetic-material real-service acceptance;
+that acceptance still is not model delivery proof.
+
+Session 52 extends authority v1 with legacy_reference sources and reference_only/null-body
+entries; require matching legacy provenance and do not loosen ordinary text validation.
+Optional old articleId/text/source preserve absent/null/empty/blank differences. Render source
+records as inert text, not links or authorized citations; manual summary edits preserve originals.
+`core/law/legal-authorities-import.ts` is pure byte conversion only, not an import UI or upload
+path. Keep complete BOM/CRLF source text and digests in its report, stable index-based mappings,
+duplicates and all original fields. Reject invalid/oversized input/output as a whole; no catalog
+lookup, guessed body/date, silent deduplication, model, network or storage. Input is at most
+2 MiB/500 records, output must pass the existing complete-file parser/limit. Paired frontend and
+extension deployment is mandatory for the new types; no runtime deployment is implied.
+
+`law/LegalAuthoritiesPreview` handles complete formal `.law-authorities.json` files in
+the native file detail and saved JSON history, never transient write_file text or truncated
+Range previews. Keep Markdown/HTML rendering unchanged. The strict async parser validates
+duplicate keys, integer tokens, code-point/byte limits, date precision and source SHA; hide
+previous content while parsing and ignore late completion. Invalid content stays available
+through native source view, not silent repair. Web source URLs must be browser-valid HTTP(S),
+with no credentials/whitespace/backslashes; open only on an explicit click with no referrer.
+Source claims, hash matches and saved versions are not official verification or legal approval.
+Explicitly expanded project citations use the existing no-store protected API and verify all
+returned identity fields. Close/unmount/scope changes abort and discard quotes; repeated reads
+reauthorize, but no live revocation of already displayed text is promised. Keep sources/drafts
+in memory, not a second cache/editor/store. Editing uses the native CodeEditor/SHA/file Save;
+project promotion rereads complete bytes and validates legal_research plus both suffixes.
+Saved history is read-only. Native Edit also enables `LegalAuthoritiesEditor` forms for
+manual/source collection, entry/question edits and removal/restoration. Apply only validated
+immutable transactions to the existing in-memory draft; keep source bytes/IDs/provenance,
+reset confirmation on input changes, and require a new basis when dates change. Pin the
+document/target and discard late validation after close, scope or editability changes.
+Removal preserves entries with a reason; restoration clears that reason in the current draft.
+Only saved project versions retain earlier removal reasons, not unsaved intermediate actions.
+Use a separate scrolling div around fieldset, with fixed header/footer; fieldset itself does
+not reliably constrain scrolling in browsers. Keep generated Dialog primitives unchanged.
+Cross-version entry continuity and complete model-driven legacy import remain pending.
+Authorities controls are deployed on isolated 2035. The editing E2E covers keyboard
+submission and saved removal/restoration history, including narrow and short viewports.
+`law-legal-authorities.spec.ts` covers four widths plus invalid/ranged files. The older history
+spec asserts production fetch counts; run the joint acceptance against a production build,
+not React development StrictMode, without weakening request-count assertions.
+
+`law/CustomTemplateManager` is reached from the custom picker within the same dialog.
+List metadata with explicit `include_archived=true`, filter locally with visible pagination,
+and pin the selected catalog revision. Rename/archive/restore use metadata-only PATCH and
+require explicit confirmation, fresh thread/project/tenant-writer authorization and an
+unchanged content-version receipt. Never modify body/history, infer write permission from
+read access, or turn a name conflict into overwrite. Archived items retain owner/shared
+authorization; they must remain manageable for restore. A first attempt rejects a changed
+revision. An uncertain previously sent request may retry only its original key/payload
+after reauthorization, letting server idempotency resolve a possibly committed operation.
+Do not silently rebase it. Close/source/thread changes cancel late callbacks, not committed
+writes. Keep a compact fixed target/action summary visible beside confirmation on small
+screens. Saving success means this operation was acknowledged, not that future concurrent
+changes cannot occur; refresh the catalog afterward.
+
+`law/CustomTemplateCreate` is reachable even from an empty manager catalog. It creates a
+truly empty first version through the existing template POST, not a fake imported file or
+model-written skeleton. Default private; shared requires current owner/admin. Pin the form
+scope when naming, reset confirmation on name/visibility changes, and reauthorize the
+thread/project/member before sending. The small create client forwards only explicit fields,
+never an unexpected append target or content. Require a first-version receipt and protected
+zero-byte readback before success; preserve same-window retry keys after uncertain writes.
+Close/source/thread changes cancel late UI, not committed writes. Keep the target/scope near
+confirmation. Do not persist drafts/keys or auto-upload/run/install; later content editing
+uses the existing picker, native output editor and explicit template version save. These new
+management controls have real-service joint acceptance on isolated 2035; this does not
+cover blank-file model editing or the full organization-role matrix.
+
+`law/CustomTemplatePublish` opens from that manager in the same dialog. Only current tenant
+owner/admin can publish a readable active template's explicitly selected historical version.
+List metadata first; an explicit protected read previews raw text, never HTML. Require a new
+copy name and privacy confirmation; reset on changes. Reauthorize before/after source reads,
+pin the catalog revision and compare version ID/bytes/SHA. Publish through the existing
+`POST /templates/{id}/publish` with only name/version_number and a stable retry key, not
+private-to-shared mutation, body upload, complete history or a new Agent path. Verify the
+new-copy first-version receipt and protected body readback before claiming success. Lost
+responses/readback failure can follow committed writes: same mounted-dialog retries reauthorize
+and reuse the original key/payload, never silently rebase. Clear previews after failed
+reauthorization; close/source/thread changes cancel late callbacks, not server writes. Keep
+source version and organization-copy target visible beside confirmation on small screens.
+No legal IDs/body/names/keys in browser storage. Source-only/mock acceptance is not deployment.
+
+`law/CustomTemplateImport` is another source in the existing template dialog, not a
+new editor or Agent route. Preview one local `.md/.markdown` as strict UTF-8 (64 KiB,
+BOM/CRLF preserved); render raw text only. Diagnose placeholders without evaluation,
+bound the displayed list and disclose omissions. No file/body upload before explicit
+name/visibility confirmation; reset that confirmation on changes. Default private,
+shared requires current tenant owner/admin. Pin file selection to the trusted thread
+scope, reauthorize before create, and read the protected first version back to compare
+exact text/SHA before reporting success. Reuse the existing template API, scan and
+idempotency key; no overwrite/append on import. Failed readback may follow a committed
+write, so retain the same retry key only within this mounted dialog, never claim
+cancellation rolls back or that reopening deduplicates. Do not persist source/body,
+diagnostics or keys in browser storage. Closing/source/thread changes cancel late UI
+callbacks; imported bodies are edited through the existing native file workflow.
 
 ```
 Frontend (Next.js) ──▶ LangGraph SDK ──▶ LangGraph Backend (lead_agent)
@@ -57,7 +259,7 @@ The frontend is a stateful chat application. Users create **threads** (conversat
   - `workspace/` — Chat page components (messages, artifacts, settings)
   - `landing/` — Landing page sections
   - `docs/` — Docs / MDX rendering components
-- **`core/`** — Business logic, the heart of the app. Domains include `threads/` (creation, streaming, state), `api/` (LangGraph client singleton), `agents/` (custom agents), `subagents/` (runtime worker catalog and administrator mutations), `auth/` (authentication), `artifacts/`, `channels/` (IM connections), `integrations/` (managed third-party integration status/install clients such as Lark CLI), `i18n/` (en-US, zh-CN), `settings/`, `memory/`, `skills/`, `messages/`, `mcp/`, `models/`, `input-polish/` (pre-send draft rewrite API), `voice-input/` (browser speech-recognition helpers), `suggestions/`, `tasks/`, `todos/`, `tools/`, `workspace-changes/` (run-scoped changed-file summaries and diff fetching), `config/`, `notification/`, `blog/`, plus rendering helpers (`rehype/`, `streamdown/`) and `utils/`.
+- **`core/`** — Business logic, the heart of the app. Domains include `threads/` (creation, streaming, state), `api/` (LangGraph client singleton), `agents/` (custom agents), `subagents/` (runtime worker catalog and administrator mutations), `auth/` (authentication), `artifacts/`, `channels/` (IM connections), `integrations/` (managed third-party integration status/install clients such as Lark CLI), `law/` (Matrix Law tenant/matter clients and query hooks, including protected speech task and review APIs), `i18n/` (en-US, zh-CN), `settings/`, `memory/`, `skills/`, `messages/`, `mcp/`, `models/`, `input-polish/` (pre-send draft rewrite API), `voice-input/` (browser speech-recognition helpers), `suggestions/`, `tasks/`, `todos/`, `tools/`, `workspace-changes/` (run-scoped changed-file summaries and diff fetching), `config/`, `notification/`, `blog/`, plus rendering helpers (`rehype/`, `streamdown/`) and `utils/`.
 - **`hooks/`** — Shared React hooks
 - **`lib/`** — Utilities (`cn()` from clsx + tailwind-merge)
 - **`content/`** — MDX content (blog posts, docs) rendered by the app

@@ -79,7 +79,7 @@ import {
   buildReferenceMessageMetadata,
   type SidecarContext,
 } from "@/core/sidecar";
-import { useSkills } from "@/core/skills/hooks";
+import type { Skill } from "@/core/skills";
 import { DEFAULT_MAX_SUGGESTIONS } from "@/core/suggestions/api";
 import { useSuggestionsConfig } from "@/core/suggestions/hooks";
 import type { AgentThreadContext, GoalState } from "@/core/threads";
@@ -358,7 +358,10 @@ export function InputBox({
   const sidecar = useMaybeSidecar();
   const attachmentParts = attachments.files;
   const removeAttachment = attachments.remove;
-  const { skills, isLoading: skillsLoading } = useSkills();
+  // The Matrix-Law legal workspace does not expose the generic slash-skill catalog. Legal
+  // capabilities remain server-controlled parts of the dedicated legal agent.
+  const skills = useMemo<Skill[]>(() => [], []);
+  const skillsLoading = false;
   const { data: uploadLimits } = useUploadLimits(threadId);
   const promptRootRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -824,7 +827,7 @@ export function InputBox({
 
   const handleModelSelect = useCallback(
     (model_name: string) => {
-      if (disabled || polishingInput) {
+      if (polishingInput) {
         return;
       }
       const model = models.find((m) => m.name === model_name);
@@ -839,7 +842,7 @@ export function InputBox({
       });
       setModelDialogOpen(false);
     },
-    [disabled, onContextChange, context, models, polishingInput],
+    [onContextChange, context, models, polishingInput],
   );
 
   const handleModeSelect = useCallback(

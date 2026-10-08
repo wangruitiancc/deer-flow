@@ -3,7 +3,7 @@
 Escapes blocked XML-like tags in the last genuine user message (e.g.
 ``<system>`` → ``&lt;system&gt;``) so they render as literal text instead
 of structured-context markers.  This preserves the user's intent ("how do
-I use DeerFlow's <think> tag?") while neutralizing injection attempts —
+I use Matrix-Law's <think> tag?") while neutralizing injection attempts —
 the same de-identify-don't-reject strategy as AWS Bedrock's PII ANONYMIZE.
 
 Blocked: system-reserved tags (memory, analysis, etc.) + common injection
@@ -63,6 +63,9 @@ _BLOCKED_TAG_NAMES: frozenset[str] = frozenset(
         # subagent model input too. The subagent system-prompt blocks
         # (file_editing_workflow / guidelines / output_format / working_directory)
         # are therefore authority blocks of the same class as the lead-agent ones.
+        "legal_work_rules",
+        "legal_workflow_context",
+        "tool_truth_rules",
         "system-reminder",
         "system_reminder",
         "memory",

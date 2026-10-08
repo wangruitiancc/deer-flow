@@ -62,6 +62,7 @@ def test_polish_input_uses_config_model_and_preserves_response(monkeypatch):
     assert result.changed is True
     create_chat_model.assert_called_once_with(
         name="polish-model",
+        purpose="oneshot",
         thinking_enabled=False,
         app_config=config,
     )

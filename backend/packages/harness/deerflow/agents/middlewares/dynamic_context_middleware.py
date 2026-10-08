@@ -1,4 +1,4 @@
-"""Middleware to inject dynamic context (memory, current date) as a system-reminder.
+"""Inject Matrix Law dynamic context (date, memory, legal workflow) as system reminders.
 
 The system prompt is kept fully static for maximum prefix-cache reuse across users
 and sessions.  The current date is always injected.  Per-user memory is also injected
@@ -19,6 +19,10 @@ Reminder format:
     <current_date>2026-05-08, Friday</current_date>
     </system-reminder>
 
+Legal workflow context is emitted as a hidden framework-owned SystemMessage for
+legal turns. It is part of the lead agent's native runtime context, not a
+separate agent wrapper.
+
 Date-update format:
 
     <system-reminder>
@@ -38,15 +42,17 @@ from typing import TYPE_CHECKING, override
 
 from deerflow_extension_api import ContentKind, provenance_kwargs
 from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage
 from langgraph.runtime import Runtime
 
 from deerflow.runtime.context_keys import CURRENT_RUN_PRE_EXISTING_MESSAGE_IDS_KEY
+from deerflow.runtime.task_scope import matter_scope_from_runtime
 from deerflow.runtime.user_context import resolve_runtime_user_id
 from deerflow.utils.messages import INJECTED_USER_MESSAGE_ID_SUFFIX, strip_injected_user_message_id_suffix
 
 if TYPE_CHECKING:
     from deerflow.config.app_config import AppConfig
+    from deerflow.skills.types import Skill
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +69,7 @@ _DYNAMIC_CONTEXT_REMINDER_KEY = "dynamic_context_reminder"
 # so it is never exposed to user-influenceable memory content.
 _REMINDER_DATE_KEY = "reminder_date"
 _SUMMARY_MESSAGE_NAME = "summary"
+_LEGAL_WORKFLOW_USER_MESSAGE_ID_KEY = "legal_workflow_user_message_id"
 
 # ``INJECTED_USER_MESSAGE_ID_SUFFIX`` / ``strip_injected_user_message_id_suffix``
 # are defined in ``deerflow.utils.messages`` and re-exported here, where the
@@ -74,6 +81,18 @@ __all__ = [
     "is_dynamic_context_reminder",
     "strip_injected_user_message_id_suffix",
 ]
+
+
+def _has_matter_scope(runtime: Runtime | None) -> bool:
+    """Return whether trusted admission scoped this run to one legal matter."""
+    return runtime is not None and matter_scope_from_runtime(runtime) is not None
+
+
+def _legacy_memory_removals(messages: list, *, matter_scoped: bool) -> list[RemoveMessage]:
+    """Remove only server-injected per-user memory when entering a matter task."""
+    if not matter_scoped:
+        return []
+    return [RemoveMessage(id=str(message.id)) for message in messages if isinstance(message, HumanMessage) and message.id and str(message.id).endswith("__memory") and is_dynamic_context_reminder(message)]
 
 
 def _format_current_date() -> str:
@@ -190,7 +209,7 @@ class SubagentDateContextMiddleware(AgentMiddleware):
 
 
 class DynamicContextMiddleware(AgentMiddleware):
-    """Inject memory and current date as a SystemMessage <system-reminder>.
+    """Inject Matrix Law runtime context as hidden SystemMessage reminders.
 
     First turn
     ----------
@@ -217,10 +236,19 @@ class DynamicContextMiddleware(AgentMiddleware):
     day see the corrected date in history and skip re-injection.
     """
 
-    def __init__(self, agent_name: str | None = None, *, app_config: AppConfig | None = None):
+    def __init__(
+        self,
+        agent_name: str | None = None,
+        *,
+        app_config: AppConfig | None = None,
+        available_skills: set[str] | None = None,
+        enabled_skills: list[Skill] | None = None,
+    ):
         super().__init__()
         self._agent_name = agent_name
         self._app_config = app_config
+        self._available_skills = set(available_skills) if available_skills is not None else None
+        self._enabled_skills = list(enabled_skills) if enabled_skills is not None else None
 
     def _build_full_reminder(self, runtime: Runtime | None = None) -> tuple[str, str | None]:
         """Return (date_reminder, memory_block | None).
@@ -232,7 +260,8 @@ class DynamicContextMiddleware(AgentMiddleware):
         """
         from deerflow.agents.lead_agent.prompt import _get_memory_context
 
-        injection_enabled = self._app_config.memory.injection_enabled if self._app_config else True
+        matter_scoped = _has_matter_scope(runtime)
+        injection_enabled = (self._app_config.memory.injection_enabled if self._app_config else True) and not matter_scoped
         memory_context = (
             _get_memory_context(
                 self._agent_name,
@@ -251,6 +280,50 @@ class DynamicContextMiddleware(AgentMiddleware):
 
     def _build_date_update_reminder(self) -> str:
         return _format_current_date_reminder(_format_current_date())
+
+    def _build_legal_workflow_message(self, messages: list) -> SystemMessage | None:
+        from deerflow.agents.legal_workflow import (
+            LEGAL_WORKFLOW_CONTEXT_MESSAGE_NAME,
+            derive_legal_workflow_context,
+            latest_visible_user_index,
+        )
+
+        latest_user_index = latest_visible_user_index(messages)
+        if latest_user_index == -1:
+            return None
+        latest_user = messages[latest_user_index]
+        user_message_id = str(latest_user.id or "")
+        if user_message_id:
+            for message in messages:
+                additional_kwargs = getattr(message, "additional_kwargs", {}) or {}
+                if additional_kwargs.get(_LEGAL_WORKFLOW_USER_MESSAGE_ID_KEY) == user_message_id:
+                    return None
+
+        context = derive_legal_workflow_context(
+            messages,
+            available_skill_names=self._available_skills,
+            enabled_skills=self._enabled_skills,
+        )
+        if context is None:
+            return None
+
+        stable_id = user_message_id or str(uuid.uuid4())
+        return SystemMessage(
+            content="\n".join(["<system-reminder>", context.render(), "</system-reminder>"]),
+            id=f"{stable_id}__legal_workflow",
+            name=LEGAL_WORKFLOW_CONTEXT_MESSAGE_NAME,
+            additional_kwargs={
+                "hide_from_ui": True,
+                _DYNAMIC_CONTEXT_REMINDER_KEY: True,
+                _LEGAL_WORKFLOW_USER_MESSAGE_ID_KEY: user_message_id,
+                "legal_workflow": {
+                    "matter_type": context.matter_type,
+                    "matter_label": context.matter_label,
+                    "recommended_skills": [skill.name for skill in context.recommended_skills],
+                },
+                **provenance_kwargs(ContentKind.MIDDLEWARE_INJECTION, "legal_workflow"),
+            },
+        )
 
     @staticmethod
     def _make_reminder_and_user_messages(
@@ -320,6 +393,9 @@ class DynamicContextMiddleware(AgentMiddleware):
         if not messages:
             return None
 
+        matter_scoped = _has_matter_scope(runtime)
+        removals = _legacy_memory_removals(messages, matter_scoped=matter_scoped)
+
         current_date = _format_current_date()
         last_date = _last_injected_date(messages)
         logger.debug(
@@ -343,7 +419,7 @@ class DynamicContextMiddleware(AgentMiddleware):
             # the stale first message as if it were the current turn.
             target_idx = next((i for i in reversed(range(len(messages))) if _is_user_injection_target(messages[i])), None)
             if target_idx is None:
-                return None
+                return {"messages": removals} if removals else None
             date_reminder, memory_block = self._build_full_reminder(runtime)
             logger.info(
                 "DynamicContextMiddleware: injecting full reminder (has_memory=%s) into last HumanMessage id=%r",
@@ -351,20 +427,31 @@ class DynamicContextMiddleware(AgentMiddleware):
                 messages[target_idx].id,
             )
             result_msgs = self._make_reminder_and_user_messages(messages[target_idx], date_reminder, memory_block, reminder_date=current_date)
-            return {"messages": result_msgs}
+            effective_messages = [*messages[:target_idx], *result_msgs, *messages[target_idx + 1 :]]
+            legal_workflow_message = self._build_legal_workflow_message(effective_messages)
+            if legal_workflow_message is not None:
+                result_msgs.append(legal_workflow_message)
+            return {"messages": [*removals, *result_msgs]}
 
         if last_date == current_date:
             # ── Same day: nothing to do ──────────────────────────────────────────
-            return None
+            legal_workflow_message = self._build_legal_workflow_message(messages)
+            if legal_workflow_message is not None:
+                return {"messages": [*removals, legal_workflow_message]}
+            return {"messages": removals} if removals else None
 
         # ── Midnight crossed: inject date-update reminder as a SystemMessage ──
         last_human_idx = next((i for i in reversed(range(len(messages))) if _is_user_injection_target(messages[i])), None)
         if last_human_idx is None:
-            return None
+            return {"messages": removals} if removals else None
 
         result_msgs = self._make_reminder_and_user_messages(messages[last_human_idx], self._build_date_update_reminder(), reminder_date=current_date)
+        effective_messages = [*messages[:last_human_idx], *result_msgs, *messages[last_human_idx + 1 :]]
+        legal_workflow_message = self._build_legal_workflow_message(effective_messages)
+        if legal_workflow_message is not None:
+            result_msgs.append(legal_workflow_message)
         logger.info("DynamicContextMiddleware: midnight crossing detected — injected date update before current turn")
-        return {"messages": result_msgs}
+        return {"messages": [*removals, *result_msgs]}
 
     @override
     def before_agent(self, state, runtime: Runtime) -> dict | None:
@@ -391,6 +478,8 @@ class DynamicContextMiddleware(AgentMiddleware):
                 timeout=_INJECT_TIMEOUT_SECONDS,
             )
         except TimeoutError:
+            if _has_matter_scope(runtime) and _legacy_memory_removals(state.get("messages", []), matter_scoped=True):
+                raise RuntimeError("Could not remove legacy user memory from matter-scoped context") from None
             logger.warning(
                 "DynamicContextMiddleware: injection timed out (%.1fs); skipping new memory/date injection for this turn",
                 _INJECT_TIMEOUT_SECONDS,
@@ -434,6 +523,8 @@ class DynamicContextMiddleware(AgentMiddleware):
 
     def _record_effective_memory(self, state, update: dict | None, runtime: Runtime) -> None:
         """Attach the effective hidden memory block to the current run ledger."""
+        if _has_matter_scope(runtime):
+            return
         context = getattr(runtime, "context", None)
         journal = context.get("__run_journal") if isinstance(context, dict) else None
         if journal is None:

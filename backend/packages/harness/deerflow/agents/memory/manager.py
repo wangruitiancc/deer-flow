@@ -781,7 +781,7 @@ def _host_default_llm() -> Any:
     try:
         from deerflow.models import create_chat_model
 
-        return create_chat_model(name=None)
+        return create_chat_model(name=None, purpose="memory")
     except Exception:  # noqa: BLE001 - no default model is a config state, not a crash
         logger.warning("Could not build host default model for DeerMem memory extraction; memory extraction will be disabled", exc_info=True)
         return None

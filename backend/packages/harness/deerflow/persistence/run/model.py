@@ -17,6 +17,9 @@ class RunRow(Base):
     thread_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     assistant_id: Mapped[str | None] = mapped_column(String(128))
     user_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    # Domain-separated digest resolved from trusted Matrix Law matter context.
+    # Raw tenant identifiers never enter the host run schema.
+    tenant_capacity_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="pending")
     # "pending" | "running" | "success" | "error" | "timeout" | "interrupted"
     operation_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="run", server_default=text("'run'"))
@@ -60,6 +63,7 @@ class RunRow(Base):
 
     __table_args__ = (
         Index("ix_runs_thread_status", "thread_id", "status"),
+        Index("ix_runs_tenant_capacity_status", "tenant_capacity_key", "status"),
         Index("ix_runs_lease", "lease_expires_at"),
         Index("uq_runs_idempotency_key", "idempotency_key", unique=True),
         # Cross-process atomicity guarantee: at most one pending/running run per

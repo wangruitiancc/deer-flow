@@ -12,15 +12,16 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from langchain_core.tools import BaseTool, StructuredTool
-from langgraph.config import get_config
 
 from deerflow.config.extensions_config import ExtensionsConfig, McpServerConfig, resolve_effective_mcp_routing
 from deerflow.config.paths import VIRTUAL_PATH_PREFIX, Paths, get_paths
 from deerflow.constants import DEFAULT_MCP_SESSION_INIT_TIMEOUT, MCP_TMP_SUBDIR
 from deerflow.mcp.client import build_servers_config
+from deerflow.mcp.controlled import get_controlled_mcp_runtime, get_controlled_mcp_tools
 from deerflow.mcp.headers import apply_header_overrides
 from deerflow.mcp.interceptors import build_mcp_tool_interceptors, compose_tool_interceptors
 from deerflow.mcp.oauth import build_oauth_tool_interceptor, get_initial_oauth_headers
+from deerflow.mcp.runtime_identity import extract_thread_id as _extract_thread_id
 from deerflow.mcp.session_pool import call_pooled_session_tool, get_session_pool
 from deerflow.mcp.tasks import ORDINARY_MCP_TASK_DRIVER, TaskSubmitRequest
 from deerflow.mcp.tasks.runtime import (
@@ -304,24 +305,6 @@ def _rewrite_local_paths_in_text(
         user_id=user_id,
         source_base_dir=source_base_dir,
     )
-
-
-def _extract_thread_id(runtime: Runtime | None) -> str:
-    """Extract thread_id from the injected tool runtime or LangGraph config."""
-    if runtime is not None:
-        tid = runtime.context.get("thread_id") if runtime.context else None
-        if tid is not None:
-            return str(tid)
-        config = runtime.config or {}
-        tid = config.get("configurable", {}).get("thread_id")
-        if tid is not None:
-            return str(tid)
-
-    try:
-        tid = get_config().get("configurable", {}).get("thread_id")
-        return str(tid) if tid is not None else "default"
-    except RuntimeError:
-        return "default"
 
 
 def _convert_call_tool_result(
@@ -635,7 +618,7 @@ def _make_background_submit_tool(
     status_tool: str,
     cancel_tool: str,
 ) -> BaseTool:
-    background_contract = f"Submitted as durable background task {task_name!r}; returns a DeerFlow task ID immediately and status polling is handled automatically."
+    background_contract = f"Submitted as durable background task {task_name!r}; returns a task ID immediately and status polling is handled automatically."
 
     async def submit_in_background(
         runtime: Runtime | None = None,
@@ -751,6 +734,12 @@ async def get_mcp_tools() -> list[BaseTool]:
     Returns:
         List of LangChain tools from all enabled MCP servers.
     """
+    # A legal admission can bind only platform-managed MCP capability. Its
+    # presence is authoritative: never read user/local MCP configuration as a
+    # compatibility fallback for that task.
+    if get_controlled_mcp_runtime() is not None:
+        return await get_controlled_mcp_tools()
+
     try:
         from langchain_mcp_adapters.client import MultiServerMCPClient
         from langchain_mcp_adapters.tools import load_mcp_tools

@@ -11,7 +11,7 @@ dependencies = [
     # the contract version it implements, extensions declare ranges. A range
     # here would let pip resolve a newer contract package than this harness
     # implements, making newer extensions look supported at runtime.
-    "deerflow-extension-api==0.2.0",
+    "deerflow-extension-api==0.2.12",
     "dotenv>=0.9.9",
     "exa-py>=1.0.0",
     "httpx>=0.28.0",
@@ -75,7 +75,7 @@ postgres = [
 # always installs this extra because Docker defaults to the redis bridge.
 redis = ["redis>=5.0.0"]
 pymupdf = ["pymupdf4llm>=0.0.17"]
-boxlite = ["boxlite>=0.9.7"]
+boxlite = ["boxlite>=0.10.5,<0.11.0"]
 # Tenki cloud sandbox provider (deerflow.community.tenki). Optional so a default
 # install stays free of the Tenki SDK; only pulled in when the provider is used.
 # The distribution is ``tenki``; it still ships the ``tenki_sandbox`` module that

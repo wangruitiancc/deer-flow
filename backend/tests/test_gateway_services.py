@@ -1464,6 +1464,91 @@ async def test_start_run_checkpoint_validation_failure_does_not_admit_run(_stub_
 
 
 @pytest.mark.asyncio
+async def test_start_run_persists_matrix_law_tenant_capacity_key(_stub_app_config):
+    from unittest.mock import AsyncMock, patch
+
+    from app.gateway.services import start_run
+    from deerflow.runtime import RunManager
+    from deerflow.runtime.runs.store.memory import MemoryRunStore
+
+    run_store = MemoryRunStore()
+    run_manager = RunManager(store=run_store)
+    request = _make_start_run_request(run_manager)
+    request.app.state.extensions = object()
+    tenant_key = "a" * 64
+
+    with (
+        patch("app.gateway.services.resolve_agent_factory", return_value=object()),
+        patch("app.gateway.services.run_agent", new_callable=AsyncMock),
+        patch("app.gateway.services.resolve_tenant_capacity_key", new_callable=AsyncMock, return_value=tenant_key),
+    ):
+        record = await start_run(_run_create_request(), "law-thread", request)
+        await record.task
+
+    assert record.tenant_capacity_key == tenant_key
+    stored = await run_store.get(record.run_id)
+    assert stored is not None and stored["tenant_capacity_key"] == tenant_key
+
+
+@pytest.mark.asyncio
+async def test_start_run_accepts_gateway_managed_model_outside_static_allowlist(_stub_app_config):
+    from unittest.mock import AsyncMock, patch
+
+    from app.gateway.services import start_run
+    from deerflow.runtime import RunManager
+    from deerflow.runtime.runs.store.memory import MemoryRunStore
+
+    run_manager = RunManager(store=MemoryRunStore())
+    request = _make_start_run_request(run_manager)
+    request.app.state.extensions = object()
+    body = _run_create_request(context={"model_name": "synchronized-legal-model"})
+
+    with (
+        patch("app.gateway.services.matrix_law_manages_model_selection", return_value=True),
+        patch("app.gateway.services.resolve_agent_factory", return_value=object()),
+        patch("app.gateway.services.run_agent", new_callable=AsyncMock),
+        patch(
+            "app.gateway.services.resolve_tenant_capacity_key",
+            new_callable=AsyncMock,
+            return_value="a" * 64,
+        ),
+    ):
+        record = await start_run(body, "law-thread-model", request)
+        await record.task
+
+    assert record.model_name == "synchronized-legal-model"
+
+
+@pytest.mark.asyncio
+async def test_start_run_rejects_unbound_legal_thread_before_persistence(_stub_app_config):
+    from unittest.mock import AsyncMock, patch
+
+    from fastapi import HTTPException
+
+    from app.gateway.services import start_run
+    from deerflow.runtime import RunManager
+    from deerflow.runtime.runs.store.memory import MemoryRunStore
+
+    run_store = MemoryRunStore()
+    request = _make_start_run_request(RunManager(store=run_store))
+    request.app.state.extensions = object()
+
+    with (
+        patch("app.gateway.services.resolve_agent_factory", return_value=object()),
+        patch(
+            "app.gateway.services.resolve_tenant_capacity_key",
+            new_callable=AsyncMock,
+            side_effect=PermissionError("not bound"),
+        ),
+        pytest.raises(HTTPException) as caught,
+    ):
+        await start_run(_run_create_request(), "unbound-thread", request)
+
+    assert caught.value.status_code == 404
+    assert await run_store.list_by_thread("unbound-thread") == []
+
+
+@pytest.mark.asyncio
 async def test_pending_cancel_bypasses_thread_metadata_and_logs_failure(_stub_app_config, caplog):
     from unittest.mock import AsyncMock, patch
 
@@ -2361,9 +2446,9 @@ def test_start_run_session_caller_anti_forgery(_stub_app_config):
             record = await start_run(body, "thread-session-authz", request)
             await record.task
 
-        return captured_context
+        return captured_context, record
 
-    context = asyncio.run(_scenario())
+    context, record = asyncio.run(_scenario())
 
     # is_internal must be False (server-derived from auth_source="session")
     assert context["is_internal"] is False
@@ -2374,6 +2459,9 @@ def test_start_run_session_caller_anti_forgery(_stub_app_config):
     # Agent Server's reserved auth fields are never valid on the Gateway path.
     assert context.get("langgraph_auth_user") is None
     assert context.get("langgraph_auth_user_id") is None
+    # The request ContextVar ends when the HTTP response returns, so extension
+    # admission must receive the durable run owner rather than ambient state.
+    assert record.user_id == "u1"
 
 
 def test_launch_scheduled_thread_run_marks_context_non_interactive(_stub_app_config):

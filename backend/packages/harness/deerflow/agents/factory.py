@@ -184,6 +184,7 @@ def create_deerflow_agent(
         middleware=effective_middleware,
         system_prompt=system_prompt,
         state_schema=effective_state,
+        context_schema=dict,
         checkpointer=checkpointer,
         name=name,
     )

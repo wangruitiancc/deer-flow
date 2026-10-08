@@ -84,3 +84,20 @@ backend/sandbox/
 !backend/extensions/
 !backend/extensions/sources/
 !backend/extensions/sources/**
+
+# Only the reviewed Matrix Law Skill is a server image input.
+!skills/
+skills/*
+!skills/public/
+skills/public/*
+!skills/public/matrix-law-graph/
+!skills/public/matrix-law-graph/**
+!skills/public/matrix-law-templates/
+!skills/public/matrix-law-templates/**
+
+# Local verification output and private baselines are never runtime assets.
+**/test-results/
+**/playwright-report/
+**/.baseline/
+**/.env.*
+!**/.env.example

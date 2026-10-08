@@ -1,9 +1,10 @@
 "use client";
 
-import { MessageSquarePlus } from "lucide-react";
+import { Building2Icon, GaugeIcon, ScaleIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { MatrixLawLogo, MatrixLawMark } from "@/components/brand/matrix-law-logo";
 import {
   SidebarMenu,
   SidebarMenuButton,
@@ -12,13 +13,18 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { useI18n } from "@/core/i18n/hooks";
-import { env } from "@/env";
+import { useLawTenants } from "@/core/law";
 import { cn } from "@/lib/utils";
 
 export function WorkspaceHeader({ className }: { className?: string }) {
   const { t } = useI18n();
   const { state } = useSidebar();
   const pathname = usePathname();
+  const tenantsQuery = useLawTenants();
+  const canManageLawFirm = tenantsQuery.data?.some((item) =>
+    ["owner", "admin"].includes(item.membership.role),
+  );
+  const capabilityActive = pathname.startsWith("/workspace/law/capabilities");
   return (
     <>
       <div
@@ -29,22 +35,19 @@ export function WorkspaceHeader({ className }: { className?: string }) {
       >
         {state === "collapsed" ? (
           <div className="group-has-data-[collapsible=icon]/sidebar-wrapper:-translate-y flex w-full cursor-pointer items-center justify-center">
-            <div className="text-primary block pt-1 font-serif group-hover/workspace-header:hidden">
-              DF
+            <div className="group-hover/workspace-header:hidden">
+              <MatrixLawMark size={28} />
             </div>
             <SidebarTrigger className="hidden pl-2 group-hover/workspace-header:block" />
           </div>
         ) : (
           <div className="flex items-center justify-between gap-2">
-            {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" ? (
-              <Link href="/" className="text-primary ml-2 font-serif">
-                DeerFlow
-              </Link>
-            ) : (
-              <div className="text-primary ml-2 cursor-default font-serif">
-                DeerFlow
-              </div>
-            )}
+            <Link href="/workspace/law" className="ml-2">
+              <MatrixLawLogo
+                className="flex items-center gap-2 text-primary font-serif"
+                markSize={25}
+              />
+            </Link>
             <SidebarTrigger />
           </div>
         )}
@@ -52,15 +55,42 @@ export function WorkspaceHeader({ className }: { className?: string }) {
       <SidebarMenu>
         <SidebarMenuItem>
           <SidebarMenuButton
-            isActive={pathname === "/workspace/chats/new"}
+            isActive={
+              pathname.startsWith("/workspace/law") &&
+              !capabilityActive
+            }
             asChild
           >
-            <Link className="text-muted-foreground" href="/workspace/chats/new">
-              <MessageSquarePlus size={16} />
-              <span>{t.sidebar.newChat}</span>
+            <Link className="text-muted-foreground" href="/workspace/law">
+              <ScaleIcon size={16} />
+              <span>{t.sidebar.lawMatters}</span>
             </Link>
           </SidebarMenuButton>
         </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton isActive={capabilityActive} asChild>
+            <Link
+              className="text-muted-foreground"
+              href="/workspace/law/capabilities"
+            >
+              <GaugeIcon size={16} />
+              <span>我的能力与用量</span>
+            </Link>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+        {canManageLawFirm && (
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild>
+              <Link
+                className="text-muted-foreground"
+                href="/law-admin/"
+              >
+                <Building2Icon size={16} />
+                <span>律所管理后台</span>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        )}
       </SidebarMenu>
     </>
   );

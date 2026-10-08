@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, Index, String, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from deerflow.persistence.base import Base
@@ -58,6 +58,10 @@ class UserRow(Base):
     # Auth lifecycle flags
     needs_setup: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     token_version: Mapped[int] = mapped_column(nullable=False, default=0)
+    mfa_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    mfa_secret_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mfa_last_counter: Mapped[int] = mapped_column(Integer, nullable=False, default=-1, server_default=text("-1"))
+    mfa_challenge_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (
         # sqlite_where alone is a SQLAlchemy dialect-specific kwarg -- it
@@ -85,3 +89,12 @@ class UserRow(Base):
             postgresql_where=text("oauth_provider IS NOT NULL AND oauth_id IS NOT NULL"),
         ),
     )
+
+
+class UserMFARecoveryCodeRow(Base):
+    """One-use recovery-code digest owned by a single DeerFlow user."""
+
+    __tablename__ = "user_mfa_recovery_codes"
+
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    code_hash: Mapped[str] = mapped_column(String(64), primary_key=True)

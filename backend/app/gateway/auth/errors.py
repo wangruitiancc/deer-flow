@@ -22,6 +22,10 @@ class AuthErrorCode(StrEnum):
     NOT_AUTHENTICATED = "not_authenticated"
     SYSTEM_ALREADY_INITIALIZED = "system_already_initialized"
     REGISTRATION_DISABLED = "registration_disabled"
+    INVITATION_INVALID = "invalid_invitation"
+    INVITATION_SERVICE_UNAVAILABLE = "invitation_service_unavailable"
+    INVITATION_CLAIM_UNAVAILABLE = "invitation_claim_unavailable"
+    INVITATION_OR_CREDENTIALS_INVALID = "invalid_invitation_or_credentials"
 
 
 class TokenError(StrEnum):

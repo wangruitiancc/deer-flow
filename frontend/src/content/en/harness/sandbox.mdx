@@ -9,7 +9,7 @@ import { Callout, Tabs } from "nextra/components";
 
 <Callout type="info" emoji="📦">
   The sandbox is the isolated workspace where the agent does file and
-  command-based work. It is what makes DeerFlow capable of real action, not just
+  command-based work. It is what makes Matrix-Law capable of real action, not just
   conversation.
 </Callout>
 
@@ -17,7 +17,7 @@ The sandbox gives the Lead Agent a controlled environment where it can read file
 
 ## Sandbox modes
 
-DeerFlow supports four sandbox modes. Choose the one that fits your deployment:
+These modes determine where Agent commands execute; they do not determine how Matrix-Law services are deployed. Docker is for the local two-server simulation and isolated tests. The cloud target is native systemd processes on two Linux hosts. Matrix-Law currently uses LocalSandboxProvider with host Bash disabled and has no thread-level OS, resource, or network isolation. Complete separate sandbox security and data-processing acceptance before real legal material enters a cloud environment.
 
 ### LocalSandbox (default)
 
@@ -36,7 +36,7 @@ sandbox:
 
 Commands run in an isolated container (Docker on Linux/Windows, or Apple Container on macOS). Each sandbox session gets a fresh container environment.
 
-- **Best for**: multi-user environments, production deployments, or any case where you want execution isolation.
+- **Use**: an optional Agent command-execution backend. It does not change the native systemd deployment of Matrix-Law services; production use requires separate security and data-handling acceptance.
 
 ```yaml
 sandbox:
@@ -49,7 +49,7 @@ sandbox:
   replicas: 3
 
   # Optional: container name prefix (default: deer-flow-sandbox)
-  container_prefix: deer-flow-sandbox
+  container_prefix: matrix-law-sandbox
 
   # Optional: idle timeout in seconds (default: 600)
   idle_timeout: 600
@@ -69,9 +69,9 @@ Install: `cd backend && uv add 'deerflow-harness[aio-sandbox]'`
 
 ### E2B Cloud Sandbox
 
-Commands run in an [E2B](https://e2b.dev) cloud micro-VM. Each thread is bound to its own sandbox via metadata, so the same DeerFlow thread keeps reaching the same e2b sandbox even across gateway restarts and across processes. The cloud VM is reaped automatically by e2b once the configured idle timeout elapses.
+Commands run in an [E2B](https://e2b.dev) cloud micro-VM. Each thread is bound to its own sandbox via metadata, so the same Matrix-Law thread keeps reaching the same e2b sandbox even across gateway restarts and across processes. The cloud VM is reaped automatically by e2b once the configured idle timeout elapses.
 
-- **Best for**: hosted/serverless deployments, teams that do not want to operate Docker or Kubernetes themselves, workloads that need a real Jupyter kernel out of the box.
+- **Use**: executing Agent commands in an independent cloud micro-VM. This is not Matrix-Law service deployment; review third-party data processing, residency, retention, and human-review requirements before any legal material is sent.
 - **Trade-off**: requires network access to the e2b control plane and an API key. Mounts are **one-shot uploads** at sandbox start (host bind-mounts are not possible because the sandbox lives in the cloud).
 
 ```yaml
@@ -117,7 +117,7 @@ Install: `e2b-code-interpreter` is already a core dependency of `deerflow-harnes
 Get an API key at [e2b.dev/dashboard](https://e2b.dev/dashboard) and either set `sandbox.api_key` directly in `config.yaml` or export `E2B_API_KEY` in your `.env`.
 
 <Callout type="info">
-  Because e2b is a remote sandbox, DeerFlow's `/mnt/user-data` virtual prefix is
+  Because e2b is a remote sandbox, Matrix-Law's `/mnt/user-data` virtual prefix is
   remapped onto `home_dir` (default `/home/user`) inside the cloud VM. Tools
   that read or write under `/mnt/user-data/...` continue to work transparently.
 </Callout>
@@ -163,11 +163,10 @@ sandbox:
   `/mnt/skills`, `/mnt/acp-workspace`, or `/mnt/user-data`.
 </Callout>
 
-When `LocalSandboxProvider` runs under production Docker (`make up`), the
-provider runs inside the `deer-flow-gateway` container. In that mode,
-`host_path` is resolved from the gateway container's filesystem, not directly
-from your Docker host. Bind the host directory into the gateway service first,
-then use the in-container path in `config.yaml`:
+In the local two-server Docker simulation, `LocalSandboxProvider` runs inside the
+law-firm simulation container. There, `host_path` is resolved from that container's
+filesystem. For local tests only, mount the directory into the simulated tenant
+service first, then use the in-container path in `config.yaml`:
 
 ```yaml
 # docker/docker-compose.yaml or an override file
@@ -186,7 +185,7 @@ sandbox:
       read_only: true
 ```
 
-If the configured `host_path` is not visible to the gateway process, DeerFlow
+If the configured `host_path` is not visible to the gateway process, Matrix-Law
 logs an error and ignores that mount.
 
 ## Output truncation
@@ -224,7 +223,7 @@ Even without `bash`, the agent can still read and write files through the dedica
 
 ### Container sandbox
 
-Container-based sandboxes provide filesystem and process isolation. The agent cannot see or modify the host filesystem except through explicit mounts. The provisioner-managed mode adds a further layer: each thread gets its own isolated Pod.
+Container sandboxes can restrict access through filesystem and process boundaries, but their actual isolation depends on the runtime, privileges, mounts, and resource controls. This description does not establish production acceptance. Provisioner mode can assign each thread its own Pod; Matrix-Law has not selected it as the production sandbox.
 
 ### Audit middleware
 

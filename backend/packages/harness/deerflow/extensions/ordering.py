@@ -79,6 +79,7 @@ def core_ordering_constraints() -> tuple[OrderingConstraint, ...]:
     from deerflow.agents.middlewares.read_before_write_middleware import ReadBeforeWriteMiddleware
     from deerflow.agents.middlewares.sandbox_audit_middleware import SandboxAuditMiddleware
     from deerflow.agents.middlewares.tool_error_handling_middleware import ToolErrorHandlingMiddleware
+    from deerflow.agents.middlewares.tool_execution_policy_middleware import ToolExecutionPolicyMiddleware
     from deerflow.agents.middlewares.tool_progress_middleware import ToolProgressMiddleware
     from deerflow.agents.middlewares.tool_receipt_middleware import ToolReceiptMiddleware
     from deerflow.guardrails.middleware import GuardrailMiddleware
@@ -102,6 +103,7 @@ def core_ordering_constraints() -> tuple[OrderingConstraint, ...]:
             )
             for short_circuiter in (
                 GuardrailMiddleware,
+                ToolExecutionPolicyMiddleware,
                 SandboxAuditMiddleware,
                 ReadBeforeWriteMiddleware,
                 ToolProgressMiddleware,

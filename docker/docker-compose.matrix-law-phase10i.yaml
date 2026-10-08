@@ -1,0 +1,44 @@
+name: matrix-law-phase10i
+
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_DB: deerflow
+      POSTGRES_USER: deerflow
+      POSTGRES_PASSWORD: synthetic-phase10i
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deerflow -d deerflow"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    networks: [phase10i]
+
+  verifier:
+    image: matrix-law-phase10i-gateway:verify
+    entrypoint: ["/app/backend/.venv/bin/python", "/verify.py"]
+    working_dir: /app/backend
+    environment:
+      PYTHONPATH: /app/backend
+      PYTHONIOENCODING: utf-8
+      DATABASE_URL: postgresql+asyncpg://deerflow:synthetic-phase10i@postgres:5432/deerflow
+    volumes:
+      - ./matrix-law-phase10i/verify.py:/verify.py:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16777216,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [phase10i]
+
+networks:
+  phase10i:
+
+volumes:
+  postgres-data:

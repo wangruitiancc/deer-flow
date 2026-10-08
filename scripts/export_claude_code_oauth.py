@@ -92,7 +92,7 @@ def write_credentials_file(output_path: Path, data: dict[str, Any]) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Manually export Claude Code OAuth credentials from macOS Keychain for DeerFlow.",
+        description="Manually export Claude Code OAuth credentials from macOS Keychain for Matrix-Law.",
     )
     parser.add_argument(
         "--service",

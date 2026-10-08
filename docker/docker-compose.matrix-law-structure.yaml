@@ -1,0 +1,46 @@
+# Optional MatrixFlow Law PP-Structure overlay.
+# Apply together with docker-compose.matrix-law-ocr.yaml. The sidecar has no
+# host port and runs only on an internal network shared with matrix-ocr.
+
+services:
+  matrix-ocr:
+    environment:
+      - MATRIX_STRUCTURE_ENDPOINT=http://matrix-structure:8091
+      - MATRIX_STRUCTURE_HTTP_TOKEN=${MATRIX_STRUCTURE_HTTP_TOKEN}
+      - MATRIX_STRUCTURE_REQUEST_TIMEOUT_SECONDS=${MATRIX_STRUCTURE_REQUEST_TIMEOUT_SECONDS:-180}
+      - MATRIX_STRUCTURE_MAX_RESPONSE_BYTES=${MATRIX_STRUCTURE_MAX_RESPONSE_BYTES:-10485760}
+      - MATRIX_STRUCTURE_MAX_UPLOAD_BYTES=${MATRIX_STRUCTURE_MAX_UPLOAD_BYTES:-26214400}
+      - NO_PROXY=${NO_PROXY:-}${NO_PROXY:+,}matrix-structure
+      - no_proxy=${no_proxy:-}${no_proxy:+,}matrix-structure
+    depends_on:
+      matrix-structure:
+        condition: service_healthy
+    networks:
+      - matrix-law-structure
+
+  matrix-structure:
+    build:
+      context: ../services/matrix-structure
+      dockerfile: Dockerfile
+    environment:
+      - MATRIX_STRUCTURE_HTTP_TOKEN=${MATRIX_STRUCTURE_HTTP_TOKEN}
+      - MATRIX_STRUCTURE_BIND_HOST=0.0.0.0
+      - MATRIX_STRUCTURE_PORT=8091
+      - MATRIX_STRUCTURE_MAX_UPLOAD_BYTES=${MATRIX_STRUCTURE_MAX_UPLOAD_BYTES:-26214400}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=2147483648,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: ${MATRIX_STRUCTURE_MEMORY_LIMIT:-8g}
+    cpus: ${MATRIX_STRUCTURE_CPU_LIMIT:-4}
+    networks:
+      - matrix-law-structure
+    restart: unless-stopped
+
+networks:
+  matrix-law-structure:
+    internal: true

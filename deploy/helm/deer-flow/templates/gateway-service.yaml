@@ -6,6 +6,12 @@ metadata:
   labels:
     {{- include "deer-flow.labels" . | nindent 4 }}
     app.kubernetes.io/component: gateway
+  {{- if .Values.gateway.metrics.enabled }}
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/metrics"
+    prometheus.io/port: "8001"
+  {{- end }}
 spec:
   type: ClusterIP
   ports:

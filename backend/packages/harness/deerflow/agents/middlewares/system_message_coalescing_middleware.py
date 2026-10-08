@@ -38,6 +38,53 @@ from langchain_core.messages import SystemMessage
 
 from deerflow.agents.middlewares.dynamic_context_middleware import is_dynamic_context_reminder
 
+_STALE_DEERFLOW_IDENTITY_MARKERS = (
+    "You are DeerFlow 2.0",
+    "我是 DeerFlow 2.0",
+    "open-source super agent",
+    "open-source AI agent",
+    "开源的 AI Agent",
+    "AI Agent 框架",
+)
+_LEGAL_IDENTITY_MARKERS = (
+    "法律工作台中的律师助手",
+    "律师助手",
+)
+
+
+def _contains_any(content: str, markers: tuple[str, ...]) -> bool:
+    lowered = content.casefold()
+    return any(marker.casefold() in lowered for marker in markers)
+
+
+def _system_message_content(message: SystemMessage | str) -> str:
+    if isinstance(message, SystemMessage):
+        return _flatten_content(message.content)
+    return _flatten_content(message)
+
+
+def _as_system_message(message: SystemMessage | str) -> SystemMessage:
+    if isinstance(message, SystemMessage):
+        return message
+    return SystemMessage(content=message)
+
+
+def _is_stale_deerflow_identity_message(message: SystemMessage) -> bool:
+    """Detect old product-identity prompts persisted in checkpoints.
+
+    Existing long-lived threads can carry a SystemMessage created before the
+    Matrix Law legal identity replaced the upstream DeerFlow identity. Keeping
+    that stale block in the coalesced prompt makes the model reintroduce
+    "DeerFlow 2.0" even when the current static prompt is legal-specific.
+    """
+    return _contains_any(_system_message_content(message), _STALE_DEERFLOW_IDENTITY_MARKERS)
+
+
+def _has_legal_identity(message: SystemMessage | str | None) -> bool:
+    if message is None:
+        return False
+    return _contains_any(_system_message_content(message), _LEGAL_IDENTITY_MARKERS)
+
 
 def _flatten_content(content) -> str:
     """Convert message content to a plain string, handling both str and list types.
@@ -80,11 +127,20 @@ def _coalesce_request(request: ModelRequest) -> ModelRequest | None:
     if not in_msg_systems:
         return None
 
-    # Merge system_message (if any) + all in-messages SystemMessages.
+    # Merge system_message (if any) + all in-messages SystemMessages. When the
+    # current static prompt is the Matrix Law legal identity, drop stale
+    # DeerFlow identity prompts that may have been checkpointed by older runs.
     parts: list[SystemMessage] = []
     if request.system_message is not None:
-        parts.append(request.system_message)
-    parts.extend(in_msg_systems)
+        parts.append(_as_system_message(request.system_message))
+    drop_stale_deerflow_identity = _has_legal_identity(request.system_message)
+    parts.extend(
+        p
+        for p in in_msg_systems
+        if not (drop_stale_deerflow_identity and _is_stale_deerflow_identity_message(p))
+    )
+    if not parts:
+        return request.override(system_message=None, messages=[m for m in request.messages if not isinstance(m, SystemMessage)])
 
     # Deduplicate dynamic_context_reminder SystemMessages: only keep the last
     # one (most recent date), drop earlier reminders. On midnight crossings

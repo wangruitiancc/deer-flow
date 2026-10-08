@@ -1,4 +1,5 @@
 import logging
+from typing import Literal
 
 from langchain.chat_models import BaseChatModel
 from langchain_openai.chat_models.base import BaseChatOpenAI
@@ -171,7 +172,16 @@ def _apply_stream_chunk_timeout_default(model_class: type, model_settings_from_c
     model_settings_from_config["stream_chunk_timeout"] = _DEFAULT_STREAM_CHUNK_TIMEOUT_SECONDS
 
 
-def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *, app_config: AppConfig | None = None, attach_tracing: bool = True, model_overrides: dict | None = None, **kwargs) -> BaseChatModel:
+def create_chat_model(
+    name: str | None = None,
+    thinking_enabled: bool = False,
+    *,
+    app_config: AppConfig | None = None,
+    attach_tracing: bool = True,
+    model_overrides: dict | None = None,
+    purpose: Literal["agent", "subagent", "title", "summarization", "goal", "memory", "oneshot", "security_scan"] = "agent",
+    **kwargs,
+) -> BaseChatModel:
     """Create a chat model instance from the config.
 
     Args:
@@ -195,6 +205,8 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
             the model) and ``session_id`` / ``user_id`` metadata never reach the trace
             because the model becomes a nested observation whose ``langfuse_*`` keys
             get stripped.
+        purpose: The fixed caller class carried to a task-scoped controlled
+            Gateway runtime. It is host-owned metadata, never prompt input.
 
     Returns:
         A chat model instance.
@@ -202,7 +214,20 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
     config = app_config or get_app_config()
     if name is None:
         name = config.models[0].name
+    from deerflow.models.controlled import create_controlled_gateway_model, get_controlled_model_runtime
+
+    controlled_runtime = get_controlled_model_runtime()
     model_config = config.get_model_config(name)
+    dynamic_controlled_model = model_config is None and controlled_runtime is not None
+    if dynamic_controlled_model:
+        if not controlled_runtime.allows_model(name):
+            raise ValueError(f"Controlled model runtime rejected model {name!r}.")
+        if not config.models:
+            raise ValueError("A controlled model requires at least one local safety profile.")
+        # The platform directory owns the concrete model name. The first local
+        # profile contributes only safe client/generation defaults; its endpoint,
+        # credential, and concrete model target are stripped below.
+        model_config = config.models[0]
     if model_config is None:
         raise ValueError(f"Model {name} not found in config") from None
     model_class = resolve_class(model_config.use, BaseChatModel)
@@ -317,9 +342,33 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
     # explicit profile from a caller or model_overrides is never clobbered.
     translate_context_window = bool(model_config.context_window) and "profile" not in kwargs and "profile" not in model_settings_from_config
 
-    _warn_unknown_model_settings(model_class, name, model_settings_from_config)
-
-    model_instance = model_class(**kwargs, **model_settings_from_config)
+    # A vertical extension may bind an opaque controlled runtime after trusted
+    # task admission.  It changes the *transport*, not config resolution: the
+    # configured model still supplies safe generation options, while the
+    # extension signs a short assertion only when a live HTTP request is made.
+    # Do not fall back to the configured provider here; a missing/denied
+    # controlled model is an execution failure rather than an authorization
+    # bypass.
+    if controlled_runtime is not None:
+        # ``name`` selects a host config profile; ``model`` is the concrete
+        # OpenAI-compatible target that the normal factory would send to the
+        # provider.  The Gateway catalog authorizes that concrete target, so
+        # use it for the controlled directory/execute decision as well.
+        controlled_model_name = name if dynamic_controlled_model else model_settings_from_config.get("model", name)
+        if not isinstance(controlled_model_name, str) or not controlled_model_name.strip():
+            raise ValueError(f"Controlled model profile {name!r} has no concrete model target.")
+        if not controlled_runtime.allows_model(controlled_model_name):
+            raise ValueError(f"Controlled model runtime rejected model {controlled_model_name!r}.")
+        model_instance = create_controlled_gateway_model(
+            name=controlled_model_name,
+            purpose=purpose,
+            runtime=controlled_runtime,
+            model_settings=model_settings_from_config,
+            kwargs=kwargs,
+        )
+    else:
+        _warn_unknown_model_settings(model_class, name, model_settings_from_config)
+        model_instance = model_class(**kwargs, **model_settings_from_config)
 
     if translate_context_window:
         # Applied *after* construction and merged into the provider's inferred

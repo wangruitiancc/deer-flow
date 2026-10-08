@@ -1,67 +1,119 @@
 ### Data Flow
 
-1. Optional composer helpers such as `core/input-polish` can rewrite the local draft before submission, and `core/voice-input` can transcribe browser microphone input into that same local draft; confirmed user input then flows to thread hooks (`core/threads/hooks.ts`) → LangGraph SDK streaming
-2. Stream events update thread state (messages, artifacts, todos, goal). The main thread stream uses the LangGraph SDK's `throttle: true` mode so updates received in the same macrotask coalesce before React is notified; do not replace it with a numeric delay without validating the SDK's trailing-debounce behavior on a continuous stream.
-   File-tool artifact auto-open work must run in an effect with timer cleanup; never schedule timers while rendering streamed `write_file` or `str_replace` updates.
-   `ThreadState.artifacts` remains the authoritative artifact list. The artifacts provider persists only thread-scoped panel UI state (`open`, selected path, and a refresh bootstrap cache) in session storage; an initial empty stream value must not overwrite that restored state before history finishes loading.
-   Formal artifact content is refreshed once when the run finishes; transient `write-file:` previews remain message-driven.
-   The detail view exposes explicit editing only for an already-opened formal UTF-8 text artifact under `/mnt/user-data/outputs`. Drafts stay in provider memory until Save so switching right-side panels cannot discard them, render in Markdown/HTML preview, and are protected from remote refreshes by the loaded SHA-256 revision. Saving is disabled during an active run; a changed revision preserves the draft and surfaces a conflict instead of overwriting agent output.
-   Regular artifact text loads request at most the first 1 MiB through an HTTP
-   byte range. A truncated preview must stay lightweight and expose an explicit
-   full-file action; do not mount CodeMirror for that artifact until the user
-   requests and receives the complete content. The Gateway retains range
-   ownership and returns 206/416 through `FileResponse`.
-3. `useThreadHistory` loads persisted conversation pages from `GET /api/threads/{id}/messages/page`, preserving the backend's thread-global event `seq`; rendering overlays checkpoint/live copies at their matching canonical identities (a summarized checkpoint may contain a protected early input plus a recent tail). Context-compaction rescue diffs every retained visible identity rather than slicing at the first anchor, and keeps a run-scoped ledger of committed visible messages so replacement updates and repeated rolling checkpoint windows cannot erase an already displayed step. A checkpoint/transient prefix whose canonical position is still behind an unloaded cursor page is woven in before the first shared anchor, not discarded: both the checkpoint and seq-sorted history place it earlier, so that position is known even when the pages between are not. It must never be appended to the tail (#4065) — the tail is provably wrong — but suppressing it entirely is how a user's own question vanished from a long thread once the first 50-row history page no longer reached back to it (#4666). A collapsed unloaded gap is recoverable by paging; a dropped message is not. Weaving alone restores the message but not its exact position — after compaction the live window carries too few anchors — so both sides now carry the backend's thread-global `additional_kwargs.deerflow_seq`: `buildVisibleHistoryMessages` copies each row's `seq`, and the Gateway stamps it onto `values` frame messages it has already persisted. A live message whose seq is below the loaded window's lower bound is placed ahead of everything on screen instead of before the nearest anchor, which is what puts a compaction-rescued first user turn back at the head rather than mid-transcript. That split happens _before_ the anchor walk, not inside it: a compacted checkpoint can share no identity at all with the loaded page — it keeps only the current run's recent tail, while the page on screen was fetched turns earlier — and the anchor walk then never runs at all, which is precisely when a rescued turn most needs its seq. Doing the split inside the walk left that case appending the message after the whole window (#4666), the one arrangement #4065 proved wrong. A message without a seq (still streaming, so not in the feed yet) keeps the weaving path — the tail is already its correct position. Optimistic messages are then added without timestamp re-sorting. History invalidation preserves already-loaded pages so their established ordering positions are not discarded. Dynamic context re-keys the submitted user message from `X` to `X__user`; UI identity matching normalizes that reserved suffix only for human messages so the submitted frame and checkpoint replacement remain one visible turn. A locally submitted turn also records its pre-submit identity baseline: if `messages-tuple` publishes new AI/tool steps before canonical history (or replay-gap recovery) publishes that turn's human message, render ordering moves only those non-baseline visible steps behind the new human while leaving history, hidden controls, and reconnected runs untouched. Keep that local order anchor through finish, stop, and stream error because the SDK's settled frame can retain transient event order; replace it on the next local submit and clear it on thread switch or replay-gap recovery.
-4. Stop actions call the LangGraph SDK stream stop path; `core/threads/hooks.ts` invalidates current-thread, thread-history, token-usage, and sidebar/search caches immediately and schedules one follow-up refetch because SDK stop may finish via abort + fire-and-forget cancel before backend title finalization commits
-5. TanStack Query manages server state; localStorage stores user settings. The
-   Settings > Tools MCP switch calls the targeted `PATCH /api/mcp/config`
-   mutation, disables switches until that mutation's success refetch completes,
-   displays the backend error `detail` through a toast, and invalidates
-   `["mcpConfig"]` only after success.
-   Server management uses targeted `POST /api/mcp/config/servers`,
-   `PUT /api/mcp/config/server`, and bodyless
-   `DELETE /api/mcp/config/servers/{server_name}` mutations. Delete names are
-   percent-encoded, including legacy empty and slash-containing names; every
-   successful mutation invalidates `["mcpConfig"]` only after the response.
-   Current-chat MCP background tasks use `core/background-tasks`: the header
-   trigger is hidden for new/mock/static-demo threads and unless `/api/features`
-   reports the startup-scoped `mcp_tasks` capability; the list query is disabled
-   while that capability is unavailable, so default-disabled and memory-backend
-   deployments never poll an endpoint that cannot serve tasks. It lists at most
-   20 local task records, refreshes every 3 seconds while any task is active
-   (15 seconds otherwise), fetches bounded task details only while a user expands
-   a card, and cancels through the thread-scoped local-ID endpoint. The expanded view
-   shows result/preview, artifact metadata, input requests, and the latest poll,
-   notification-delivery, or cancellation error without exposing the persisted remote handle. A
-   persisted cancel request remains "Cancelling…" only while the task status is
-   still active; if remote cancellation keeps failing, the active card remains
-   expandable and shows the attempt count plus the latest bounded error while
-   the backend continues retrying. Notification delivery failures expose their
-   bounded error and attempt count; retryable failures use backend backoff,
-   while a permanent rejection or exhausted five-attempt budget is shown as
-   stopped rather than implying that retries will continue.
-   Explicit durable native-subagent batches use `core/subagent-batches` and
-   `ThreadSubagentBatches`. `/api/features` reports SQL-repository availability
-   separately from the startup worker. A running worker exposes the trigger on
-   both default and Custom Agent chat pages; a stopped worker keeps threads with
-   durable history visible in read-only mode for inspection and JSONL export,
-   while deployments with neither a worker nor history keep the trigger hidden.
-   The panel renders bounded progress and incrementally paged item previews, controls pause/resume/cancel,
-   retries failed items, and exports JSONL. Worker-dependent mutations stay
-   disabled in read-only history mode, and persisted progress is normalized to
-   a bounded percentage before reaching the UI primitive. Item pagination uses a
-   fixed page size and an explicit load-more control; full results remain available
-   only through JSONL export. The panel must not infer batch mode from prompt text
-   or inject the complete result set into chat state.
-   Settings > Integrations uses a local generation only to suppress stale React
-   callbacks; server-issued Lark flow generations must be passed through every
-   config/auth completion and across switch-or-register to authorization chains
-   so backend cross-tab ordering remains authoritative.
-   Settings > Subagents reads one catalog for built-in, config, and managed
-   definitions. Only administrators see managed-definition mutation controls;
-   Custom Agent settings consume the same query and preserve stale selected names
-   as removable "missing" entries instead of silently widening the allowlist.
-6. Components subscribe to thread state and render updates
+Before changing composer helpers, chat dispatch, streaming or message interpretation, read [the detailed flow guide](chat-flow-guidance.md).
+
+The Matrix Law workspace at `/workspace/law` uses `core/law` for authenticated tenant, matter, member, and thread-mapping requests. Creating a matter conversation is deliberately ordered: create an owned empty DeerFlow thread first, bind it through the Matrix Law API with an idempotency key, and only then navigate to the chat. If binding fails, the client best-effort removes only that newly created empty thread. Tenant and matter IDs in page state are navigation selections, never trusted authorization context; the extension rechecks ownership and membership before each run.
+
+`core/law/legal-graph.ts` validates the versioned legal graph payload for native
+artifact rendering (`.law-graph.json`, plus saved `knowledge_graph` versions). The lazily
+loaded `law/LegalGraphViewer` provides d3-force relationships, precision-preserving timeline,
+keyboard lists and protected citation reads. Partial/range previews never enter its parser.
+Its shared acceptance fixture lives in the packaged Matrix Law extension
+at `matrix_law_extension/contracts/legal_graph_v1.examples.json`. Citation IDs are not proof
+of factual correctness or current access; source opens must reauthorize through the existing
+legal APIs. Never execute legacy reference strings or treat EXTRACTED as human approval.
+`legal-graph-editing.ts` owns validated local graph transactions. The native artifact Edit
+action enables node/edge/title forms and non-event drag pinning; the same provider-memory
+draft, explicit file Save, SHA conflict guard and project-version promotion remain authoritative.
+Do not write on pointer moves or fork a graph save endpoint. Forms reject stale graph baselines,
+manual date changes become `origin: user`, and node deletion confirms its cascading edge count.
+History passes no edit callback and remains immutable. DOMPoint coordinates are prototype
+accessors: copy x/y explicitly into gestures, never spread DOMPoint. Cancelled drags restore
+the prior layout. G3 file/version storage, conflicts and membership revocation are covered
+by the isolated 2035 real-backend spec. Graph sources show separate archive/hold/purge
+and OCR-lineage states, retain authorized immutable quotes, and clear old text before
+each reauthorization. The source spec seeds labeled synthetic OCR output, not an OCR
+engine; full legal-quality acceptance remains pending.
+`LegalGraphSourceMapping` uses existing material/version/citation reads and explicit confirmation,
+then only applies `map-source` to the native draft. Re-read the citation before applying; clear
+old text/confirmation on changes, abort on close and reject stale graph/scope baselines.
+Preserve original source ID and bounded `legacy_origin`; it is unverified client-asserted
+provenance, not quote authority or proof of human review. Keep historical versions read-only.
+The optional v1 field requires a paired frontend/extension rollout; never silently strip it.
+`legal-graph-import.ts` converts persisted desktop CaseGraph data, never LLM extraction
+responses. `LegacyGraphImportPreview` previews/downloads local conversions and SHA/ID
+reports. `LegalGraphImportHandoff` can explicitly stage the same two Files and static legal
+instructions through the existing PromptInputProvider; it never submits, uploads or saves.
+Recheck current thread scope and native upload limits, preserve any existing input/attachment,
+and reject late responses after close/unmount. Only normal Send owns upload and run creation.
+Keep sources unmapped, dates unverified, async reads generation-fenced and object URLs revoked.
+Never execute legacy paths or infer project authority from caseId. Original filenames/IDs/content
+belong only in the in-memory attachment, not the persisted composer instructions. Default chat
+layout keys ChatProviders by thread ID so client-side navigation cannot carry unsent files to
+another thread; attachments are deliberately not restored after leaving or refreshing.
+All three right panels use the existing Sheet below 1024px; desktop mounts
+capture their initial size once so overlay-to-desktop restoration cannot reset drag widths.
+
+`WorkspaceSidebar` renders the Matrix Law project tree. Its user-facing “project”
+node is the existing `law_matter`, not a parallel project entity: each node can be a
+case or another legal-work kind and lazily loads only its bound threads when expanded.
+Opening a thread resolves the trusted thread context, selects its tenant, and expands
+its matter. The sidebar may use tenant/matter IDs for navigation state only; it must
+not persist legal IDs or legal data in browser storage, and the backend remains the
+authorization authority.
+
+The native `ArtifactFileDetail` toolbar hosts `law/SaveProjectArtifact`, keyed by thread and path so
+switching files cannot carry over a draft save target. It uses the trusted thread context, displays the
+target project's name, and promotes complete authenticated file bytes through the legal extension API.
+Never save range previews or unsaved editor drafts. Active runs and source revision conflicts block promotion.
+Retries within the dialog retain the same key for the same source digest, target version and metadata.
+Abort reads on unmount; a lost upload response is uncertain, not proof of cancellation. Source provenance is
+client-asserted and newly saved versions are unreviewed; do not present saving as legal approval.
+
+`law/SaveCustomTemplate` reuses the native file toolbar/editor. Save only complete persisted Markdown:
+strict UTF-8, preserve BOM, verify SHA, bound the stream to 64 KiB; empty templates are allowed.
+Reauthorize before/after reading. Pin expected_version across query refresh; changed revisions require
+reselection. Identical retries retain their key. Cancel late UI writes without claiming server rollback.
+Default private; shared writes require owner/admin. Saving is not Skill installation or legal approval.
+0016 is deployed only on isolated 2035; 2030 remains 0015. Use deterministic legal-tree Skeleton widths
+for SSR; never edit generated ui/sidebar components.
+
+`law/ProjectArtifactsPanel` wraps only native artifacts, not sidecar/browser panels. Disable for mock/static
+threads; real threads can open it without temporary files. Its project tab shows immutable versions through
+protected reads, byte-count/SHA verification and native Markdown preview without relative artifact links.
+Never persist content/selected versions in browser storage. Unmount aborts reads/downloads and revokes URLs.
+Downloads refetch with current authorization, never cached bytes. Reauthorize source-thread navigation;
+an unavailable source does not delete its saved snapshot.
+Lawyer review receipts are append-only and bind the exact selected version SHA. Show review controls only
+for trusted matter roles owner/lead/lawyer; fetch review notes only for those roles. Reuse the idempotency key
+for an unchanged retry, and keep every newer artifact version unreviewed until it receives its own review.
+Offer DOCX/PDF receipt bundles only for an active, approved version and supported source type. Re-fetch the
+selected version through the protected export API; never build the final deliverable from preview text or a
+locally edited draft. Display server-resolved case citations separately from client-asserted external sources.
+
+`law/LegalTemplatePicker` stages text through the existing PromptInputProvider; it must never submit.
+Read the authenticated deployment catalog, then recheck it plus current
+thread mapping, project status and generation role on confirmation. Never overwrite text or attachments;
+abort late writes on close/thread change. Persisted composer text must not embed tenant/matter IDs or
+private project context. Request the registered deterministic tool directly: the legal product hides the
+general Skill management routes, so neither listSkills nor slash activation is an entry prerequisite.
+Template output still uses native files, presentation and explicit project saving.
+
+`law/CustomTemplatePicker` shares that dialog: paginated metadata only, explicit historical version,
+pinned catalog revision, confirmation-time reauthorization, no draft/attachment replacement.
+IDs/revisions belong only in the temporary native selection File, never persisted composer text;
+names/body stay out of its fixed prompt. Normal Send owns upload/run creation; tools reauthorize.
+Cancel late writes on close/source/thread change; reuse native upload limits. No auto-run or Skill install.
+Draft values stay in the File, without guessed dates. Fixed header/footer, scrolling body.
+`CustomTemplateImport` uses the same dialog; import/privacy rules are in `frontend/AGENTS.md`.
+
+The evidence workbench keeps evidence, immutable versions, OCR runs, pages, blocks,
+and citations in TanStack Query server state. Uploads compute a browser SHA-256 for
+transport integrity, but only the server's size/digest/scan checks are authoritative.
+Protected evidence is fetched through the authenticated content endpoint into a
+short-lived object URL; close or version change aborts the request and revokes the
+URL. Citation create requests carry only server-resolvable block anchors and
+offsets—never client-authored quote text—and the viewer uses the citation's frozen
+physical page plus OCR result while clearly labeling superseded results.
+Published-proofreading citations follow the same rule: select text
+only from a fetched immutable publication page, convert DOM UTF-16 selection offsets
+to Unicode code-point offsets, send publication/page/range without quote text, and
+render publication current/superseded state separately from OCR lineage. They share
+the existing citation list/read and graph-source mapping paths; do not create a second
+graph source kind or trust draft text as published evidence. Do not persist tenant,
+matter, evidence, OCR, citation, document bytes, or object URLs in browser storage.
+Inner evidence/OCR columns intentionally wait until the `2xl`
+breakpoint because `/workspace/law` already owns a desktop matter/detail split.
 
 The chat header's context-window control is intentionally persistent: while `context_usage` is unavailable, `ContextUsageBadge` renders a gauge placeholder rather than unmounting; once data arrives, the same position shows the percentage. `useThreadTokenUsage` retains placeholder data only when the response `thread_id` still matches the active route, so same-thread refetches do not flicker and cross-thread navigation never displays the previous chat's usage.
 
@@ -77,7 +129,7 @@ The workspace-change card follows the same rule: it is resolved from `(threadId,
 
 Composer drafts are tab-scoped browser state. `core/threads/composer-draft.ts` stores only text plus the selected slash-skill name in `sessionStorage`, keyed by user, agent, and logical conversation scope. New-chat pages pass the stable scope `"new"` because their runtime `threadId` is a fresh UUID on every reload; established conversations use their real thread ID. `InputBox` waits for enabled skills before restoring a skill chip, degrades a missing/disabled skill back to editable slash text, and clears the stored draft through `SendMessageOptions.onSent` only after the send passes the in-flight guard. Attachments, sidecar quotes, voice state, and polish undo state are not persisted.
 
-Auth UI note: the login page's "keep me signed in" option submits only `remember_me` to the Gateway and may persist only the email address through `core/auth/remember-login.ts`. Passwords and tokens must never be stored in frontend storage; the `HttpOnly access_token` and readable `csrf_token` cookies remain Gateway-owned.
+Auth UI note: the login page's "keep me signed in" option submits only `remember_me` to the Gateway and may persist only the email address through `core/auth/remember-login.ts`. Passwords and tokens must never be stored in frontend storage; the `HttpOnly access_token` and readable `csrf_token` cookies remain Gateway-owned. Password recovery checks the Gateway's public `password-reset/status`; its reset page reads the signed token from the URL fragment, immediately removes the fragment from browser history, and submits it only in the JSON body through `core/auth/password-reset.ts`. Never put reset tokens in query strings, navigation destinations, analytics, or browser storage. Local administrator MFA uses only the short-lived HttpOnly challenge cookie; the login page may hold one-time TOTP setup material in component memory long enough for the administrator to save it, but must never persist it in browser storage, analytics, URLs, or logs. See `backend/docs/ADMIN_MFA.md` for coverage and recovery limits.
 
 `/goal` and `/compact` are built-in composer commands, not skill activations. `src/components/workspace/input-box.tsx` intercepts `/goal`, `/goal clear`, and `/goal <condition>` before normal chat submission, calling Gateway `GET/PUT/DELETE /api/threads/{thread_id}/goal`. Setting `/goal <condition>` also submits the condition text as the next user task so the agent starts running immediately; status and clear do not start a run. Goal and compact requests are tied to the current `threadId` with an `AbortController`, so switching threads or unmounting the composer aborts in-flight requests and stale responses cannot update the new thread's composer state. The chat pages render `GoalStatus` above the composer from `AgentThreadState.goal`, with local optimistic state until an incremental goal update or final state reload arrives. `/compact` calls `POST /api/threads/{thread_id}/compact` to summarize older active context while leaving the full visible chat history intact; it is skipped on new/empty threads and blocked server-side while a run is in flight. Thread rename uses the same serialized state-write route; the rename dialog stays open and surfaces the server error when an active run returns 409.
 
@@ -93,6 +145,10 @@ Because the same message is rendered by two different components over its lifeti
 Edit-and-rerun is deliberately latest-turn-only. `core/messages/utils.ts::getLatestEditableTurn()` exposes a human turn only when the transcript is idle and the most recent visible turn ends in a terminal assistant message. `core/threads/hooks.ts::editAndRegenerateMessage()` calls `POST /api/threads/{id}/runs/edit-regenerate/prepare`, submits the returned replacement message/checkpoint/metadata through the same LangGraph stream path as regenerate, optimistically hides the superseded message ids, and clears the optimistic replacement once the persisted replacement arrives.
 
 `MessageGroup` builds its tool-result and browser-preview lookups once per processing group before converting messages to steps. The lookup preserves the first non-empty result and first screenshot-bearing browser view for each tool-call ID, matching the streamed-message display semantics without repeatedly scanning the full group for every tool call.
+`getMessageGroups` indexes visible tool invocations as groups form. Late persisted
+results return to their matching invocation group, including across newer human
+turns; known unequal run IDs do not match. Do not append a matched tool result to
+the terminal answer or change authoritative history seq to hide late arrival.
 
 ### Key Patterns
 
@@ -108,7 +164,7 @@ Edit-and-rerun is deliberately latest-turn-only. `core/messages/utils.ts::getLat
 - **Thread routes** — construct Web UI chat paths through `core/threads/utils.ts::pathOfThread()`, which percent-encodes both custom agent names and thread IDs before inserting them into route segments
 - **LangGraph client** is a singleton obtained via `getAPIClient()` in `core/api/`
 - **Run stream options** are sanitized by `core/api/stream-mode.ts`: the Gateway-supported set is `values`, `messages-tuple`, `updates`, `debug`, `tasks`, `checkpoints`, and `custom`; any request containing an unsupported mode throws before HTTP instead of being partially forwarded or silently defaulting to `values`. `streamResumable` is retained by thread hooks only for SDK-side reconnect bookkeeping but stripped before the HTTP request because the Gateway does not accept that request option; actual replay uses the SSE `Last-Event-ID` cursor. The main chat client's initial and rejoined streams are forced to incremental `messages-tuple`, `updates`, and `custom` modes so SDK lazy tracking cannot add repeated full-state `values` snapshots; explicitly requested non-snapshot modes such as `debug`, `tasks`, and `checkpoints` are preserved. `values` remains supported outside this chat wrapper for explicit state inspection and by the replay-gap durable-state reload below. The backend file-tool chunk batcher is keyed to `messages-tuple`, not `values`, so omitting snapshots must not regress `write_file` / `str_replace` streaming into one SSE frame per model token. `core/threads/stream-state.ts` folds the user-visible non-message fields from `updates` with the matching DeerFlow reducer semantics and rejects irrelevant frames before calling the SDK mutator, while the SDK's `messages-tuple` manager remains the sole owner of live message chunk assembly and deduplication. Keep this boundary aligned with the backend request schema; `messages` and `events` are not supported and must not be forwarded.
-- **SSE replay gaps** are handled in `core/api/api-client.ts`, which wraps both initial and joined run streams because the upstream SDK ignores unknown event names. An id-less backend `gap` control frame clears stale reconnect metadata, emits an internal `stream_replay_gap` custom event, reloads durable thread values, and resumes after the server-provided retained tail when one exists (or rejoins without a cursor if the buffer is empty), with up to five recovery rejoins after the original stream (six total stream calls on an all-gap exhaustion path). The wrapper remains a lazy async iterable because the SDK consumes it with `for await`. `core/threads/hooks.ts` clears optimistic/transient/subtask state, invalidates durable history caches, and shows the localized recovery warning; never let a gap fall through as a normal stream finish or cancel the still-running backend run.
+- **SSE replay gaps and server-interruption recovery** are handled in `core/api/api-client.ts`, which wraps both initial and joined run streams because the upstream SDK ignores unknown event names. An id-less backend `gap` control frame clears stale reconnect metadata, emits an internal `stream_replay_gap` custom event, reloads durable thread values, and resumes after the server-provided retained tail when one exists (or rejoins without a cursor if the buffer is empty), with up to five recovery rejoins after the original stream (six total stream calls on an all-gap exhaustion path). The wrapper remains a lazy async iterable because the SDK consumes it with `for await`. Lease recovery uses `error/orphan_recovered`; graceful process shutdown uses `interrupted/gateway_shutdown`. Both streams carry `run_recovery_required`, and a reload preflight of either durable pair synthesizes the same custom payload before short-circuiting the drained join. An ordinary user-cancelled `interrupted` run still short-circuits silently. `core/threads/hooks.ts` clears optimistic/pending/subtask state, invalidates durable caches, and shows a localized request-to-resend warning. It never automatically replays an Agent turn because already-committed tool side effects may not be idempotent. Never let a replay gap fall through as a normal stream finish or cancel the still-running backend run, and never describe server recovery as continuation of the crashed computation.
 - **Streaming Markdown rendering** is owned by `core/streamdown`: Streamdown's `animated` / `isAnimating` API handles incremental word animation, while the shared `streamdownRenderingPlugins` config registers the named code-highlighting and Mermaid plugins required by Streamdown 2.5. Keep wrappers and derived configs wired to that shared object; do not reintroduce a rehype plugin that wraps every word, because reparsing a growing block remounts old words and replays their animation.
 - Citation links in message and artifact Markdown must derive their `citation:` label from the full `ReactNode` children tree, since Streamdown may provide element or array children during streaming rather than a plain string.
 - **Environment validation** uses `@t3-oss/env-nextjs` with Zod schemas (`src/env.js`). Skip with `SKIP_ENV_VALIDATION=1`
@@ -132,3 +188,8 @@ Edit-and-rerun is deliberately latest-turn-only. `core/messages/utils.ts::getLat
   frame path for older clients.
 - `src/core/threads/hooks.ts` owns pre-submit upload state and thread submission.
 - `src/components/workspace/chats/chat-box.tsx` owns the desktop right-panel layout, and **all three** right panels (artifacts, sidecar, browser) share one `ResizablePanelGroup` — do not fork a non-resizable branch per panel kind, which is how the artifacts divider silently lost its drag handle (#4465). Open/close is `collapse()` / `resize()` on the side panel's imperative handle, not conditional rendering, so the width can animate. Three constraints hold that together: the size transition is applied from the group as `[&>[data-panel]]:transition-[flex-grow]` because the sized flex item is the library's own `[data-panel]` element rather than the child `className` lands on; it is applied only while an open/close is in flight, so a drag is not interpolated frame by frame; and during the animation the panel content is held at its final width in `cqw` and clipped, because a reflowing message list re-runs its scroll-to-bottom (pinned by `tests/e2e/sidecar-chat.spec.ts`'s no-animated-scroll test) and a re-wrapping composer changes which responsive labels it shows. Because the panel is `collapsible`, the library can also collapse it to `0%` on its own when a drag crosses `minSize`, without going through the state that owns it. `onResize` records the last positive size while the pointer moves, but the owning `sidecar` / `browserView` / `artifactsOpen` state must only mirror a final `0%` layout from `onLayoutChanged`, after pointer release; closing on the first `0%` resize frame breaks a continuous drag that reaches the edge and then reverses before release.
+
+
+Matrix Law right workspace (2026-10-03): `law/ProjectArtifactsPanel` owns the overview and document tabs. Keep opened file/evidence components mounted while hidden so switching tabs, expanding and returning do not recreate editors. `ChatBox` uses the same mounted desktop tree for the mobile fullscreen view; closed workspaces are inert. Native artifact drafts remain in `ArtifactsProvider`; an explicit dirty close preserves the provider draft, and evidence close asks the user to confirm save state. Scope changes remount the document workspace. Structured human upload metadata is an attachment display only, not proof the model used it or a project evidence binding. Project material opened here is labeled as opened, not used. Do not infer mappings from filenames or parsed document text.
+
+`workspace-resize-provider.tsx` owns the left splitter, keyboard increments and a bounded width preference; the native right splitter owns the chat/document ratio. Store only numeric widths as layout preferences. Selecting an artifact no longer collapses the project sidebar. Both dividers must remain draggable, and expanded/mobile views must restore the same thread/editor DOM and keep keyboard focus within the modal workspace.

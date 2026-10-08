@@ -83,13 +83,13 @@ export const zhCN: Translations = {
 
   // Welcome
   welcome: {
-    greeting: "你好，欢迎回来！",
+    greeting: "你好，欢迎回到 Matrix-Law",
     description:
-      "欢迎使用 🦌 DeerFlow，一个完全开源的超级智能体。通过内置和自定义的 Skills，\nDeerFlow 可以帮你搜索网络、分析数据，还能为你生成幻灯片、\n图片、视频、播客及网页等，几乎可以做任何事情。",
+      "当前对话已绑定到租户内的法律工作，可以是案件、单次咨询、合同审核、法律研究或文书起草；所有输出均需由授权法律专业人员复核。",
 
-    createYourOwnSkill: "创建你自己的 Agent SKill",
+    createYourOwnSkill: "法律工作已就绪",
     createYourOwnSkillDescription:
-      "创建你的 Agent Skill 来释放 DeerFlow 的潜力。通过自定义技能，DeerFlow\n可以帮你搜索网络、分析数据，还能为你生成幻灯片、\n网页等作品，几乎可以做任何事情。",
+      "请从法律问题、事实、证据、合同或目标文书开始。Matrix-Law 只在当前租户和法律事项授权范围内运行。",
   },
 
   // Clipboard
@@ -164,8 +164,8 @@ export const zhCN: Translations = {
 
   // Input Box
   inputBox: {
-    placeholder: "今天我能为你做些什么？",
-    disclaimer: "内容由AI生成，重要信息请务必核查",
+    placeholder: "请描述当前法律问题或工作任务",
+    disclaimer: "AI 输出仅供法律工作参考，须由授权专业人员复核",
     createSkillPrompt:
       "我们一起用 skill-creator 技能来创建一个技能吧。先问问我希望这个技能能做什么。",
     addAttachments: "添加附件",
@@ -178,7 +178,7 @@ export const zhCN: Translations = {
     voiceInputStartLabel: "语音输入",
     voiceInputStopLabel: "停止语音输入",
     voiceInputStart:
-      "语音输入。DeerFlow 只接收转写文本，音频由浏览器或系统语音服务处理。",
+      "语音输入。Matrix-Law 只接收转写文本，音频由浏览器或系统语音服务处理。",
     voiceInputStop: "停止语音输入",
     voiceInputListening: "正在聆听... 点击停止语音输入。",
     voiceInputUnsupported:
@@ -293,6 +293,7 @@ export const zhCN: Translations = {
     recentChats: "最近的对话",
     demoChats: "演示对话",
     agents: "智能体",
+    lawMatters: "法律工作",
     scheduledTasks: "定时任务",
     agentsDisabledTooltip: "功能未启用",
   },
@@ -311,11 +312,11 @@ export const zhCN: Translations = {
     cancelling: "正在取消…",
     cancelFailed: "取消任务失败",
     cancellationRetrying: (attempt) =>
-      `第 ${attempt} 次取消失败；DeerFlow 将继续重试。`,
+      `第 ${attempt} 次取消失败；Matrix-Law 将继续重试。`,
     notificationRetrying: (attempt) =>
-      `第 ${attempt} 次聊天通知失败；DeerFlow 将退避后重试。`,
+      `第 ${attempt} 次聊天通知失败；Matrix-Law 将退避后重试。`,
     notificationStopped: "聊天通知因反复失败或永久拒绝，已停止重试。",
-    trackingDegraded: "状态检查有所延迟，DeerFlow 仍在重试。",
+    trackingDegraded: "状态检查有所延迟，Matrix-Law 仍在重试。",
     viewDetails: "查看详情",
     hideDetails: "收起详情",
     detailsFailed: "无法加载任务详情",
@@ -415,7 +416,7 @@ export const zhCN: Translations = {
       threadIdPlaceholder: "线程 ID",
       reuseNoticeTitle: "使用该线程的历史对话",
       reuseNoticeDescription:
-        "如果触发时该线程正在运行，DeerFlow 会将本次执行排队，并在线程空闲后启动；超过配置的最长等待时间后会标记为失败。",
+        "如果触发时该线程正在运行，Matrix-Law 会将本次执行排队，并在线程空闲后启动；超过配置的最长等待时间后会标记为失败。",
     },
     filters: {
       allStatuses: "全部状态",
@@ -539,13 +540,13 @@ export const zhCN: Translations = {
     save: "保存智能体",
     saving: "正在保存智能体...",
     saveRequested:
-      "已提交保存请求，DeerFlow 正在根据当前对话生成并保存初版智能体。",
+      "已提交保存请求，Matrix-Law 正在根据当前对话生成并保存初版智能体。",
     saveHint:
       "你可以在右上角的菜单里随时保存这个智能体，就算目前还只是初稿也可以。",
     saveCommandMessage:
       "请现在根据我们目前已经讨论的全部内容保存这个自定义智能体。这就是我明确的保存确认。如果仍有少量细节缺失，请根据上下文做出合理假设，生成一份简洁的英文初始 SOUL.md，并直接调用 setup_agent，不要再向我索要额外确认。",
     agentCreatedPendingRefresh:
-      "智能体已创建，但 DeerFlow 暂时还无法读取到它。请稍后刷新当前页面。",
+      "智能体已创建，但 Matrix-Law 暂时还无法读取到它。请稍后刷新当前页面。",
     more: "更多操作",
     agentCreated: "智能体已创建！",
     startChatting: "开始对话",
@@ -574,17 +575,18 @@ export const zhCN: Translations = {
   breadcrumb: {
     workspace: "工作区",
     chats: "对话",
+    lawMatters: "法律工作",
   },
 
   // Workspace
   workspace: {
-    officialWebsite: "访问 DeerFlow 官方网站",
-    githubTooltip: "访问 DeerFlow 的 GitHub 仓库",
+    officialWebsite: "访问 Matrix-Law 官方网站",
+    githubTooltip: "访问 Matrix-Law 的 GitHub 仓库",
     settingsAndMore: "设置和更多",
-    visitGithub: "在 GitHub 上查看 DeerFlow",
+    visitGithub: "在 GitHub 上查看 Matrix-Law",
     reportIssue: "报告问题",
     contactUs: "联系我们",
-    about: "关于 DeerFlow",
+    about: "关于 Matrix-Law",
     logout: "退出登录",
     gatewayUnavailable: "网关暂时不可用。",
     gatewayUnavailableRetrying: "正在后台重试…",
@@ -601,6 +603,7 @@ export const zhCN: Translations = {
     branchCreated: "已创建分叉对话",
     branchFailed: "创建分叉对话失败。",
     streamReplayGap: "部分实时更新已过期，已从持久化状态恢复对话。",
+    runRecoveryRequired: "上一次运行因服务器中断而停止。请重新发送请求以继续。",
     outlineLabel: "对话章节",
     outlineAttachmentFallback: "图片或文件消息",
   },
@@ -666,22 +669,23 @@ export const zhCN: Translations = {
     saveAndConnect: "保存并连接",
     saveChanges: "保存修改",
     descriptions: {
-      buzz: "通过 DeerFlow 智能体接收 Buzz 频道消息和私聊。",
-      telegram: "通过 DeerFlow Bot 接收 Telegram 私聊消息。",
+      buzz: "通过 Matrix-Law 智能体接收 Buzz 频道消息和私聊。",
+      telegram: "通过 Matrix-Law Bot 接收 Telegram 私聊消息。",
       slack: "接收 Slack 工作区消息和提及。",
-      discord: "通过 DeerFlow Bot 接收 Discord 服务器消息。",
-      feishu: "通过 DeerFlow 应用接收飞书和 Lark 消息。",
-      dingtalk: "通过 DeerFlow Bot 接收钉钉 Stream Push 消息。",
-      wechat: "通过 DeerFlow Bot 接收微信 iLink 消息。",
-      wecom: "通过 DeerFlow AI Bot 接收企业微信消息。",
+      discord: "通过 Matrix-Law Bot 接收 Discord 服务器消息。",
+      feishu: "通过 Matrix-Law 应用接收飞书和 Lark 消息。",
+      dingtalk: "通过 Matrix-Law Bot 接收钉钉 Stream Push 消息。",
+      wechat: "通过 Matrix-Law Bot 接收微信 iLink 消息。",
+      wecom: "通过 Matrix-Law AI Bot 接收企业微信消息。",
     },
     connectedAs: (name: string) => `已连接为 ${name}。`,
   },
 
   // Page titles (document title)
   pages: {
-    appName: "DeerFlow",
+    appName: "Matrix-Law",
     chats: "对话",
+    lawMatters: "法律工作",
     newChat: "新对话",
     untitled: "未命名",
   },
@@ -705,7 +709,7 @@ export const zhCN: Translations = {
     writeFile: "写入文件",
     clickToViewContent: "点击查看文件内容",
     writeTodos: "更新 To-do 列表",
-    skillInstallTooltip: "安装技能并使其可在 DeerFlow 中使用",
+    skillInstallTooltip: "安装技能并使其可在 Matrix-Law 中使用",
     browserNavigate: (url: string) => `在浏览器中打开 ${url}`,
     browserNavigateGeneric: "在浏览器中打开页面",
     browserClick: "在浏览器中点击元素",
@@ -800,7 +804,7 @@ export const zhCN: Translations = {
     noResults: "未找到结果。",
     actions: "操作",
     keyboardShortcuts: "键盘快捷键",
-    keyboardShortcutsDescription: "使用键盘快捷键更快地操作 DeerFlow。",
+    keyboardShortcutsDescription: "使用键盘快捷键更快地操作 Matrix-Law。",
     openCommandPalette: "打开命令面板",
     toggleSidebar: "切换侧边栏",
   },
@@ -808,7 +812,7 @@ export const zhCN: Translations = {
   // Settings
   settings: {
     title: "设置",
-    description: "根据你的偏好调整 DeerFlow 的界面和行为。",
+    description: "根据你的偏好调整 Matrix-Law 的界面和通知。",
     sections: {
       account: "账号",
       appearance: "外观",
@@ -819,12 +823,13 @@ export const zhCN: Translations = {
       subagents: "子智能体",
       skills: "技能",
       notification: "通知",
+      ocr: "OCR",
       about: "关于",
     },
     memory: {
       title: "记忆",
       description:
-        "DeerFlow 会在后台不断从你的对话中自动学习。这些记忆能帮助 DeerFlow 更好地理解你，并提供更个性化的体验。",
+        "Matrix-Law 会在后台不断从你的对话中自动学习。这些记忆能帮助 Matrix-Law 更好地理解你，并提供更个性化的体验。",
       empty: "暂无可展示的记忆数据。",
       rawJson: "原始 JSON",
       exportButton: "导出记忆",
@@ -990,7 +995,7 @@ export const zhCN: Translations = {
     },
     channels: {
       title: "渠道",
-      description: "连接可在浏览器外向 DeerFlow 发送消息的即时通讯账号。",
+      description: "连接可在浏览器外向 Matrix-Law 发送消息的即时通讯账号。",
       disabled:
         "当前服务器未启用渠道连接。请联系管理员开启 channel_connections。",
     },
@@ -1041,7 +1046,7 @@ export const zhCN: Translations = {
         changeAppButton: "切换飞书 Bot",
         changeAppTitle: "切换到其他飞书 App",
         changeAppDescription:
-          "把你的 DeerFlow 账号指向另一个 Lark/飞书 App。只影响你自己的账号，不影响其他用户。",
+          "把你的 Matrix-Law 账号指向另一个 Lark/飞书 App。只影响你自己的账号，不影响其他用户。",
         changeAppIdLabel: "App ID",
         changeAppSecretLabel: "App Secret",
         changeAppAuthResetNote:
@@ -1053,9 +1058,9 @@ export const zhCN: Translations = {
         brandLark: "Lark",
         connectionStarted: "连接链接已打开",
         connectionReady: "连接准备已完成，正在打开授权链接",
-        authStarted: "授权页已打开，DeerFlow 会自动检测授权结果。",
+        authStarted: "授权页已打开，Matrix-Law 会自动检测授权结果。",
         authorizationStillPending:
-          "还没有检测到授权完成。请在浏览器完成授权；DeerFlow 会继续自动检测。如果页面没有更新，可点击“我已完成授权”。",
+          "还没有检测到授权完成。请在浏览器完成授权；Matrix-Law 会继续自动检测。如果页面没有更新，可点击“我已完成授权”。",
         permissionTitle: "授权范围",
         permissionDescription:
           "默认只完成基础登录，不会申请任何业务权限。按需在这里勾选要授权的业务域；已连接用户可以重新授权继续追加（scope 会累积）。",
@@ -1159,10 +1164,10 @@ export const zhCN: Translations = {
           "首次连接需要在浏览器里完成一次飞书确认。打开下面的链接按提示完成；完成后回到这里继续授权。",
         openAuthLinkTitle: "在浏览器中完成飞书授权",
         openAuthLinkDescription:
-          "打开下面的链接完成授权。DeerFlow 会持续自动检测，并在授权通过后保存连接状态。",
+          "打开下面的链接完成授权。Matrix-Law 会持续自动检测，并在授权通过后保存连接状态。",
         waitingAuthTitle: "等待飞书授权完成",
         waitingAuthDescription:
-          "请在刚打开的浏览器页面完成授权。DeerFlow 会自动更新这里的状态；下方按钮只是兜底操作。",
+          "请在刚打开的浏览器页面完成授权。Matrix-Law 会自动更新这里的状态；下方按钮只是兜底操作。",
         openAuthLink: "打开链接",
         copyAuthLink: "复制链接",
         completeAuth: "我已完成授权",
@@ -1187,7 +1192,7 @@ export const zhCN: Translations = {
           "本次连接流程已向飞书验证当前用户授权。需要刷新授权或追加权限时，可重新连接。",
         authNextTitle: "下一步完成浏览器授权",
         authNextDescription:
-          "点击“连接飞书”后，DeerFlow 会先检查当前状态；未连接或授权过期时会拉起浏览器授权。",
+          "点击“连接飞书”后，Matrix-Law 会先检查当前状态；未连接或授权过期时会拉起浏览器授权。",
       },
     },
     skills: {
@@ -1196,7 +1201,7 @@ export const zhCN: Translations = {
       createSkill: "新建技能",
       emptyTitle: "还没有技能",
       emptyDescription:
-        "将你的 Agent Skill 文件夹放在 DeerFlow 根目录下的 `/skills/custom` 文件夹中。",
+        "将你的 Agent Skill 文件夹放在 Matrix-Law 根目录下的 `/skills/custom` 文件夹中。",
       emptyButton: "创建你的第一个技能",
       adminRequired: "需要管理员权限才能管理 Agent Skill。",
       installAdminRequired: "需要管理员权限才能安装 Agent Skill。",
@@ -1209,12 +1214,12 @@ export const zhCN: Translations = {
     notification: {
       title: "通知",
       description:
-        "DeerFlow 只会在窗口不活跃时发送完成通知，特别适合长时间任务：你可以先去做别的事，完成后会收到提醒。",
+        "Matrix-Law 只会在窗口不活跃时发送完成通知，特别适合长时间任务：你可以先去做别的事，完成后会收到提醒。",
       requestPermission: "请求通知权限",
       deniedHint:
         "通知权限已被拒绝。可在浏览器的网站设置中重新开启，以接收完成提醒。",
       testButton: "发送测试通知",
-      testTitle: "DeerFlow",
+      testTitle: "Matrix-Law",
       testBody: "这是一条测试通知。",
       notSupported: "当前浏览器不支持通知功能。",
       disableNotification: "关闭通知",
@@ -1228,7 +1233,7 @@ export const zhCN: Translations = {
       changePasswordDescription: "更新你的账号密码。",
       ssoPasswordDescription: "密码由你的 SSO 提供商管理。",
       ssoPasswordMessage:
-        "此账号通过 {provider} 登录，DeerFlow 无法在此管理或修改密码。请前往你的 SSO 提供商账号设置中进行操作。",
+        "此账号通过 {provider} 登录，Matrix-Law 无法在此管理或修改密码。请前往你的 SSO 提供商账号设置中进行操作。",
       currentPassword: "当前密码",
       newPassword: "新密码",
       confirmNewPassword: "确认新密码",
@@ -1238,6 +1243,11 @@ export const zhCN: Translations = {
       networkError: "网络错误，请重试。",
       updating: "更新中...",
       updatePassword: "修改密码",
+      sessionSecurityTitle: "会话安全",
+      sessionSecurityDescription: "撤销所有设备上的登录会话；此设备也会立即退出。",
+      confirmRevokeAllSessions: "确定要撤销所有登录会话吗？此设备也会退出登录。",
+      revokeAllSessions: "退出所有设备",
+      revokingAllSessions: "正在撤销会话...",
       signOut: "退出登录",
     },
     acknowledge: {
@@ -1254,19 +1264,20 @@ export const zhCN: Translations = {
     passwordPlaceholder: "•••••••",
     rememberMe: "保持登录",
     rememberMeDescription:
-      "下次打开 DeerFlow 时尽量保持当前会话，仅保存邮箱，不保存密码。",
+      "下次打开 Matrix-Law 时尽量保持当前会话，仅保存邮箱，不保存密码。",
     pleaseWait: "请稍候...",
     signIn: "登录",
     createAccount: "创建账号",
     createAdminAccount: "创建管理员账号",
     adminSetupRequiredTitle: "需要先完成管理员初始化",
     adminSetupRequiredDescription:
-      "DeerFlow 需要先创建管理员账号，然后才能创建新的普通账号。",
+      "Matrix-Law 需要先创建管理员账号，然后才能创建新的普通账号。",
     orContinueWith: "或使用以下方式登录",
     ssoHint: "如果你的账号使用单点登录（SSO），请改用下方的选项登录。",
     continueWith: (provider: string) => `使用 ${provider} 登录`,
     noAccountSignUp: "还没有账号？立即注册",
     haveAccountSignIn: "已有账号？立即登录",
+    forgotPassword: "忘记密码？",
     backToHome: "← 返回首页",
     networkError: "网络错误，请重试。",
     serviceUnavailableTitle: "服务暂时不可用",
@@ -1274,6 +1285,22 @@ export const zhCN: Translations = {
       "网关响应时间过长。请确认服务正在运行，然后重试。",
     retry: "重试",
     authFailed: "身份验证失败。",
+    mfaSetupTitle: "保护管理员账号",
+    mfaSetupDescription:
+      "在身份验证器应用中使用下方密钥或 URI 添加此账号，然后输入当前的 6 位验证码。",
+    mfaVerifyTitle: "管理员身份验证",
+    mfaVerifyDescription:
+      "请输入当前的 6 位身份验证器验证码，或尚未使用的恢复码。",
+    mfaAuthenticatorSecret: "身份验证器密钥",
+    mfaRecoveryCodes: "一次性恢复码",
+    mfaRecoveryCodesDescription:
+      "每个恢复码只能使用一次。请妥善保存；设置完成后不会再次显示。",
+    mfaRecoveryCodesSaved: "我已将恢复码保存在安全的位置。",
+    mfaCodeLabel: "身份验证器验证码或恢复码",
+    mfaContinue: "验证并继续",
+    mfaRetrySetup: "重新生成设置内容",
+    mfaSaveRecoveryCodesFirst: "请先保存恢复码，再继续。",
+    mfaCodeInvalid: "验证码无效或已使用。",
     errors: {
       sso_failed: "SSO 登录失败，请重试或使用邮箱登录。",
       sso_cancelled: "SSO 登录已取消。",
@@ -1281,5 +1308,29 @@ export const zhCN: Translations = {
         "该邮箱对应的账号已存在。请使用密码登录或联系管理员。",
       sso_not_allowed: "你的账号不允许使用 SSO 登录。请联系管理员。",
     },
+  },
+  passwordReset: {
+    requestTitle: "找回密码",
+    requestDescription: "输入账户邮箱。如果账户可接收邮件，我们会发送一条短时效重置链接。",
+    email: "工作邮箱",
+    emailPlaceholder: "请输入账户邮箱",
+    sendLink: "发送重置链接",
+    requestSubmitted: "如果该账户可以接收密码重置邮件，链接很快会送达。",
+    featureUnavailable: "此部署尚未配置密码恢复邮件，请联系平台管理员恢复账户。",
+    requestFailed: "暂时无法提交请求，请稍后重试。",
+    resetTitle: "设置新密码",
+    resetDescription: "设置新密码后，其他已登录会话将失效。",
+    newPassword: "新密码",
+    confirmPassword: "确认新密码",
+    passwordHint: "至少 8 位，且不能使用常见弱密码。",
+    resetPassword: "更新密码",
+    resetComplete: "密码已更新。请使用新密码登录。",
+    invalidLink: "重置链接无效或已过期，请重新申请。",
+    passwordMismatch: "两次输入的密码不一致。",
+    passwordTooShort: "密码至少需要 8 位字符。",
+    passwordRejected: "请换一个不常见的密码后重试。",
+    networkError: "无法连接服务器，请检查网络后重试。",
+    backToLogin: "返回登录",
+    signIn: "前往登录",
   },
 };

@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 # Recycle pooled Postgres connections before stale idle sockets can hang
@@ -92,8 +93,9 @@ async def init_engine(
     command_timeout: float | None = POSTGRES_COMMAND_TIMEOUT_SECONDS,
     sqlite_dir: str = "",
     postgres_schema: str = "",
+    auto_migrate: bool = True,
 ) -> None:
-    """Create the async engine and session factory, then auto-create tables.
+    """Create the async engine/session factory and migrate or preflight its schema.
 
     Args:
         backend: "memory", "sqlite", or "postgres".
@@ -105,8 +107,12 @@ async def init_engine(
         sqlite_dir: Directory to create for SQLite (ensured to exist).
         postgres_schema: Target PostgreSQL schema. When set, the engine
             pins the connection ``search_path`` to it via asyncpg
-            ``server_settings`` and the schema is created (if missing)
-            before tables are auto-created. Ignored for non-postgres.
+            ``server_settings``. When *auto_migrate* is true the schema is
+            created (if missing) before tables are migrated. When false, the
+            existing Alembic head is checked without issuing DDL. Ignored for
+            non-postgres.
+        auto_migrate: Apply ORM migrations and create the configured schema.
+            Set false in managed deployments and run migrations explicitly.
     """
     global _engine, _session_factory
 
@@ -185,6 +191,11 @@ async def init_engine(
 
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
+    if not auto_migrate:
+        await _assert_schema_current(_engine)
+        logger.info("Persistence schema preflight passed: backend=%s", backend)
+        return
+
     # Schema bootstrap (hybrid):
     #   - empty DB        -> create_all + alembic stamp head
     #   - legacy DB       -> create_all (baseline tables only, backfill) + alembic stamp baseline + upgrade head
@@ -252,7 +263,27 @@ async def init_engine_from_config(config) -> None:
         command_timeout=config.command_timeout,
         sqlite_dir=config.sqlite_dir if config.backend == "sqlite" else "",
         postgres_schema=config.postgres_schema if config.backend == "postgres" else "",
+        auto_migrate=config.auto_migrate,
     )
+
+
+async def _assert_schema_current(engine: AsyncEngine) -> None:
+    """Read the Alembic head without creating schemas or applying DDL."""
+    from deerflow.persistence.bootstrap import _get_head_revision
+
+    expected = _get_head_revision()
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(text("SELECT version_num FROM alembic_version"))
+            applied = {str(row[0]) for row in result.fetchall()}
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            "Database migrations are missing or unreadable; run the explicit database migration command before starting the Gateway"
+        ) from exc
+    if applied != {expected}:
+        raise RuntimeError(
+            f"Database migration head mismatch (expected {expected}); run the explicit database migration command before starting the Gateway"
+        )
 
 
 def get_session_factory() -> async_sessionmaker[AsyncSession] | None:

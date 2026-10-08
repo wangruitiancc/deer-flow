@@ -1,6 +1,9 @@
 """Tests for StreamBridge implementations."""
 
 import asyncio
+import fnmatch
+import hashlib
+import json
 import os
 import re
 import uuid
@@ -32,6 +35,7 @@ class _FakeRedis:
         self.counters = defaultdict(int)
         self.deleted = []
         self.expirations = []
+        self.string_keys = set()
         self.closed = False
 
     async def xadd(self, name, fields, maxlen=None, approximate=True):
@@ -65,6 +69,11 @@ class _FakeRedis:
 
     async def xrange(self, name, min="-", max="+", count=None):
         entries = list(self.streams.get(name, []))
+        if min.startswith("("):
+            after_id = min[1:]
+            entries = [(event_id, fields) for event_id, fields in entries if _stream_id_gt(event_id, after_id)]
+        if max != "+":
+            entries = [(event_id, fields) for event_id, fields in entries if not _stream_id_gt(event_id, max)]
         return entries[:count] if count is not None else entries
 
     async def delete(self, name):
@@ -73,7 +82,27 @@ class _FakeRedis:
         return 1
 
     async def exists(self, name):
-        return 1 if name in self.streams else 0
+        return 1 if name in self.streams or name in self.string_keys else 0
+
+    async def type(self, name):
+        if name in self.streams:
+            return "stream"
+        if name in self.string_keys:
+            return "string"
+        return "none"
+
+    async def scan_iter(self, *, match="*", count=None):
+        for key in [*self.streams, *self.string_keys]:
+            if fnmatch.fnmatchcase(key, match):
+                yield key
+
+    async def scan(self, cursor=0, match=None, count=10):
+        keys = sorted([*self.streams, *self.string_keys])
+        batch = keys[cursor : cursor + count]
+        if match is not None:
+            batch = [key for key in batch if fnmatch.fnmatchcase(key, match)]
+        next_cursor = 0 if cursor + count >= len(keys) else cursor + count
+        return next_cursor, batch
 
     async def expire(self, name, seconds):
         self.expirations.append((name, seconds))
@@ -121,6 +150,16 @@ class _FakeRedisPipeline:
     async def __aexit__(self, exc_type, exc, tb):
         return None
 
+    async def watch(self, *names):
+        self.watched = tuple(names)
+
+    def multi(self):
+        return self
+
+    def delete(self, *names):
+        self.ops.append(("delete", names))
+        return self
+
     def xadd(self, name, fields, maxlen=None, approximate=True):
         self.ops.append(("xadd", name, fields, maxlen, approximate))
         return self
@@ -159,6 +198,9 @@ class _FakeRedisPipeline:
             elif op[0] == "xread":
                 _, streams, count, block = op
                 results.append(await self.redis.xread(streams, count=count, block=block))
+            elif op[0] == "delete":
+                _, names = op
+                results.append(sum([await self.redis.delete(name) for name in names]))
         return results
 
 
@@ -528,6 +570,35 @@ async def test_concurrent_slow_consumers_receive_gap():
 @pytest.fixture
 def redis_bridge() -> RedisStreamBridge:
     return RedisStreamBridge(redis_url="redis://fake", queue_maxsize=2, client=_FakeRedis())
+
+
+def _retained_digest(entries: list[dict]) -> str:
+    payload = (json.dumps(entries, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False, default=str) + "\n").encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+@pytest.mark.anyio
+async def test_redis_compare_and_delete_is_fingerprint_bound_and_atomic(redis_bridge: RedisStreamBridge):
+    run_ids = ["redis-exit-a", "redis-exit-b"]
+    for run_id in run_ids:
+        await redis_bridge.publish(run_id, "messages", {"text": run_id})
+        await redis_bridge.publish_end(run_id)
+    fingerprints = {run_id: _retained_digest(await redis_bridge.export_retained(run_id, max_entries=10, max_bytes=4096)) for run_id in run_ids}
+
+    changed = dict(fingerprints, **{"redis-exit-b": "0" * 64})
+    with pytest.raises(ValueError, match="fingerprint changed"):
+        await redis_bridge.delete_retained_many_if_unchanged(changed, max_entries=10, max_bytes=4096)
+    assert await redis_bridge.stream_exists(run_ids[0])
+    assert await redis_bridge.stream_exists(run_ids[1])
+
+    deleted_entries = await redis_bridge.delete_retained_many_if_unchanged(
+        fingerprints,
+        max_entries=10,
+        max_bytes=4096,
+    )
+    assert deleted_entries == 4
+    assert not await redis_bridge.stream_exists(run_ids[0])
+    assert not await redis_bridge.stream_exists(run_ids[1])
 
 
 @pytest.mark.anyio
@@ -1330,6 +1401,49 @@ async def test_redis_integration_publish_subscribe_and_id_format(real_redis_brid
 @pytest.mark.integration
 @requires_redis
 @pytest.mark.anyio
+async def test_redis_compare_and_delete_is_atomic_under_concurrent_publish(real_redis_bridge, monkeypatch):
+    run_ids = ["exit-cas-a", "exit-cas-b"]
+    for run_id in run_ids:
+        await real_redis_bridge.publish(run_id, "messages", {"text": run_id})
+        await real_redis_bridge.publish_end(run_id)
+    fingerprints = {run_id: _retained_digest(await real_redis_bridge.export_retained(run_id, max_entries=20, max_bytes=8192)) for run_id in run_ids}
+
+    original_export = real_redis_bridge.export_retained
+    raced = False
+
+    async def export_then_publish(run_id, *, max_entries, max_bytes):
+        nonlocal raced
+        entries = await original_export(run_id, max_entries=max_entries, max_bytes=max_bytes)
+        if run_id == run_ids[-1] and not raced:
+            raced = True
+            await real_redis_bridge.publish(run_id, "messages", {"text": "concurrent"})
+        return entries
+
+    monkeypatch.setattr(real_redis_bridge, "export_retained", export_then_publish)
+    with pytest.raises(ValueError, match="fingerprint changed"):
+        await real_redis_bridge.delete_retained_many_if_unchanged(
+            fingerprints,
+            max_entries=20,
+            max_bytes=8192,
+        )
+    assert await real_redis_bridge.stream_exists(run_ids[0])
+    assert await real_redis_bridge.stream_exists(run_ids[1])
+
+    monkeypatch.setattr(real_redis_bridge, "export_retained", original_export)
+    refreshed = {run_id: _retained_digest(await original_export(run_id, max_entries=20, max_bytes=8192)) for run_id in run_ids}
+    deleted = await real_redis_bridge.delete_retained_many_if_unchanged(
+        refreshed,
+        max_entries=20,
+        max_bytes=8192,
+    )
+    assert deleted == 4
+    assert not await real_redis_bridge.stream_exists(run_ids[0])
+    assert not await real_redis_bridge.stream_exists(run_ids[1])
+
+
+@pytest.mark.integration
+@requires_redis
+@pytest.mark.anyio
 async def test_redis_integration_replays_after_last_event_id(real_redis_bridge):
     run_id = "integ-replay"
     await real_redis_bridge.publish(run_id, "metadata", {"run_id": run_id})
@@ -1350,6 +1464,86 @@ async def test_redis_integration_replays_after_last_event_id(real_redis_bridge):
 
     assert [e.event for e in received[:-1]] == ["values"]
     assert received[-1] is END_SENTINEL
+
+
+@pytest.mark.anyio
+async def test_redis_export_retained_is_per_run_bounded_and_preserves_end_marker():
+    redis = _FakeRedis()
+    bridge = RedisStreamBridge(redis_url="redis://unused", client=redis)
+    await bridge.publish("authorized-run", "updates", {"step": "synthetic"})
+    await bridge.publish_end("authorized-run")
+    await bridge.publish("unrelated-run", "updates", {"scope": "must-not-be-read"})
+
+    entries = await bridge.export_retained("authorized-run", max_entries=2, max_bytes=1024)
+    assert entries == [
+        {"id": "1-0", "event": "updates", "data": {"step": "synthetic"}},
+        {"id": "2-0", "kind": "end"},
+    ]
+    assert await bridge.export_retained("missing-run", max_entries=0, max_bytes=0) == []
+    with pytest.raises(ValueError, match="entry limit"):
+        await bridge.export_retained("authorized-run", max_entries=1, max_bytes=1024)
+    with pytest.raises(ValueError, match="byte limit"):
+        await bridge.export_retained("authorized-run", max_entries=2, max_bytes=1)
+
+
+@pytest.mark.anyio
+async def test_redis_export_retained_fails_closed_on_unreviewed_fields():
+    redis = _FakeRedis()
+    bridge = RedisStreamBridge(redis_url="redis://unused", client=redis)
+    await redis.xadd(
+        bridge._stream_key("authorized-run"),
+        {"kind": "event", "event": "updates", "data": "{}", "authorization": "synthetic"},
+    )
+    with pytest.raises(ValueError, match="unreviewed shape"):
+        await bridge.export_retained("authorized-run", max_entries=1, max_bytes=1024)
+
+
+@pytest.mark.anyio
+async def test_redis_export_unmapped_retained_includes_only_unknown_streams_and_purge_fingerprints():
+    redis = _FakeRedis()
+    bridge = RedisStreamBridge(redis_url="redis://unused", client=redis)
+    await bridge.publish("registered-run", "updates", {"step": "registered"})
+    await bridge.publish("orphan-run", "updates", {"step": "orphan"})
+
+    records = await bridge.export_unmapped_retained({"registered-run"}, max_entries=10, max_streams=10, max_bytes=4096)
+
+    assert len(records) == 1
+    record = records[0]
+    assert record["run_id"] == "orphan-run"
+    assert record["entry_count"] == 1
+    assert record["entries"][0]["data"] == {"step": "orphan"}
+    assert record["purge_plan"]["key_sha256"] == hashlib.sha256(b"deerflow:stream_bridge:orphan-run").hexdigest()
+    assert record["purge_plan"]["expected_entry_count"] == 1
+    assert record["purge_plan"]["status"] == "planned_not_executed"
+
+
+@pytest.mark.anyio
+async def test_redis_export_unmapped_retained_rejects_unknown_key_types_and_enforces_bounds():
+    redis = _FakeRedis()
+    bridge = RedisStreamBridge(redis_url="redis://unused", client=redis)
+    await bridge.publish("orphan-run", "updates", {"step": "orphan"})
+    with pytest.raises(ValueError, match="entry limit"):
+        await bridge.export_unmapped_retained(set(), max_entries=0, max_streams=10, max_bytes=4096)
+
+    redis.string_keys.add("deerflow:stream_bridge:unexpected-string")
+    with pytest.raises(ValueError, match="unreviewed key type"):
+        await bridge.export_unmapped_retained(set(), max_entries=10, max_streams=10, max_bytes=4096)
+
+
+@pytest.mark.anyio
+async def test_redis_export_unmapped_retained_bounds_full_keyspace_scan_work():
+    redis = _FakeRedis()
+    bridge = RedisStreamBridge(redis_url="redis://unused", client=redis)
+    redis.streams.update({f"deerflow:stream_bridge:orphan-{index}": [] for index in range(501)})
+
+    with pytest.raises(ValueError, match="scan work limit"):
+        await bridge.export_unmapped_retained(
+            set(),
+            max_entries=0,
+            max_streams=501,
+            max_bytes=1024,
+            max_scan_batches=1,
+        )
 
 
 @pytest.mark.integration

@@ -1,3 +1,4 @@
+import ipaddress
 import json
 import logging
 from types import SimpleNamespace
@@ -326,6 +327,11 @@ def test_validate_browser_url_rejects_private_and_non_http(monkeypatch):
 
     # Isolate from any local config.yaml that may set allow_private_addresses.
     monkeypatch.setattr(browser_tools, "_get_tool_config", lambda _tool_name: {})
+    monkeypatch.setattr(
+        browser_tools,
+        "_resolve_host_addresses",
+        lambda _host: [ipaddress.ip_address("93.184.216.34")],
+    )
 
     assert validate_browser_url("http://169.254.169.254/latest/meta-data/") is not None
     assert validate_browser_url("http://127.0.0.1:8001/") is not None

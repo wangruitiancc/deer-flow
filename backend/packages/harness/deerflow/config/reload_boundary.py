@@ -86,6 +86,9 @@ STARTUP_ONLY_FIELDS: dict[str, str] = {
         "RunOwnershipConfig is captured once into RunManager at langgraph_runtime() startup; the lease heartbeat background task is created and "
         "started there, and heartbeat_enabled / lease_seconds / grace_seconds are not re-read on config.yaml edits."
     ),
+    "run_capacity": (
+        "RunCapacityConfig is captured once into RunManager at Gateway startup; changing active-run limits or the retry hint requires restarting every Gateway Pod."
+    ),
     "dedupe_storage": (
         "make_inbound_dedupe_store() resolves the inbound dedupe store once when ChannelService is constructed at startup; the store "
         "(in-process memory or shared Postgres) is captured onto ChannelManager and is not rebuilt on config.yaml edits."

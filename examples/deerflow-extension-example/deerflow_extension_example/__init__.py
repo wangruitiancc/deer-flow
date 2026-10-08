@@ -11,6 +11,7 @@ from deerflow_extension_example.plugin import (
     ExampleMiddlewareContributor,
     ExampleService,
     ExampleSystemObserver,
+    ExampleTaskAdmission,
     ExampleTaskLifecycle,
     build_router,
 )
@@ -18,7 +19,7 @@ from deerflow_extension_example.plugin import (
 __all__ = ["install"]
 
 
-@extension(api="0.2.0", name="example")
+@extension(api="0.2.1", name="example")
 def install(registry: ExtensionRegistry, config: Mapping[str, Any]) -> None:
     """Register one example of each supported contribution kind."""
     if config.get("enabled", True) is False:
@@ -26,6 +27,7 @@ def install(registry: ExtensionRegistry, config: Mapping[str, Any]) -> None:
 
     service = ExampleService()
     registry.middlewares(ExampleMiddlewareContributor())
+    registry.task_admission(ExampleTaskAdmission())
     registry.task_lifecycle(ExampleTaskLifecycle())
     registry.system_model_observer(ExampleSystemObserver())
     registry.service(service)

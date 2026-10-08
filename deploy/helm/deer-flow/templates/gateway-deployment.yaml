@@ -83,10 +83,14 @@ spec:
           workingDir: /app
           command: ["sh", "-c"]
           args:
-            - cd backend && PYTHONPATH=. uv run --no-sync uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --workers 1
+            - cd backend && exec env PYTHONPATH=. uv run --no-sync uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --workers 1
           env:
             - name: CI
               value: "true"
+            - name: DEER_FLOW_METRICS_ENABLED
+              value: {{ .Values.gateway.metrics.enabled | quote }}
+            - name: MATRIX_LAW_PRODUCT_REQUIRED
+              value: "1"
             # Running as non-root uid 1000: suppress .pyc writes under the
             # root-owned /app (avoids PermissionError noise; harmless fallback).
             - name: PYTHONDONTWRITEBYTECODE
@@ -113,6 +117,8 @@ spec:
               value: 0.0.0.0
             - name: GATEWAY_PORT
               value: "8001"
+            - name: DEER_FLOW_GATEWAY_DRAIN_MARKER
+              value: /tmp/deer-flow-gateway-draining
             - name: DEER_FLOW_INTERNAL_AUTH_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -155,25 +161,29 @@ spec:
               name: http
           readinessProbe:
             httpGet:
-              path: /health
+              path: /ready
               port: http
             initialDelaySeconds: 5
-            periodSeconds: 10
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 1
+            successThreshold: 1
           livenessProbe:
             httpGet:
               path: /health
               port: http
             initialDelaySeconds: 30
             periodSeconds: 20
-          {{- /* preStop sleep so the Service/ingress deregisters the pod and
-                  in-flight requests drain before SIGTERM begins graceful shutdown
-                  (which runs the memory queue drain). 0 / unset disables it.
+          {{- /* preStop first marks the process unready, then sleeps so the
+                  Service/ingress observes endpoint removal before SIGTERM begins
+                  graceful shutdown (which runs the memory queue drain).
+                  0 / unset disables it.
                   Counts against terminationGracePeriodSeconds. */ -}}
           {{- if and .Values.gateway.preStopSleepSeconds (gt (.Values.gateway.preStopSleepSeconds | int) 0) }}
           lifecycle:
             preStop:
               exec:
-                command: ["sleep", "{{ .Values.gateway.preStopSleepSeconds | int }}"]
+                command: ["sh", "-c", 'touch "$DEER_FLOW_GATEWAY_DRAIN_MARKER" && sleep {{ .Values.gateway.preStopSleepSeconds | int }}']
           {{- end }}
           {{- with .Values.gateway.resources }}
           resources:

@@ -1,0 +1,33 @@
+{
+  "name": "@matrix-law/ocr-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22 <27"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc --noEmit",
+    "models:download": "node scripts/download-models.mjs",
+    "models:verify": "tsx src/model-registry.ts",
+    "smoke:model": "tsx scripts/real-model-smoke.ts",
+    "smoke:structure": "tsx scripts/real-structure-smoke.ts",
+    "quality:synthetic": "tsx scripts/synthetic-quality-gate.ts",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "test": "tsx --test test/**/*.test.ts"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^0.1.65",
+    "onnxruntime-node": "1.29.0",
+    "pdfjs-dist": "^4.10.38",
+    "sharp": "^0.35.4"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.0",
+    "pdf-lib": "^1.17.1",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}

@@ -19,14 +19,16 @@ dev:
 gateway:
 	PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run --locked uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001
 
+TEST_PYTHONPATH ?= .
+
 test:
-	PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run pytest -m "not live" --ignore=tests/blocking_io tests/ -v
+	PYTHONPATH="$(TEST_PYTHONPATH)" PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run --locked pytest -m "not live" --ignore=tests/blocking_io tests/ -v
 
 test-live:
-	DEER_FLOW_RUN_LIVE_TESTS=1 PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run pytest -m live tests/ -v -s
+	DEER_FLOW_RUN_LIVE_TESTS=1 PYTHONPATH="$(TEST_PYTHONPATH)" PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run --locked pytest -m live tests/ -v -s
 
 test-blocking-io:
-	PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run pytest tests/blocking_io -q --tb=short
+	PYTHONPATH="$(TEST_PYTHONPATH)" PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run --locked pytest tests/blocking_io -q --tb=short
 
 # Run the backend unit-test suite as one shard of a parallel CI split.
 #   SPLITS = total number of shards; GROUP = 1-based shard index.
@@ -42,13 +44,13 @@ DURATIONS_FILE ?= .test_durations
 test-shard:
 	@test -f "$(DURATIONS_FILE)" || \
 		(echo "error: $(DURATIONS_FILE) is missing; run 'make test-shard-durations' to regenerate the duration baseline" >&2; exit 1)
-	PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run pytest -m "not live" --ignore=tests/blocking_io --splits $(SPLITS) --group $(GROUP) --splitting-algorithm least_duration --durations-path=$(DURATIONS_FILE) tests/ -q
+	PYTHONPATH="$(TEST_PYTHONPATH)" PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run --locked pytest -m "not live" --ignore=tests/blocking_io --splits $(SPLITS) --group $(GROUP) --splitting-algorithm least_duration --durations-path=$(DURATIONS_FILE) tests/ -q
 
 # Regenerate .test_durations from the full offline (non-live, non-blocking-I/O)
 # suite so duration-aware sharding reflects real wall-clock cost. Run locally or
 # in a periodic job, then commit the refreshed file.
 test-shard-durations:
-	PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run pytest -m "not live" --ignore=tests/blocking_io --store-durations --clean-durations --durations-path=$(DURATIONS_FILE) tests/ -q
+	PYTHONPATH="$(TEST_PYTHONPATH)" PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run --locked pytest -m "not live" --ignore=tests/blocking_io --store-durations --clean-durations --durations-path=$(DURATIONS_FILE) tests/ -q
 
 lint:
 	uv run ruff check .

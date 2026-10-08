@@ -1,13 +1,13 @@
 ---
 title: Configuration
-description: DeerFlow App is configured through two files and a set of environment variables. This page covers the application-level configuration that most operators need to set up before deploying.
+description: Matrix-Law App is configured through two files and a set of environment variables. This page covers application-level settings. Docker/Compose references describe the local simulation or an optional Agent sandbox; cloud application services run as native systemd processes on two Linux hosts.
 ---
 
 import { Callout, Tabs } from "nextra/components";
 
 # Configuration
 
-DeerFlow App is configured through two files and a set of environment variables. This page covers the application-level configuration that most operators need to set up before deploying.
+Matrix-Law App is configured through two files and a set of environment variables. This page covers application-level settings. Docker/Compose references describe the local simulation or an optional Agent sandbox; cloud application services run as native systemd processes on two Linux hosts.
 
 ## Configuration files
 
@@ -126,7 +126,7 @@ models:
 
 Choose the execution environment for agent file and command operations:
 
-<Tabs items={["Local (default)", "Docker container", "K8s Provisioner"]}>
+<Tabs items={["Local (default)", "Optional container sandbox", "K8s Provisioner"]}>
   <Tabs.Tab>
 ```yaml
 sandbox:
@@ -184,9 +184,9 @@ tools:
 
 ### Database backend
 
-DeerFlow uses the `database` section for both LangGraph checkpoint data and application data such as runs, feedback, and thread metadata.
+Matrix-Law uses the `database` section for both LangGraph checkpoint data and application data such as runs, feedback, and thread metadata.
 
-By default, DeerFlow uses SQLite for local, single-node persistence:
+By default, Matrix-Law uses SQLite for local, single-node persistence:
 
 ```yaml
 database:
@@ -215,7 +215,7 @@ Install PostgreSQL support for local runs:
 cd backend && uv sync --all-packages --extra postgres
 ```
 
-For Docker or scripted starts, set `UV_EXTRAS=postgres` before installing or building. The legacy standalone `checkpointer` section is still accepted for compatibility, but prefer `database` for new deployments.
+For the local Compose candidate or scripted builds, set `UV_EXTRAS=postgres` before installing or building. The legacy standalone `checkpointer` section is still accepted for compatibility, but prefer `database` for new deployments.
 
 ### Memory
 
@@ -238,12 +238,12 @@ memory:
 ```
 
 The optional `openviking` backend connects to an independent OpenViking server
-through `langchain-openviking` and currently supports one DeerFlow user in
+through `langchain-openviking` and currently supports one Matrix-Law user in
 `mode: middleware`. Its private configuration uses `base_url`,
 `owner_user_id`, `api_key_env`, `failure_policy`, and `retrieval` with an
 ordinary OpenViking USER API key instead of the DeerMem fields shown above. See
 `docs/OPENVIKING.md` in the repository for the complete configuration and
-Docker startup sequence.
+local integration-test startup sequence; it does not define Matrix-Law cloud deployment.
 
 ## Frontend environment variables
 

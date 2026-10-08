@@ -1,0 +1,48 @@
+---
+title: Why Matrix-Law
+description: A lawyer-centered workspace for controlled legal matter work.
+---
+
+# Why Matrix-Law
+
+Legal work depends on the matter, the people authorized to handle it, and the
+materials that support each conclusion. Matrix-Law brings those parts into one
+web workspace for lawyers and law firms.
+
+## Work in a matter-specific space
+
+Each conversation is connected to a legal matter on the server. Tenant,
+membership, and matter permissions are checked before a run starts, so a page
+selection or browser-supplied identifier cannot grant access by itself.
+
+The workspace supports ongoing cases and focused work such as a consultation,
+contract review, legal research, or a draft. Lawyers can organize source
+materials, inspect cited passages, and review generated work in the context of
+the matter.
+
+## Keep authority and data boundaries clear
+
+The platform manages model, MCP, and Skill access. A firm can narrow the
+permissions granted to its members, while members cannot attach private model
+keys or replace platform-managed endpoints.
+
+Legal materials, OCR text, citations, and human review remain in the firm's data
+domain. Where an external service is not configured or authorized, the system
+fails closed instead of silently routing materials elsewhere.
+
+## Keep a lawyer in control
+
+Matrix-Law helps organize research, evidence, and drafting work. Generated
+content remains a draft for review by an authorized legal professional. It is
+not represented as a final legal opinion, and a successful technical run does
+not by itself establish legal accuracy.
+
+The current local two-server setup is a candidate environment. Production
+deployment, real-provider operations, and real-material quality require their
+own acceptance evidence.
+
+<Cards num={2}>
+  <Cards.Card title="Workspace Usage" href="/docs/application/workspace-usage" />
+  <Cards.Card title="Legal Matter Workflow" href="/docs/application/agents-and-threads" />
+</Cards>
+

@@ -13,7 +13,7 @@ def test_boxlite_is_optional_harness_dependency() -> None:
     optional_dependencies = pyproject["project"]["optional-dependencies"]
 
     assert not any(dep.startswith("boxlite") for dep in core_dependencies)
-    assert any(dep.startswith("boxlite>=0.9.7") for dep in optional_dependencies["boxlite"])
+    assert "boxlite>=0.10.5,<0.11.0" in optional_dependencies["boxlite"]
 
 
 def test_opensandbox_is_optional_harness_dependency() -> None:

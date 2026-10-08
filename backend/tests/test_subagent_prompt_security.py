@@ -30,8 +30,8 @@ def test_build_subagent_section_hides_bash_examples_when_unavailable(monkeypatch
     # When bash is not available, it should not appear at all (aligned with Codex:
     # unavailable roles are omitted, not listed as disabled)
     assert "**bash**" not in section
-    assert 'bash("npm test")' not in section
-    assert 'read_file("/mnt/user-data/workspace/README.md")' in section
+    assert 'bash("ls evidence")' not in section
+    assert 'read_file("/mnt/user-data/workspace/contract.md")' in section
     assert "available tools (ls, read_file, web_search, etc.)" in section
 
 
@@ -40,8 +40,8 @@ def test_build_subagent_section_includes_bash_when_available(monkeypatch) -> Non
 
     section = prompt_module._build_subagent_section(3)
 
-    assert "Routine git, build, test, or deploy operations are not sufficient reason to delegate" in section
-    assert 'bash("npm test")' in section
+    assert "Routine commands are not sufficient reason to delegate" in section
+    assert 'bash("ls evidence")' in section
     assert "available tools (bash, ls, read_file, web_search, etc.)" in section
 
 

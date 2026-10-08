@@ -5,16 +5,19 @@ the first HumanMessage exactly once per session (frozen-snapshot pattern).
 """
 
 import hashlib
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from deerflow_extension_api import EXTENSION_TASK_STORE_KEY, ExtensionData, MatterScopeBinding
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, SystemMessage
 
 from deerflow.agents.middlewares.dynamic_context_middleware import (
     _DYNAMIC_CONTEXT_REMINDER_KEY,
     DynamicContextMiddleware,
 )
 from deerflow.runtime.context_keys import CURRENT_RUN_PRE_EXISTING_MESSAGE_IDS_KEY
+from deerflow.skills.types import Skill, SkillCategory
 
 _SYSTEM_REMINDER_TAG = "<system-reminder>"
 
@@ -23,12 +26,16 @@ def _make_middleware(**kwargs) -> DynamicContextMiddleware:
     return DynamicContextMiddleware(**kwargs)
 
 
-def _fake_runtime(journal=None, *, pre_existing_message_ids=(), user_id: str | None = None):
+def _fake_runtime(journal=None, *, pre_existing_message_ids=(), user_id: str | None = None, matter_scoped: bool = False):
     context = {"__run_journal": journal} if journal is not None else {}
     if pre_existing_message_ids:
         context[CURRENT_RUN_PRE_EXISTING_MESSAGE_IDS_KEY] = frozenset(pre_existing_message_ids)
     if user_id is not None:
         context["user_id"] = user_id
+    if matter_scoped:
+        task_store = ExtensionData("legal-task")
+        task_store.set(MatterScopeBinding(tenant_id="tenant-1", matter_id="matter-1", thread_id="thread-1"))
+        context[EXTENSION_TASK_STORE_KEY] = task_store
     return SimpleNamespace(context=context)
 
 
@@ -90,6 +97,69 @@ def test_injects_system_reminder_into_first_human_message():
     assert user_msg.content == "Hello"
 
 
+def test_injects_legal_workflow_context_as_native_dynamic_context():
+    skill = Skill(
+        name="commercial-contracts",
+        description="用于 NDA、SaaS、供应商及一般商业协议审查和谈判交接草案；不签署或发送合同。",
+        license=None,
+        skill_dir=Path("/tmp/commercial-contracts"),
+        skill_file=Path("/tmp/commercial-contracts/SKILL.md"),
+        relative_path=Path("commercial-contracts"),
+        category=SkillCategory.PUBLIC,
+        enabled=True,
+    )
+    mw = _make_middleware(
+        available_skills={"commercial-contracts"},
+        enabled_skills=[skill],
+    )
+    state = {"messages": [HumanMessage(content="帮我审一下这个合同的违约责任", id="msg-1")]}
+
+    with (
+        mock.patch("deerflow.agents.lead_agent.prompt._get_memory_context", return_value=""),
+        mock.patch("deerflow.agents.middlewares.dynamic_context_middleware.datetime") as mock_dt,
+    ):
+        mock_dt.now.return_value.strftime.return_value = "2026-05-08, Friday"
+        result = mw.before_agent(state, _fake_runtime())
+
+    assert result is not None
+    updated_msgs = result["messages"]
+    assert len(updated_msgs) == 3
+
+    legal_context = updated_msgs[2]
+    assert isinstance(legal_context, SystemMessage)
+    assert legal_context.name == "legal_workflow_context"
+    assert legal_context.additional_kwargs["hide_from_ui"] is True
+    assert legal_context.additional_kwargs["legal_workflow"]["matter_type"] == "contract_review"
+    assert legal_context.additional_kwargs["legal_workflow"]["recommended_skills"] == ["commercial-contracts"]
+    assert "事项类型：合同审查" in str(legal_context.content)
+    assert "NDA、SaaS、供应商" in str(legal_context.content)
+    assert "china-law-analysis" not in str(legal_context.content)
+
+
+def test_injects_legal_workflow_context_on_later_same_day_turn():
+    mw = _make_middleware(available_skills={"general-legal-method"})
+    state = {
+        "messages": [
+            _date_reminder_msg("2026-05-08, Friday", "msg-1"),
+            HumanMessage(content="Hello", id="msg-1__user"),
+            AIMessage(content="Hi there"),
+            HumanMessage(content="帮我审一下这个合同", id="msg-2"),
+        ]
+    }
+
+    with mock.patch("deerflow.agents.middlewares.dynamic_context_middleware.datetime") as mock_dt:
+        mock_dt.now.return_value.strftime.return_value = "2026-05-08, Friday"
+        result = mw.before_agent(state, _fake_runtime())
+
+    assert result is not None
+    assert len(result["messages"]) == 1
+    legal_context = result["messages"][0]
+    assert isinstance(legal_context, SystemMessage)
+    assert legal_context.name == "legal_workflow_context"
+    assert "general-legal-method" in str(legal_context.content)
+    assert "commercial-contracts" not in str(legal_context.content)
+
+
 def test_memory_included_when_present():
     mw = _make_middleware()
     state = {"messages": [HumanMessage(content="Hi", id="msg-1")]}
@@ -137,6 +207,43 @@ def test_memory_lookup_uses_runtime_user_id():
         app_config=None,
         user_id="runtime-user",
     )
+
+
+def test_matter_scoped_task_skips_user_memory_lookup():
+    mw = _make_middleware()
+    state = {"messages": [HumanMessage(content="Review this evidence", id="msg-1")]}
+
+    with (
+        mock.patch("deerflow.agents.lead_agent.prompt._get_memory_context", return_value="<memory>private user note</memory>") as get_memory,
+        mock.patch("deerflow.agents.middlewares.dynamic_context_middleware.datetime") as mock_dt,
+    ):
+        mock_dt.now.return_value.strftime.return_value = "2026-10-04, Sunday"
+        result = mw.before_agent(state, _fake_runtime(matter_scoped=True))
+
+    assert result is not None
+    assert get_memory.call_count == 0
+    assert all(not (isinstance(message, HumanMessage) and "private user note" in message.content) for message in result["messages"])
+
+
+def test_matter_scoped_task_removes_checkpointed_user_memory():
+    mw = _make_middleware()
+    state = {
+        "messages": [
+            _date_reminder_msg("2026-10-04, Sunday", "msg-1"),
+            HumanMessage(
+                content="<memory>private user note</memory>",
+                id="msg-1__memory",
+                additional_kwargs={"hide_from_ui": True, _DYNAMIC_CONTEXT_REMINDER_KEY: True},
+            ),
+            HumanMessage(content="Review this evidence", id="msg-2"),
+        ]
+    }
+
+    with mock.patch("deerflow.agents.middlewares.dynamic_context_middleware.datetime") as mock_dt:
+        mock_dt.now.return_value.strftime.return_value = "2026-10-04, Sunday"
+        result = mw.before_agent(state, _fake_runtime(matter_scoped=True))
+
+    assert result == {"messages": [RemoveMessage(id="msg-1__memory")]}
 
 
 def test_first_run_records_exact_effective_memory():

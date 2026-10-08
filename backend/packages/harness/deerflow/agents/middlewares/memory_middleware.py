@@ -11,6 +11,7 @@ from langgraph.runtime import Runtime
 
 from deerflow.agents.memory import get_memory_manager
 from deerflow.config.memory_config import get_memory_config
+from deerflow.runtime.task_scope import matter_scope_from_runtime
 from deerflow.runtime.user_context import resolve_runtime_user_id
 from deerflow.trace_context import DEERFLOW_TRACE_METADATA_KEY, resolve_trace_id
 
@@ -18,6 +19,26 @@ if TYPE_CHECKING:
     from deerflow.config.memory_config import MemoryConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _has_controlled_model_runtime(runtime: Runtime) -> bool:
+    """Whether a trusted admission installed a task-only model authority.
+
+    The legacy memory manager debounces extraction onto a timer thread. It
+    cannot safely carry a tenant signing authority across that detached
+    lifetime, so controlled tasks fail closed by skipping that legacy model
+    call rather than silently using the host provider credentials.
+    """
+
+    try:
+        from deerflow_extension_api import ControlledModelRuntimeBinding, task_store_from_runtime
+
+        task_store = task_store_from_runtime(runtime)
+        return task_store is not None and (task_store.get(ControlledModelRuntimeBinding) is not None or matter_scope_from_runtime(runtime) is not None)
+    except Exception:
+        # A contract import failure is not a reason to weaken the normal
+        # memory path. The controlled extension admission itself is fail closed.
+        return False
 
 
 class MemoryMiddlewareState(AgentState):
@@ -54,6 +75,13 @@ class MemoryMiddleware(AgentMiddleware[MemoryMiddlewareState]):
         """Resolve one write request without invoking the manager."""
         config = self._memory_config or get_memory_config()
         if not config.enabled:
+            return None
+
+        if _has_controlled_model_runtime(runtime):
+            # This is intentionally a post-agent safety boundary, not an
+            # observer or an admission precheck. CP-02 does not permit the
+            # timer-backed global memory model to bypass the Gateway.
+            logger.info("Skipping legacy deferred memory extraction for controlled or matter-scoped task")
             return None
 
         # Get thread ID from runtime context first, then fall back to LangGraph's configurable metadata

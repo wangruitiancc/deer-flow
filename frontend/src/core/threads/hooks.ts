@@ -1854,6 +1854,20 @@ export function useThreadStream({
         return;
       }
 
+      if (eventType === "run_recovery_required") {
+        setOptimisticMessages([]);
+        setOptimisticThreadId(null);
+        setLiveMessagesThreadId(null);
+        pendingPreparedReplayRef.current = null;
+        setPendingSupersededRunIds(new Set());
+        setPendingSupersededMessageIds(new Set());
+        tasksRef.current = {};
+        setTasks({});
+        invalidateStoppedThreadCaches(queryClient, threadIdRef.current, isMock);
+        toast.warning(t.conversation.runRecoveryRequired);
+        return;
+      }
+
       const taskUpdate = taskEventToSubtaskUpdate(event);
       if (taskUpdate) {
         updateSubtask(taskUpdate);

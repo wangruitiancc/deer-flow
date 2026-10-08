@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+from deerflow_extension_api import EXTENSION_TASK_STORE_KEY, ExtensionData, MatterScopeBinding
 from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage
@@ -209,3 +210,41 @@ async def test_abefore_agent_records_checkpointed_memory_on_timeout() -> None:
         content_sha256=hashlib.sha256(memory_content.encode("utf-8")).hexdigest(),
     )
     journal.record_memory_context.assert_called_once()
+
+
+async def test_matter_task_fails_closed_if_stale_user_memory_cannot_be_removed() -> None:
+    mw = DynamicContextMiddleware()
+    started = threading.Event()
+    release = threading.Event()
+    task_store = ExtensionData("legal-task")
+    task_store.set(MatterScopeBinding(tenant_id="tenant-1", matter_id="matter-1", thread_id="thread-1"))
+    runtime = SimpleNamespace(context={EXTENSION_TASK_STORE_KEY: task_store})
+    state = {
+        "messages": [
+            HumanMessage(
+                content="<memory>private user memory</memory>",
+                id="msg-1__memory",
+                additional_kwargs={"hide_from_ui": True, _DYNAMIC_CONTEXT_REMINDER_KEY: True},
+            )
+        ]
+    }
+
+    def blocking_inject(_state, _runtime=None):
+        started.set()
+        release.wait(timeout=2)
+        return None
+
+    try:
+        with (
+            mock.patch.object(mw, "_inject", blocking_inject),
+            mock.patch(
+                "deerflow.agents.middlewares.dynamic_context_middleware._INJECT_TIMEOUT_SECONDS",
+                0.01,
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="Could not remove legacy user memory"):
+                await mw.abefore_agent(state, runtime)
+    finally:
+        release.set()
+
+    assert started.is_set()

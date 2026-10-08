@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Code2Icon,
+  BookOpenTextIcon,
   CopyIcon,
   DownloadIcon,
   EyeIcon,
@@ -13,7 +14,15 @@ import {
   SquareArrowOutUpRightIcon,
   XIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { toast } from "sonner";
 
 import {
@@ -50,9 +59,14 @@ import {
   resolveArtifactOpenURL,
   resolveStoredArtifactLanguage,
 } from "@/core/artifacts/viewer";
+import { getVisualMarkdownUnsupportedReason } from "@/core/artifacts/visual-markdown";
 import { useAuth } from "@/core/auth/AuthProvider";
 import { writeTextToClipboard } from "@/core/clipboard";
 import { useI18n } from "@/core/i18n/hooks";
+import { isLegalAuthoritiesFile } from "@/core/law/legal-authorities";
+import { serializeLegalAuthorities } from "@/core/law/legal-authorities-editing";
+import { isLegalGraphFile } from "@/core/law/legal-graph";
+import { serializeLegalGraph } from "@/core/law/legal-graph-editing";
 import { findToolCallResult } from "@/core/messages/utils";
 import { installSkill, SkillRequestError } from "@/core/skills/api";
 import {
@@ -63,6 +77,10 @@ import {
 import { env } from "@/env";
 import { cn } from "@/lib/utils";
 
+import { LegalAuthoritiesPreview } from "../law/legal-authorities-preview";
+import { LegalGraphPreview } from "../law/legal-graph-preview";
+import { SaveCustomTemplate } from "../law/save-custom-template";
+import { SaveProjectArtifact } from "../law/save-project-artifact";
 import { useThread } from "../messages/context";
 import { Tooltip } from "../tooltip";
 
@@ -75,6 +93,11 @@ import {
 import { useArtifacts } from "./context";
 
 const WRITE_FILE_PREVIEW_REFRESH_INTERVAL_MS = 3000;
+const MarkdownRichEditor = lazy(() =>
+  import("./markdown-rich-editor").then((module) => ({
+    default: module.MarkdownRichEditor,
+  })),
+);
 
 export function ArtifactFileDetail({
   className,
@@ -169,9 +192,13 @@ export function ArtifactFileDetail({
   const canPreviewInBrowser = useMemo(() => {
     return canBrowserPreviewFile(filepath);
   }, [filepath]);
+  const isGraph = !isWriteFile && isLegalGraphFile(filepath);
+  const isAuthorities = !isWriteFile && isLegalAuthoritiesFile(filepath);
   const isSupportPreview = useMemo(() => {
-    return language === "html" || language === "markdown";
-  }, [language]);
+    return (
+      isGraph || isAuthorities || language === "html" || language === "markdown"
+    );
+  }, [language, isGraph, isAuthorities]);
   const toolResult = (() => {
     if (!isWriteFile) {
       return undefined;
@@ -230,6 +257,14 @@ export function ArtifactFileDetail({
     isStaticWebsite: env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true",
   });
   const editorContent = isDirty ? activeDraft.draftContent : visibleContent;
+  const visualMarkdownUnsupportedReason =
+    language === "markdown"
+      ? getVisualMarkdownUnsupportedReason(editorContent)
+      : null;
+  const canUseVisualMarkdown =
+    language === "markdown" &&
+    visualMarkdownUnsupportedReason === null &&
+    !truncated;
 
   useEffect(() => {
     if (content === undefined || sha256 === undefined || isWriteFile) {
@@ -245,13 +280,16 @@ export function ArtifactFileDetail({
     });
   }, [content, filepath, isWriteFile, setDrafts, sha256]);
 
-  const [viewMode, setViewMode] = useState<"code" | "preview">(
+  const [viewMode, setViewMode] = useState<"code" | "preview" | "visual">(
     artifactViewState.initialViewMode,
   );
   const [isInstalling, setIsInstalling] = useState(false);
   const isLoadingFullContent = fullContentRequested && isLoading;
   const effectiveViewMode =
-    truncated && language === "html" ? "code" : viewMode;
+    (truncated && (language === "html" || isGraph || isAuthorities)) ||
+    (viewMode === "visual" && !canUseVisualMarkdown)
+      ? "code"
+      : viewMode;
   useEffect(() => {
     setViewMode(artifactViewState.initialViewMode);
   }, [artifactViewState.initialViewMode]);
@@ -386,9 +424,9 @@ export function ArtifactFileDetail({
   }, [threadId, filepath, isInstalling, t]);
   return (
     <Artifact className={cn(className)}>
-      <ArtifactHeader className="px-2">
-        <div className="flex items-center gap-2">
-          <ArtifactTitle>
+      <ArtifactHeader className="flex-wrap gap-2 px-2">
+        <div className="flex min-w-24 flex-1 items-center gap-2">
+          <ArtifactTitle className="min-w-0 flex-1">
             {isWriteFile ? (
               <div className="px-2">{getFileName(filepath)}</div>
             ) : (
@@ -403,7 +441,7 @@ export function ArtifactFileDetail({
                   }
                 }}
               >
-                <SelectTrigger className="border-none bg-transparent! shadow-none select-none focus:outline-0 active:outline-0">
+                <SelectTrigger className="w-full min-w-0 border-none bg-transparent! shadow-none select-none focus:outline-0 active:outline-0 [&>span]:truncate">
                   <SelectValue placeholder="Select a file" />
                 </SelectTrigger>
                 <SelectContent className="select-none">
@@ -419,7 +457,7 @@ export function ArtifactFileDetail({
             )}
           </ArtifactTitle>
         </div>
-        <div className="flex min-w-0 grow items-center justify-center gap-2">
+        <div className="flex shrink-0 items-center justify-center gap-2">
           {artifactViewState.canPreview && !truncated && (
             <ToggleGroup
               className="mx-auto"
@@ -429,14 +467,27 @@ export function ArtifactFileDetail({
               value={viewMode}
               onValueChange={(value) => {
                 if (value) {
-                  setViewMode(value as "code" | "preview");
+                  setViewMode(value as "code" | "preview" | "visual");
                 }
               }}
             >
-              <ToggleGroupItem value="code">
+              <ToggleGroupItem value="code" aria-label={t.common.code}>
                 <Code2Icon />
               </ToggleGroupItem>
-              <ToggleGroupItem value="preview">
+              {language === "markdown" && isEditing && (
+                <ToggleGroupItem
+                  value="visual"
+                  aria-label={
+                    visualMarkdownUnsupportedReason
+                      ? `可视化编辑不可用：${visualMarkdownUnsupportedReason}`
+                      : "可视化编辑"
+                  }
+                  disabled={!canUseVisualMarkdown}
+                >
+                  <BookOpenTextIcon />
+                </ToggleGroupItem>
+              )}
+              <ToggleGroupItem value="preview" aria-label={t.common.preview}>
                 <EyeIcon />
               </ToggleGroupItem>
             </ToggleGroup>
@@ -457,7 +508,7 @@ export function ArtifactFileDetail({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           <ArtifactActions>
             {canEdit && !isEditing && (
               <ArtifactAction
@@ -466,7 +517,13 @@ export function ArtifactFileDetail({
                 tooltip={t.common.edit}
                 disabled={thread.isLoading}
                 onClick={() => {
-                  setViewMode("code");
+                  setViewMode(
+                    isGraph || isAuthorities
+                      ? "preview"
+                      : canUseVisualMarkdown
+                        ? "visual"
+                        : "code",
+                  );
                   setEditingPath(filepath);
                 }}
               />
@@ -530,6 +587,44 @@ export function ArtifactFileDetail({
                     onClick={handleInstallSkill}
                   />
                 </Tooltip>
+              )}
+            {!isWriteFile &&
+              !isMock &&
+              env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true" && (
+                <SaveProjectArtifact
+                  key={`${threadId}:${filepath}`}
+                  threadId={threadId}
+                  filepath={filepath}
+                  expectedSha256={sha256}
+                  blockedReason={
+                    thread.isLoading
+                      ? "请等待当前任务完成。"
+                      : isDirty || isSaving
+                        ? "请先保存当前编辑内容，再保存到项目。"
+                        : activeDraft.conflict
+                          ? "请先解决文件版本冲突。"
+                          : undefined
+                  }
+                />
+              )}
+            {!isWriteFile &&
+              !isMock &&
+              env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true" && (
+                <SaveCustomTemplate
+                  key={`template:${threadId}:${filepath}`}
+                  threadId={threadId}
+                  filepath={filepath}
+                  expectedSha256={sha256}
+                  blockedReason={
+                    thread.isLoading
+                      ? "请等待当前任务完成。"
+                      : isDirty || isSaving
+                        ? "请先保存当前编辑内容，再保存模板。"
+                        : activeDraft.conflict
+                          ? "请先解决文件版本冲突。"
+                          : undefined
+                  }
+                />
               )}
             {!isEditing && !isWriteFile && (
               <ArtifactAction
@@ -638,6 +733,63 @@ export function ArtifactFileDetail({
             />
           )}
           {artifactViewState.canPreview &&
+            isAuthorities &&
+            !error &&
+            effectiveViewMode === "preview" &&
+            !isLoading &&
+            !truncated && (
+              <LegalAuthoritiesPreview
+                key={filepathFromProps}
+                content={editorContent}
+                threadId={threadId}
+                onChange={
+                  canEdit &&
+                  isEditing &&
+                  !thread.isLoading &&
+                  !isSaving &&
+                  !activeDraft.conflict
+                    ? (document) =>
+                        setDrafts((current) => ({
+                          ...current,
+                          [filepath]: {
+                            ...(current[filepath] ?? activeDraft),
+                            draftContent: serializeLegalAuthorities(document),
+                          },
+                        }))
+                    : undefined
+                }
+              />
+            )}
+          {artifactViewState.canPreview &&
+            isGraph &&
+            !error &&
+            effectiveViewMode === "preview" &&
+            !isLoading &&
+            !truncated && (
+              <LegalGraphPreview
+                key={filepathFromProps}
+                content={editorContent}
+                threadId={threadId}
+                onChange={
+                  canEdit &&
+                  isEditing &&
+                  !thread.isLoading &&
+                  !isSaving &&
+                  !activeDraft.conflict
+                    ? (graph) => {
+                        setDrafts((current) => ({
+                          ...current,
+                          [filepath]: {
+                            ...(current[filepath] ?? activeDraft),
+                            draftContent: serializeLegalGraph(graph),
+                          },
+                        }));
+                      }
+                    : undefined
+                }
+              />
+            )}
+          {artifactViewState.canPreview &&
             !error &&
             effectiveViewMode === "preview" &&
             !isLoading &&
@@ -649,6 +801,35 @@ export function ArtifactFileDetail({
                 scrollKey={filepathFromProps}
                 url={url}
               />
+            )}
+          {isCodeFile &&
+            !error &&
+            effectiveViewMode === "visual" &&
+            language === "markdown" &&
+            !truncated &&
+            !isLoading && (
+              <Suspense
+                fallback={
+                  <div className="text-muted-foreground flex size-full items-center justify-center text-sm">
+                    正在加载可视化编辑器…
+                  </div>
+                }
+              >
+                <MarkdownRichEditor
+                  value={editorContent ?? ""}
+                  disabled={thread.isLoading || isSaving || !isEditing}
+                  onChange={(nextContent) => {
+                    setDrafts((current) => ({
+                      ...current,
+                      [filepath]: {
+                        ...(current[filepath] ?? activeDraft),
+                        draftContent: nextContent,
+                      },
+                    }));
+                  }}
+                  onSave={() => void handleSave()}
+                />
+              </Suspense>
             )}
           {isCodeFile &&
             !error &&

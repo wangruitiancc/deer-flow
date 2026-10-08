@@ -29,6 +29,7 @@ from deerflow.config.memory_config import MemoryConfig, load_memory_config_from_
 from deerflow.config.model_config import ModelConfig
 from deerflow.config.read_before_write_config import ReadBeforeWriteConfig
 from deerflow.config.reload_boundary import format_field_description
+from deerflow.config.run_capacity_config import RunCapacityConfig
 from deerflow.config.run_events_config import RunEventsConfig
 from deerflow.config.run_ownership_config import RunOwnershipConfig
 from deerflow.config.runtime_paths import existing_project_file
@@ -328,6 +329,13 @@ class AppConfig(BaseModel):
         description=format_field_description(
             "run_ownership",
             field_doc="Run ownership and lease configuration for multi-worker deployments.",
+        ),
+    )
+    run_capacity: RunCapacityConfig = Field(
+        default_factory=RunCapacityConfig,
+        description=format_field_description(
+            "run_capacity",
+            field_doc="Cluster-aware fail-fast admission limits for active top-level Agent runs.",
         ),
     )
     dedupe_storage: DedupeStorageConfig = Field(

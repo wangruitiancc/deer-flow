@@ -208,11 +208,20 @@ def test_login_response_model_has_no_access_token():
 
 
 def test_login_response_model_fields():
-    """LoginResponse has expires_in and needs_setup."""
+    """LoginResponse describes the session or MFA continuation state."""
     from app.gateway.routers.auth import LoginResponse
 
     fields = set(LoginResponse.model_fields.keys())
-    assert fields == {"expires_in", "needs_setup"}
+    assert fields == {"expires_in", "needs_setup", "mfa_required", "mfa_setup_required"}
+
+
+def test_mfa_routes_are_same_origin_auth_endpoints():
+    for path in (
+        "/api/v1/auth/mfa/setup",
+        "/api/v1/auth/mfa/setup/confirm",
+        "/api/v1/auth/mfa/verify",
+    ):
+        assert is_auth_endpoint(_FakeRequest(path)) is True
 
 
 # ── AuthConfig in Route ──────────────────────────────────────────────
@@ -621,6 +630,116 @@ def test_api_register_duplicate_returns_structured_400():
     assert resp.status_code == 400
     body = resp.json()
     assert body["detail"]["code"] == "email_already_exists"
+
+
+def test_invitation_registration_works_when_regular_registration_is_closed(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.gateway.routers import auth as auth_router
+
+    class ClaimHandler:
+        async def is_claimable(self, *, email: str, token: str) -> bool:
+            return email == "invited@example.com" and token == "lmi_" + "a" * 43
+
+        async def claim(self, *, email: str, user_id: str, token: str) -> bool:
+            self.claimed = (email, user_id, token)
+            return True
+
+    _setup_config()
+    monkeypatch.setattr(auth_router, "_local_registration_enabled", lambda: False)
+    handler = ClaimHandler()
+    app = _make_auth_app()
+    app.state.extensions = SimpleNamespace(account_invitation_claim_handlers=(("test", handler),))
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "invited@example.com",
+            "password": "Tr0ub4dor3a",
+            "invitation_token": "lmi_" + "a" * 43,
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert "access_token" in response.cookies
+    assert handler.claimed == ("invited@example.com", response.json()["id"], "lmi_" + "a" * 43)
+
+
+def test_invalid_invitation_does_not_create_an_account(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.gateway.routers import auth as auth_router
+
+    class ClaimHandler:
+        async def is_claimable(self, *, email: str, token: str) -> bool:
+            return False
+
+        async def claim(self, *, email: str, user_id: str, token: str) -> bool:
+            raise AssertionError("an invalid invitation must not create or claim an account")
+
+    _setup_config()
+    monkeypatch.setattr(auth_router, "_local_registration_enabled", lambda: False)
+    app = _make_auth_app()
+    app.state.extensions = SimpleNamespace(account_invitation_claim_handlers=(("test", ClaimHandler()),))
+    client = TestClient(app)
+
+    invalid = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "no-account@example.com",
+            "password": "Tr0ub4dor3a",
+            "invitation_token": "lmi_" + "b" * 43,
+        },
+    )
+    closed = client.post(
+        "/api/v1/auth/register",
+        json={"email": "no-account@example.com", "password": "Tr0ub4dor3a"},
+    )
+
+    assert invalid.status_code == 400
+    assert closed.status_code == 403
+
+
+def test_invitation_registration_can_retry_after_account_creation(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.gateway.routers import auth as auth_router
+
+    class RecoveringClaimHandler:
+        def __init__(self) -> None:
+            self.claim_attempts = 0
+
+        async def is_claimable(self, *, email: str, token: str) -> bool:
+            return email == "retry@example.com" and token == "lmi_" + "c" * 43
+
+        async def claim(self, *, email: str, user_id: str, token: str) -> bool:
+            self.claim_attempts += 1
+            if self.claim_attempts == 1:
+                raise RuntimeError("synthetic tenant database interruption")
+            return True
+
+    _setup_config()
+    monkeypatch.setattr(auth_router, "_local_registration_enabled", lambda: False)
+    handler = RecoveringClaimHandler()
+    app = _make_auth_app()
+    app.state.extensions = SimpleNamespace(account_invitation_claim_handlers=(("test", handler),))
+    client = TestClient(app)
+    body = {
+        "email": "retry@example.com",
+        "password": "Tr0ub4dor3a",
+        "invitation_token": "lmi_" + "c" * 43,
+    }
+
+    interrupted = client.post("/api/v1/auth/register", json=body)
+    retried = client.post("/api/v1/auth/register", json=body)
+
+    assert interrupted.status_code == 503
+    assert interrupted.headers["cache-control"] == "no-store"
+    assert retried.status_code == 200
+    assert handler.claim_attempts == 2
 
 
 # ── Cookie security: HTTP vs HTTPS ────────────────────────────────────

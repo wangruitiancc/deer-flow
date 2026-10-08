@@ -4,6 +4,8 @@ import ipaddress
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 class TestWebSearchTool:
     @patch.dict("os.environ", {}, clear=True)
@@ -66,6 +68,14 @@ class TestWebSearchTool:
 
 
 class TestWebFetchTool:
+    @pytest.fixture(autouse=True)
+    def _stable_public_dns(self, monkeypatch):
+        """Keep public-URL tests independent from local proxy fake-IP DNS."""
+        monkeypatch.setattr(
+            "deerflow.community.url_safety.resolve_host_addresses",
+            lambda _host: [ipaddress.ip_address("93.184.216.34")],
+        )
+
     @patch.dict("os.environ", {}, clear=True)
     @patch("deerflow.community.fastcrw.tools.FirecrawlApp")
     @patch("deerflow.community.fastcrw.tools.get_app_config")

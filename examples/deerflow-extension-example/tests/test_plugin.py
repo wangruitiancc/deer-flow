@@ -27,6 +27,7 @@ from deerflow_extension_example import install
 class FakeRegistry:
     def __init__(self) -> None:
         self.middleware_contributors: list[Any] = []
+        self.task_admission_contributors: list[Any] = []
         self.task_lifecycle_contributors: list[Any] = []
         self.system_model_observers: list[Any] = []
         self.agent_assembly_observers: list[Any] = []
@@ -36,6 +37,9 @@ class FakeRegistry:
 
     def middlewares(self, contributor: Any) -> None:
         self.middleware_contributors.append(contributor)
+
+    def task_admission(self, contributor: Any) -> None:
+        self.task_admission_contributors.append(contributor)
 
     def task_lifecycle(self, contributor: Any) -> None:
         self.task_lifecycle_contributors.append(contributor)
@@ -66,19 +70,20 @@ class FakeToolRequest:
     runtime: FakeRuntime
 
 
-def test_install_registers_all_five_contribution_kinds() -> None:
+def test_install_registers_all_six_demonstrated_contribution_kinds() -> None:
     registry = FakeRegistry()
 
     install(registry, {})
 
     assert isinstance(registry, ExtensionRegistry)
     assert len(registry.middleware_contributors) == 1
+    assert len(registry.task_admission_contributors) == 1
     assert len(registry.task_lifecycle_contributors) == 1
     assert len(registry.system_model_observers) == 1
     assert len(registry.services) == 1
     assert len(registry.contributed_routers) == 1
     assert [route.path for route in registry.contributed_routers[0].routes] == ["/api/extension-example/stats"]
-    assert install.__deerflow_api__ == "0.2.0"
+    assert install.__deerflow_api__ == "0.2.1"
     assert install.__deerflow_name__ == "example"
 
 
@@ -88,6 +93,7 @@ def test_disabled_extension_registers_nothing() -> None:
     install(registry, {"enabled": False})
 
     assert registry.middleware_contributors == []
+    assert registry.task_admission_contributors == []
     assert registry.task_lifecycle_contributors == []
     assert registry.system_model_observers == []
     assert registry.services == []
@@ -107,6 +113,7 @@ def test_registered_contributions_publish_one_shared_stats_snapshot() -> None:
     )
 
     async def exercise_contributions() -> tuple[int, int, dict[str, Any], int]:
+        await registry.task_admission_contributors[0].admit_task(app_store, task_store, task)
         lifecycle = registry.task_lifecycle_contributors[0]
         await lifecycle.on_task_start(app_store, task_store, task)
         placement = registry.middleware_contributors[0].contribute_middlewares(

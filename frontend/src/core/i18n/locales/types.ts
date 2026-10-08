@@ -232,6 +232,7 @@ export interface Translations {
     chats: string;
     demoChats: string;
     agents: string;
+    lawMatters: string;
     scheduledTasks: string;
     agentsDisabledTooltip: string;
     channels: string;
@@ -488,6 +489,7 @@ export interface Translations {
   breadcrumb: {
     workspace: string;
     chats: string;
+    lawMatters: string;
   };
 
   // Workspace
@@ -514,6 +516,7 @@ export interface Translations {
     branchCreated: string;
     branchFailed: string;
     streamReplayGap: string;
+    runRecoveryRequired: string;
     outlineLabel: string;
     outlineAttachmentFallback: string;
   };
@@ -583,6 +586,7 @@ export interface Translations {
   pages: {
     appName: string;
     chats: string;
+    lawMatters: string;
     newChat: string;
     untitled: string;
   };
@@ -720,6 +724,7 @@ export interface Translations {
       subagents: string;
       skills: string;
       notification: string;
+      ocr: string;
       about: string;
     };
     memory: {
@@ -1030,6 +1035,11 @@ export interface Translations {
       networkError: string;
       updating: string;
       updatePassword: string;
+      sessionSecurityTitle: string;
+      sessionSecurityDescription: string;
+      confirmRevokeAllSessions: string;
+      revokeAllSessions: string;
+      revokingAllSessions: string;
       signOut: string;
     };
     acknowledge: {
@@ -1059,17 +1069,56 @@ export interface Translations {
     continueWith: (provider: string) => string;
     noAccountSignUp: string;
     haveAccountSignIn: string;
+    forgotPassword: string;
     backToHome: string;
     networkError: string;
     serviceUnavailableTitle: string;
     serviceUnavailableDescription: string;
     retry: string;
     authFailed: string;
+    mfaSetupTitle: string;
+    mfaSetupDescription: string;
+    mfaVerifyTitle: string;
+    mfaVerifyDescription: string;
+    mfaAuthenticatorSecret: string;
+    mfaRecoveryCodes: string;
+    mfaRecoveryCodesDescription: string;
+    mfaRecoveryCodesSaved: string;
+    mfaCodeLabel: string;
+    mfaContinue: string;
+    mfaRetrySetup: string;
+    mfaSaveRecoveryCodesFirst: string;
+    mfaCodeInvalid: string;
     errors: {
       sso_failed: string;
       sso_cancelled: string;
       sso_account_exists: string;
       sso_not_allowed: string;
     };
+  };
+
+  passwordReset: {
+    requestTitle: string;
+    requestDescription: string;
+    email: string;
+    emailPlaceholder: string;
+    sendLink: string;
+    requestSubmitted: string;
+    featureUnavailable: string;
+    requestFailed: string;
+    resetTitle: string;
+    resetDescription: string;
+    newPassword: string;
+    confirmPassword: string;
+    passwordHint: string;
+    resetPassword: string;
+    resetComplete: string;
+    invalidLink: string;
+    passwordMismatch: string;
+    passwordTooShort: string;
+    passwordRejected: string;
+    networkError: string;
+    backToLogin: string;
+    signIn: string;
   };
 }

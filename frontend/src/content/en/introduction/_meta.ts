@@ -4,8 +4,8 @@ const meta: MetaRecord = {
   index: {
     title: "Introduction",
   },
-  "why-deerflow": {
-    title: "Why DeerFlow",
+  "why-matrix-law": {
+    title: "Why Matrix-Law",
   },
   "core-concepts": {
     title: "Core Concepts",

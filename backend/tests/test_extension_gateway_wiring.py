@@ -52,17 +52,29 @@ async def test_services_start_in_order_with_narrow_deps_and_fail_open():
         registry.service(second)
     extensions = registry.build()
     session_factory = object()
+    worker_metrics = object()
     config = SimpleNamespace(
         token_budget=SimpleNamespace(enabled=False, max_tokens=999),
         subagents=SimpleNamespace(max_total_per_run=4),
     )
 
-    diagnostics = await start_services(extensions, config, session_factory)
+    diagnostics = await start_services(
+        extensions,
+        config,
+        session_factory,
+        worker_metrics=worker_metrics,
+    )
 
     assert events == ["start:first", "start:second"]
     assert first.deps is second.deps
     assert second.deps.app_store is extensions.app_store
     assert second.deps.session_factory is session_factory
+    assert second.deps.worker_metrics is worker_metrics
+    from deerflow.extensions.artifacts import create_output_bytes, read_output_text, read_uploaded_bytes
+
+    assert second.deps.read_output_text is read_output_text
+    assert second.deps.create_output_bytes is create_output_bytes
+    assert second.deps.read_uploaded_bytes is read_uploaded_bytes
     assert second.deps.policy.token_budget_enabled is False
     assert second.deps.policy.max_total_tokens is None
     assert second.deps.policy.max_subagents_per_run == 4

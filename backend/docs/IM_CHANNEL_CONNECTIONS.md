@@ -381,7 +381,7 @@ Slack:
 Discord:
 
 - The frontend creates a short one-time code.
-- The UI shows `Send /connect <code> to the DeerFlow Discord bot.`
+- The UI shows `Send /connect <code> to the Matrix-Law Discord bot.`
 - The existing Discord Gateway worker receives the message and binds the Discord user/guild to the current DeerFlow user.
 
 Feishu/Lark, DingTalk, WeChat, and WeCom:

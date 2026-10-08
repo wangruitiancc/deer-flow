@@ -92,6 +92,13 @@ def get_available_tools(
 
     loaded_tools_raw = [(cfg, resolve_variable(cfg.use, BaseTool)) for cfg in tool_configs]
 
+    # Keep the execution policy bound to the resolved tool object. This is the
+    # authoritative fallback when a config name differs from ``tool.name``.
+    from deerflow.agents.middlewares.tool_execution_policy_middleware import attach_tool_execution_policy
+
+    for cfg, loaded in loaded_tools_raw:
+        attach_tool_execution_policy(loaded, cfg)
+
     # Warn when the config ``name`` field and the tool object's ``.name``
     # attribute diverge — this mismatch is the root cause of issue #1803 where
     # the LLM receives one name in its tool schema but the runtime router
@@ -143,27 +150,33 @@ def get_available_tools(
     # reflected when loading MCP tools.
     mcp_tools = []
     if include_mcp:
-        try:
-            from deerflow.config.extensions_config import ExtensionsConfig
-            from deerflow.mcp.cache import get_cached_mcp_tools
+        from deerflow.mcp.controlled import get_controlled_mcp_runtime, get_loaded_controlled_mcp_tools
 
-            extensions_config = ExtensionsConfig.from_file()
-            if extensions_config.get_enabled_mcp_servers():
-                mcp_tools = get_cached_mcp_tools()
-                if mcp_tools:
-                    logger.info(f"Using {len(mcp_tools)} cached MCP tool(s)")
+        if get_controlled_mcp_runtime() is not None:
+            loaded = get_loaded_controlled_mcp_tools()
+            if loaded is None:
+                raise PermissionError("managed MCP tools were not preloaded for the admitted task")
+            mcp_tools = loaded
+            logger.info("Using %d task-scoped managed MCP tool(s)", len(mcp_tools))
+        else:
+            try:
+                from deerflow.config.extensions_config import ExtensionsConfig
+                from deerflow.mcp.cache import get_cached_mcp_tools
 
-                    # Tag MCP-sourced tools so deferred-tool assembly at each
-                    # agent construction site can identify them. Lead agents
-                    # assemble their full configured MCP catalog and apply active
-                    # skill policy at runtime; subagents may pass an already
-                    # policy-filtered list because their skills load at startup.
-                    for t in mcp_tools:
-                        tag_mcp_tool(t)
-        except ImportError:
-            logger.warning("MCP module not available. Install 'langchain-mcp-adapters' package to enable MCP tools.")
-        except Exception as e:
-            logger.error(f"Failed to get cached MCP tools: {e}")
+                extensions_config = ExtensionsConfig.from_file()
+                if extensions_config.get_enabled_mcp_servers():
+                    mcp_tools = get_cached_mcp_tools()
+                    if mcp_tools:
+                        logger.info(f"Using {len(mcp_tools)} cached MCP tool(s)")
+            except ImportError:
+                logger.warning("MCP module not available. Install 'langchain-mcp-adapters' package to enable MCP tools.")
+            except Exception as e:
+                logger.error(f"Failed to get cached MCP tools: {e}")
+
+        # Tag MCP-sourced tools so deferred-tool assembly at each agent
+        # construction site can identify them.
+        for t in mcp_tools:
+            tag_mcp_tool(t)
 
     # Add invoke_acp_agent tool if any ACP agents are configured
     acp_tools: list[BaseTool] = []

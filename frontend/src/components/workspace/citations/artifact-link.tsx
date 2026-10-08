@@ -11,7 +11,25 @@ function isExternalUrl(href: string | undefined): boolean {
 }
 
 /** Link renderer for artifact markdown: citation: prefix → CitationLink, otherwise underlined text. */
-export function ArtifactLink(props: AnchorHTMLAttributes<HTMLAnchorElement>) {
+export function ArtifactLink({
+  allowRelativeLinks = true,
+  ...props
+}: AnchorHTMLAttributes<HTMLAnchorElement> & { allowRelativeLinks?: boolean }) {
+  if (
+    !allowRelativeLinks &&
+    props.href &&
+    !isExternalUrl(props.href) &&
+    !props.href.startsWith("#")
+  ) {
+    return (
+      <span
+        className="text-muted-foreground underline decoration-dotted"
+        title="此快照中的相对链接不可用，请查看来源会话。"
+      >
+        {props.children}
+      </span>
+    );
+  }
   // Reject unsafe schemes so prompt-injected [label](javascript:...) in a .md
   // artifact preview cannot execute in the main document, matching the guard in
   // createMarkdownLinkComponent (markdown-link.tsx).

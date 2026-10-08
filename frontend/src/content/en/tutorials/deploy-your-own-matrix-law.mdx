@@ -1,0 +1,31 @@
+---
+title: Run the Matrix-Law Local Candidate
+description: Start the supported two-server local candidate and understand what it does and does not verify.
+---
+
+# Run the Matrix-Law Local Candidate
+
+The authoritative Matrix-Law deployment sources are in `deploy/two-server/`.
+This page describes two local-only containers that simulate the capability and
+law-firm tenant servers for development and acceptance. The cloud target is native
+systemd services on two independent Linux hosts; Docker/Compose is not the
+production deployment architecture.
+
+## Start the local candidate
+
+Use the [Quick Start](/docs/application/quick-start) page for the single maintained
+command sequence and local URLs. `start.sh` accepts only
+`TWO_SERVER_DEPLOYMENT_MODE=local-candidate`; it is not a cloud deployment command.
+
+## What this candidate verifies
+
+The two containers have separate databases, Redis instances, service credentials,
+and data boundaries. Candidate checks can verify local authentication, routing,
+authorization, synthetic workflows, and container health. They do not establish
+production PKI or secret-store readiness, real-provider quality, legal-material
+quality, customer billing, or disaster recovery.
+
+Do not use real legal materials or enable external providers until their data
+processing, retention, residency, human-review, and operational requirements have
+been accepted. Production deployment, signing, backup, restore, and launch readiness
+require their own evidence and procedures.

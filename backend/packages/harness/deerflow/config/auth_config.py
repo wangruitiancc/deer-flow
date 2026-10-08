@@ -27,7 +27,7 @@ class OIDCProviderConfig(BaseModel):
     # ── User provisioning ─────────────────────────────────────────────
     auto_create_users: bool = Field(
         default=True,
-        description="Automatically create a DeerFlow user on first SSO login",
+        description="Automatically create a Matrix-Law user on first SSO login",
     )
     require_verified_email: bool = Field(
         default=True,

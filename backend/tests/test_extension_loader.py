@@ -411,6 +411,30 @@ def test_host_registry_satisfies_the_public_contract():
     assert isinstance(HostRegistry(), ContractRegistry)
 
 
+def test_registry_tracks_account_invitation_claim_handlers_through_rollback():
+    from deerflow.extensions.registry import ExtensionRegistry
+
+    class Handler:
+        async def is_claimable(self, *, email: str, token: str) -> bool:
+            return False
+
+        async def claim(self, *, email: str, user_id: str, token: str) -> bool:
+            return False
+
+    registry = ExtensionRegistry()
+    handler = Handler()
+    with registry.attributed_to("matrix-law"):
+        registry.account_invitation_claim_handler(handler)
+    assert registry.build().account_invitation_claim_handlers == (("matrix-law", handler),)
+
+    mark = registry.mark()
+    with registry.attributed_to("partial-extension"):
+        registry.account_invitation_claim_handler(Handler())
+    registry.rollback_to(mark)
+
+    assert registry.build().account_invitation_claim_handlers == (("matrix-law", handler),)
+
+
 class TestTablePrefixRegistration:
     """A spec's ``table_prefix`` must reach alembic's exclusion filter.
 

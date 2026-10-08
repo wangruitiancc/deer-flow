@@ -43,6 +43,11 @@ const AUTH_ERROR_CODES = [
   "provider_not_found",
   "not_authenticated",
   "system_already_initialized",
+  "registration_disabled",
+  "invalid_invitation",
+  "invitation_service_unavailable",
+  "invitation_claim_unavailable",
+  "invalid_invitation_or_credentials",
 ] as const;
 
 export type AuthErrorCode = (typeof AUTH_ERROR_CODES)[number];

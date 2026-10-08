@@ -1,0 +1,42 @@
+{
+  "version": "matrix-ocr-gold-v1",
+  "dataset_id": "synthetic-v1",
+  "classification": "synthetic-no-client-data",
+  "production_candidate": false,
+  "source_generator": "scripts/synthetic-quality-gate.ts",
+  "cases": [
+    {
+      "id": "contract-key-fields",
+      "lines": [
+        "合同编号 2026-0918",
+        "付款期限 30 日",
+        "合同金额 128000 元",
+        "SYNTHETIC CONTRACT TEST"
+      ],
+      "critical_fields": ["2026-0918", "30 日", "128000"],
+      "citation_anchors": ["合同编号 2026-0918", "合同金额 128000 元"]
+    },
+    {
+      "id": "pleading-key-fields",
+      "lines": [
+        "民事起诉状",
+        "案号 CASE-2026-0027",
+        "请求金额 85000 元",
+        "SYNTHETIC PLEADING TEST"
+      ],
+      "critical_fields": ["CASE-2026-0027", "85000", "民事起诉状"],
+      "citation_anchors": ["案号 CASE-2026-0027", "请求金额 85000 元"]
+    },
+    {
+      "id": "evidence-list-key-fields",
+      "lines": [
+        "证据清单 03",
+        "证据一 合同原件",
+        "证据二 付款凭证",
+        "EVIDENCE LIST 2026"
+      ],
+      "critical_fields": ["03", "合同原件", "付款凭证"],
+      "citation_anchors": ["证据一 合同原件", "证据二 付款凭证"]
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{{- if and .Values.gateway.metrics.enabled .Values.gateway.metrics.prometheusRule.enabled }}
+{{- $namespace := include "deer-flow.namespace" . -}}
+{{- $deployment := printf "%s-gateway" (include "deer-flow.fullname" .) -}}
+{{- $window := .Values.gateway.metrics.prometheusRule.evaluationWindow -}}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "deer-flow.fullname" . }}-gateway
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "deer-flow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+    {{- with .Values.gateway.metrics.prometheusRule.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: deer-flow.gateway
+      rules:
+        - alert: DeerFlowGatewayHigh5xxRatio
+          expr: |
+            (
+              sum(rate(deerflow_gateway_http_requests_total{namespace="{{ $namespace }}",service="gateway",status_class="5xx"}[{{ $window }}]))
+              /
+              clamp_min(sum(rate(deerflow_gateway_http_requests_total{namespace="{{ $namespace }}",service="gateway"}[{{ $window }}])), 0.001)
+            ) > {{ .Values.gateway.metrics.prometheusRule.maximum5xxRatio }}
+            and
+            sum(rate(deerflow_gateway_http_requests_total{namespace="{{ $namespace }}",service="gateway"}[{{ $window }}]))
+              > {{ .Values.gateway.metrics.prometheusRule.minimumRequestRate }}
+          for: {{ .Values.gateway.metrics.prometheusRule.forDuration }}
+          labels:
+            severity: warning
+          annotations:
+            summary: DeerFlow Gateway 5xx ratio exceeds the configured threshold
+            description: The Gateway 5xx ratio has remained above the threshold while request traffic is non-trivial.
+        - alert: DeerFlowGatewayHighP99Latency
+          expr: |
+            histogram_quantile(
+              0.99,
+              sum by (le) (
+                rate(deerflow_gateway_http_request_duration_seconds_bucket{namespace="{{ $namespace }}",service="gateway",response_kind="request"}[{{ $window }}])
+              )
+            ) > {{ .Values.gateway.metrics.prometheusRule.maximumP99LatencySeconds }}
+            and
+            sum(rate(deerflow_gateway_http_request_duration_seconds_count{namespace="{{ $namespace }}",service="gateway",response_kind="request"}[{{ $window }}]))
+              > {{ .Values.gateway.metrics.prometheusRule.minimumRequestRate }}
+          for: {{ .Values.gateway.metrics.prometheusRule.forDuration }}
+          labels:
+            severity: warning
+          annotations:
+            summary: DeerFlow Gateway p99 latency exceeds the configured threshold
+            description: Non-streaming request p99 has remained above the configured latency objective; long-lived SSE sessions are measured separately.
+        - alert: DeerFlowGatewayNoAvailableReplicas
+          expr: |
+            kube_deployment_status_replicas_available{namespace="{{ $namespace }}",deployment="{{ $deployment }}"} < 1
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: DeerFlow Gateway has no available replicas
+            description: Kubernetes reports zero available Gateway replicas; new Agent and legal API traffic is unavailable.
+{{- end }}

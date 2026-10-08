@@ -1,5 +1,6 @@
 """Redis backend and provider factory for the checkpoint history cache."""
 
+import hashlib
 from typing import Any
 
 import pytest
@@ -9,6 +10,7 @@ from deerflow.config.app_config import AppConfig
 from deerflow.runtime.checkpoint_cache.provider import (
     checkpoint_cache_db_hash,
     checkpoint_cache_key_prefix,
+    inventory_checkpoint_cache_namespace,
     make_checkpoint_cache,
 )
 
@@ -20,6 +22,7 @@ class _FakeRedis:
         self.store: dict[str, bytes] = {}
         self.ttls: dict[str, int | None] = {}
         self.unlinked: list[tuple[str, ...]] = []
+        self.types: dict[str, str] = {}
 
     async def mget(self, keys: list[str]) -> list[bytes | None]:
         return [self.store.get(k) for k in keys]
@@ -44,6 +47,30 @@ class _FakeRedis:
         for key in keys:
             removed += self.store.pop(key, None) is not None
         return removed
+
+    async def scan_iter(self, *, match: str = "*", count: int = 500):
+        cursor = 0
+        while True:
+            cursor, keys = await self.scan(cursor=cursor, match=match, count=count)
+            for key in keys:
+                yield key
+            if cursor == 0:
+                break
+
+    async def type(self, key: str) -> str:
+        return self.types.get(key, "string" if key in self.store else "none")
+
+    async def strlen(self, key: str) -> int:
+        return len(self.store[key]) if key in self.store else 0
+
+    async def get(self, key: str) -> bytes | None:
+        return self.store.get(key)
+
+    async def pttl(self, key: str) -> int:
+        if key not in self.store:
+            return -2
+        ttl = self.ttls.get(key)
+        return -1 if ttl is None else ttl * 1000
 
     def pipeline(self, transaction: bool = False) -> "_FakePipeline":
         return _FakePipeline(self)
@@ -177,6 +204,98 @@ async def test_adelete_thread_purges_matching_keys_only(monkeypatch: pytest.Monk
 
     assert sorted(fake.store) == [f"{prefix}:t10:ccc", f"{prefix}:t2:ddd"]
     assert fake.unlinked  # UNLINK, not DEL: non-blocking on big histories
+
+
+@pytest.mark.anyio
+async def test_inventory_namespace_returns_bounded_value_free_hashes(monkeypatch: pytest.MonkeyPatch):
+    fake = _FakeRedis()
+    cache = _make_cache(monkeypatch, fake)
+    prefix = "ckpt-hist:v1:db0"
+    payload = b"synthetic checkpoint history"
+    fake.store[f"{prefix}:thread-1:digest"] = payload
+    fake.ttls[f"{prefix}:thread-1:digest"] = 60
+    fake.store["other:thread-1:digest"] = b"unrelated"
+
+    rows = await cache.inventory_namespace(prefix, max_keys=5, max_bytes=1024)
+    assert rows == [
+        {
+            "key_sha256": hashlib.sha256(f"{prefix}:thread-1:digest".encode()).hexdigest(),
+            "value_sha256": hashlib.sha256(payload).hexdigest(),
+            "byte_size": len(payload),
+            "ttl_ms": 60_000,
+            "purge_status": "planned_not_executed",
+        }
+    ]
+    assert "thread-1" not in str(rows)
+    assert payload.decode() not in str(rows)
+    with pytest.raises(ValueError, match="key limit"):
+        await cache.inventory_namespace(prefix, max_keys=0, max_bytes=1024)
+    with pytest.raises(ValueError, match="byte limit"):
+        await cache.inventory_namespace(prefix, max_keys=5, max_bytes=1)
+
+
+@pytest.mark.anyio
+async def test_inventory_namespace_rejects_unreviewed_key_types(monkeypatch: pytest.MonkeyPatch):
+    fake = _FakeRedis()
+    cache = _make_cache(monkeypatch, fake)
+    key = "ckpt-hist:v1:db0:thread-1:digest"
+    fake.store[key] = b"synthetic"
+    fake.types[key] = "hash"
+
+    with pytest.raises(ValueError, match="unreviewed key type"):
+        await cache.inventory_namespace("ckpt-hist:v1:db0", max_keys=5, max_bytes=1024)
+
+
+@pytest.mark.anyio
+async def test_inventory_namespace_bounds_full_keyspace_scan_work(monkeypatch: pytest.MonkeyPatch):
+    fake = _FakeRedis()
+    cache = _make_cache(monkeypatch, fake)
+    prefix = "ckpt-hist:v1:db0"
+    fake.store.update({f"{prefix}:thread-{index}": b"x" for index in range(501)})
+
+    with pytest.raises(ValueError, match="scan work limit"):
+        await cache.inventory_namespace(
+            prefix,
+            max_keys=501,
+            max_bytes=4096,
+            max_scan_batches=1,
+        )
+
+
+@pytest.mark.anyio
+async def test_provider_inventory_uses_same_redis_endpoint_as_cache_writer(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import deerflow.runtime.checkpoint_cache.redis as redis_mod
+
+    fake = _FakeRedis()
+    seen_urls: list[str] = []
+    monkeypatch.setattr(redis_mod, "_create_client", lambda url, **kwargs: (seen_urls.append(url), fake)[1])
+    stream_url = "redis://private-user:private-password@tenant-redis:6379/0"
+    monkeypatch.setenv("DEER_FLOW_STREAM_BRIDGE_REDIS_URL", stream_url)
+    monkeypatch.delenv("DEER_FLOW_CHECKPOINT_CACHE_REDIS_URL", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    prefix = "ckpt-hist:v1:db0"
+    fake.store[f"{prefix}:thread-1:digest"] = b"synthetic private history"
+    app_config = AppConfig.model_validate(
+        {
+            "sandbox": {"use": "deerflow.sandbox.local.provider:LocalSandboxProvider"},
+            "database": {
+                "backend": "sqlite",
+                "checkpoint_cache": {"type": "redis", "key_prefix": prefix},
+            },
+            "stream_bridge": {"type": "redis", "redis_url": stream_url},
+        }
+    )
+
+    async with make_checkpoint_cache(app_config, serde=JsonPlusSerializer()):
+        pass
+    rows = await inventory_checkpoint_cache_namespace(app_config, max_keys=5, max_bytes=1024)
+
+    assert seen_urls == ["redis://localhost:6379/0", "redis://localhost:6379/0"]
+    assert len(rows) == 1
+    assert "private-password" not in str(seen_urls)
+    assert "thread-1" not in str(rows)
 
 
 @pytest.mark.anyio

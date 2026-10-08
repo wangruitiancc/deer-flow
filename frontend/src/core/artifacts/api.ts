@@ -64,6 +64,38 @@ export async function updateArtifactContent({
   return response.json() as Promise<ArtifactUpdateResponse>;
 }
 
+export async function importTextArtifactCopy({
+  threadId,
+  filename,
+  content,
+  sourceSha256,
+}: {
+  threadId: string;
+  filename: string;
+  content: string;
+  sourceSha256: string;
+}): Promise<ArtifactUpdateResponse> {
+  const response = await fetch(
+    `/api/threads/${encodeURIComponent(threadId)}/artifacts/import-text`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filename,
+        content,
+        source_sha256: sourceSha256,
+      }),
+    },
+  );
+  if (!response.ok) {
+    throw new ArtifactRequestError(
+      response.status,
+      await readErrorDetail(response),
+    );
+  }
+  return response.json() as Promise<ArtifactUpdateResponse>;
+}
+
 export async function downloadArtifactArchive({
   threadId,
   runId,

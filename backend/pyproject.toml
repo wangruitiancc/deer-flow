@@ -44,6 +44,7 @@ dependencies = [
 [project.optional-dependencies]
 postgres = ["deerflow-harness[postgres]"]
 redis = ["deerflow-harness[redis]"]
+boxlite = ["deerflow-harness[boxlite]"]
 discord = ["discord.py>=2.7.0"]
 buzz = ["coincurve>=20.0.0"]
 monocle = ["deerflow-harness[monocle]"]
@@ -54,7 +55,9 @@ memory-zh = ["deerflow-harness[memory-zh]"]
 # Managed extension packages are added here by `deerflow extensions install`.
 # Keeping them separate from development tooling lets every startup mode sync
 # the same locked runtime set without promoting those packages to core deps.
-extensions = []
+extensions = [
+    "matrix-law-extension",
+]
 dev = [
     "blockbuster>=1.5.26,<1.6",
     "hypothesis>=6.100,<7",
@@ -110,3 +113,4 @@ members = ["packages/harness", "packages/extension-api"]
 [tool.uv.sources]
 deerflow-harness = { workspace = true }
 deerflow-extension-api = { workspace = true }
+matrix-law-extension = { path = "extensions/sources/matrix-law-extension" }

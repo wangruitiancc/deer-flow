@@ -9,6 +9,7 @@ import asyncio
 import os
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("AUTH_JWT_SECRET", "test-secret-key-initialize-admin-min-32")
@@ -83,6 +84,26 @@ def test_initialize_needs_setup_false(client):
     me = client.get("/api/v1/auth/me")
     assert me.status_code == 200
     assert me.json()["needs_setup"] is False
+
+
+def test_startup_bootstraps_configured_admin(_setup_auth, monkeypatch):
+    from app.gateway.app import _ensure_admin_user
+    from app.gateway.deps import get_local_provider
+
+    monkeypatch.setenv("DEERFLOW_BOOTSTRAP_ADMIN_EMAIL", "admin@matrix.law")
+    monkeypatch.setenv("DEERFLOW_BOOTSTRAP_ADMIN_PASSWORD", "MatrixLaw@2026!")
+
+    asyncio.run(_ensure_admin_user(FastAPI()))
+    provider = get_local_provider()
+    admin = asyncio.run(
+        provider.authenticate(
+            {"email": "admin@matrix.law", "password": "MatrixLaw@2026!"}
+        )
+    )
+
+    assert admin is not None
+    assert admin.system_role == "admin"
+    assert admin.needs_setup is False
 
 
 # ── Rejection when already initialized ───────────────────────────────────

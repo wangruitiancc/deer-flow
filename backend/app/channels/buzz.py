@@ -174,7 +174,7 @@ _PERMANENT_CLOSE_MARKERS = ("revoke", "not a member", "not a channel member", "n
 # templates in wecom.py / feishu.py / dingtalk.py / wechat.py), substituting
 # "Buzz" for the platform name.
 _CONNECT_REPLY_TEXT = {
-    "success": "Buzz connected to DeerFlow.",
+    "success": "Buzz connected to Matrix-Law.",
     "invalid": "Buzz connection code is invalid or expired.",
     "error": "Buzz connection could not be completed from this message.",
 }
@@ -1118,10 +1118,10 @@ class BuzzChannel(Channel):
         tags — the caller only confirms *some* p-tagged mention exists (see
         ``mentioned`` in ``_handle_chat_event``), never that the specific leading
         token names *us*. When a second ``@token`` immediately follows the first
-        (e.g. "@Alice, @DeerFlow help"), guessing that the first one is ours risks
+        (e.g. "@Alice, @Matrix-Law help"), guessing that the first one is ours risks
         silently discarding a different member's mention while leaving ours
         untouched, so the conservative choice is to leave the text completely
-        alone rather than guess. The common single-mention case ("@DeerFlow
+        alone rather than guess. The common single-mention case ("@Matrix-Law
         hello") remains unambiguous and is still stripped.
         """
         stripped = text.lstrip()
@@ -1129,7 +1129,7 @@ class BuzzChannel(Channel):
             return text.strip()
         _, sep, rest = stripped.partition(" ")
         if not sep:
-            return stripped  # "@DeerFlow" alone: nothing to strip without losing the whole message
+            return stripped  # "@Matrix-Law" alone: nothing to strip without losing the whole message
         if rest.lstrip().startswith("@"):
             return text.strip()  # ambiguous multi-mention prefix: don't guess which one is ours
         return rest.strip() or stripped

@@ -27,7 +27,7 @@ from deerflow.agents.middlewares.system_message_coalescing_middleware import (
 # ---------------------------------------------------------------------------
 
 
-def _make_request(system_message: SystemMessage | None, messages: list[BaseMessage]):
+def _make_request(system_message: SystemMessage | str | None, messages: list[BaseMessage]):
     """Build a minimal ModelRequest stand-in matching langchain 1.2.15 shape.
 
     ``system_message`` and ``messages`` are separate fields — the handler
@@ -454,6 +454,60 @@ class TestRealisticScenario:
         # User-owned memory stays as HumanMessage (OWASP LLM01 preserved)
         assert any(isinstance(m, HumanMessage) and "User prefers Python." in m.content for m in final)
         assert any(isinstance(m, HumanMessage) and m.content == "What is the capital of France?" for m in final)
+
+    def test_stale_deerflow_identity_checkpoint_is_dropped_for_legal_identity(self):
+        """Existing Matrix Law threads may contain the old DeerFlow identity.
+
+        When the current static prompt is the legal assistant identity, the old
+        checkpointed identity must not survive in the merged system block.
+        """
+        mw = SystemMessageCoalescingMiddleware()
+        request = _make_request(
+            system_message=SystemMessage(
+                content="<role>你是法律工作台中的律师助手，只说明你是律师助手。</role>",
+                id="sys-prompt",
+            ),
+            messages=[
+                SystemMessage(
+                    content="<role>You are DeerFlow 2.0, an open-source super agent.</role>",
+                    id="old-sys-prompt",
+                ),
+                HumanMessage(content="你是谁", id="user-1"),
+            ],
+        )
+        captured, handler = _capture_handler()
+
+        mw.wrap_model_call(request, handler)
+
+        final = _final_payload(captured[0])
+        system_messages = [m for m in final if isinstance(m, SystemMessage)]
+        assert len(system_messages) == 1
+        assert "法律工作台中的律师助手" in system_messages[0].content
+        assert "DeerFlow 2.0" not in system_messages[0].content
+        assert "open-source super agent" not in system_messages[0].content
+        assert any(isinstance(m, HumanMessage) and m.content == "你是谁" for m in final)
+
+    def test_string_legal_identity_drops_stale_deerflow_checkpoint(self):
+        """LangChain may expose request.system_message as a plain string."""
+        mw = SystemMessageCoalescingMiddleware()
+        request = _make_request(
+            system_message="你是法律工作台中的律师助手，只说明你是律师助手。",
+            messages=[
+                SystemMessage(content="我是 DeerFlow 2.0，一个开源的 AI Agent 框架。", id="old-sys-prompt"),
+                HumanMessage(content="你是谁", id="user-1"),
+            ],
+        )
+        captured, handler = _capture_handler()
+
+        mw.wrap_model_call(request, handler)
+
+        final = _final_payload(captured[0])
+        system_messages = [m for m in final if isinstance(m, SystemMessage)]
+        assert len(system_messages) == 1
+        assert "法律工作台中的律师助手" in system_messages[0].content
+        assert "DeerFlow 2.0" not in system_messages[0].content
+        assert "开源的 AI Agent" not in system_messages[0].content
+        assert any(isinstance(m, HumanMessage) and m.content == "你是谁" for m in final)
 
     def test_midnight_crossing_single_system_message_in_final_payload(self):
         """Midnight crossing: 3 SystemMessages total → coalesced to 1.

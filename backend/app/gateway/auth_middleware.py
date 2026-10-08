@@ -47,13 +47,31 @@ _PUBLIC_PATH_PREFIXES: tuple[str, ...] = (
 # /api/v1/auth/me, /api/v1/auth/change-password etc. are NOT public.
 _PUBLIC_EXACT_PATHS: frozenset[str] = frozenset(
     {
+        "/metrics",
+        "/ready",
         "/api/v1/auth/login/local",
+        "/api/v1/auth/mfa/setup",
+        "/api/v1/auth/mfa/setup/confirm",
+        "/api/v1/auth/mfa/verify",
         "/api/v1/auth/register",
         "/api/v1/auth/logout",
         "/api/v1/auth/setup-status",
         "/api/v1/auth/initialize",
         "/api/v1/auth/providers",
+        "/api/v1/auth/password-reset/status",
+        "/api/v1/auth/password-reset/request",
+        "/api/v1/auth/password-reset/complete",
     }
+)
+
+_PLATFORM_ADMIN_ALLOWED_EXACT_PATHS: frozenset[str] = frozenset(
+    {
+        "/api/v1/auth/me",
+        "/api/v1/auth/change-password",
+    }
+)
+_PLATFORM_ADMIN_ALLOWED_PATH_PREFIXES: tuple[str, ...] = (
+    "/api/law/platform/",
 )
 
 
@@ -62,6 +80,13 @@ def _is_public(path: str) -> bool:
     if stripped in _PUBLIC_EXACT_PATHS:
         return True
     return any(path.startswith(prefix) for prefix in _PUBLIC_PATH_PREFIXES)
+
+
+def _is_platform_admin_allowed(path: str) -> bool:
+    stripped = path.rstrip("/")
+    if stripped in _PLATFORM_ADMIN_ALLOWED_EXACT_PATHS:
+        return True
+    return any(path.startswith(prefix) for prefix in _PLATFORM_ADMIN_ALLOWED_PATH_PREFIXES)
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -172,6 +197,22 @@ class AuthMiddleware(BaseHTTPMiddleware):
                         code=AuthErrorCode.NOT_AUTHENTICATED,
                         message="Authentication required",
                     ).model_dump()
+                },
+            )
+
+        route_path = get_request_route_path(request)
+        if (
+            auth_source in {AUTH_SOURCE_SESSION, AUTH_SOURCE_PAT}
+            and getattr(user, "system_role", None) == "admin"
+            and not _is_platform_admin_allowed(route_path)
+        ):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": {
+                        "code": "platform_admin_console_only",
+                        "message": "Platform administrators may only access platform operations APIs",
+                    }
                 },
             )
 

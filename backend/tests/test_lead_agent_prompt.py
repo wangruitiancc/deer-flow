@@ -36,6 +36,47 @@ def test_build_self_update_section_present_for_custom_agent():
     assert '"null"' in section
 
 
+def test_apply_prompt_template_uses_legal_product_identity(monkeypatch):
+    explicit_config = SimpleNamespace(
+        sandbox=SimpleNamespace(mounts=[]),
+        skills=SimpleNamespace(
+            container_path="/mnt/skills",
+            use="deerflow.skills.storage.local_skill_storage:LocalSkillStorage",
+            get_skills_path=lambda: Path("/tmp/skills"),
+        ),
+        skill_evolution=SimpleNamespace(enabled=False),
+        tool_search=SimpleNamespace(enabled=False),
+        memory=SimpleNamespace(enabled=False, injection_enabled=True, max_injection_tokens=2000),
+        acp_agents={},
+    )
+    monkeypatch.setattr(prompt_module, "get_or_new_skill_storage", lambda app_config=None: SimpleNamespace(load_skills=lambda enabled_only=True: []))
+    monkeypatch.setattr(prompt_module, "get_agent_soul", lambda agent_name=None, **kwargs: "")
+    monkeypatch.setattr(prompt_module, "get_deferred_tools_prompt_section", lambda **kwargs: "")
+
+    prompt = prompt_module.apply_prompt_template(agent_name="Custom Agent", app_config=explicit_config)
+
+    assert "法律工作台中的律师助手" in prompt
+    assert "Matrix Law 法律工作台中的律师助手" in prompt
+    assert "你不是通用 AI Agent" in prompt
+    assert "只面向律师和律所成员" in prompt
+    assert "先确认事项类型、适用法域、材料范围和输出目的" in prompt
+    assert "<legal_work_rules>" in prompt
+    assert "事实结论必须有依据" in prompt
+    assert "依据清单" in prompt
+    assert "置信度" in prompt
+    assert "非法律问题、通用编程、脚本编写、系统运维、平台功能介绍不是本产品的主动能力" in prompt
+    assert "<tool_truth_rules>" in prompt
+    assert "不要声称已经调用工具" in prompt
+    assert "当前请求中实际暴露的工具才是权威工具集" in prompt
+    assert "Matrix-Law" not in prompt
+    assert "open-source" not in prompt
+    assert "super agent" not in prompt
+    assert "GitHub Repository" not in prompt
+    assert "Custom Agent, an open-source" not in prompt
+    assert "Deploy the application" not in prompt
+    assert "Deploy the app" not in prompt
+
+
 def test_build_custom_mounts_section_returns_empty_when_no_mounts(monkeypatch):
     config = SimpleNamespace(sandbox=SimpleNamespace(mounts=[]))
     monkeypatch.setattr("deerflow.config.get_app_config", lambda: config)
@@ -102,7 +143,7 @@ def test_apply_prompt_template_includes_relative_path_guidance(monkeypatch):
     prompt = prompt_module.apply_prompt_template()
 
     assert "Treat `/mnt/user-data/workspace` as your default current working directory" in prompt
-    assert "`hello.txt`, `../uploads/data.csv`, and `../outputs/report.md`" in prompt
+    assert "`contract-review.md`, `../uploads/contract.md`, and `../outputs/legal-memo.md`" in prompt
 
 
 def test_apply_prompt_template_includes_memory_tool_guidance_only_in_tool_mode(monkeypatch):
@@ -643,8 +684,8 @@ def test_system_prompt_template_preserves_placeholders():
     crash prompt rendering at runtime.
     """
     template = prompt_module.SYSTEM_PROMPT_TEMPLATE
+    assert "{agent_name}" not in template
     for ph in (
-        "{agent_name}",
         "{soul}",
         "{self_update_section}",
         "{subagent_thinking}",

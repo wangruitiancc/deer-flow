@@ -92,7 +92,7 @@ def test_general_purpose_and_task_descriptions_match_routing_policy() -> None:
 
 def test_bash_descriptions_require_benefit_beyond_routine_commands(monkeypatch) -> None:
     section = _build_section(monkeypatch, ["general-purpose", "bash"])
-    policy = "Routine git, build, test, or deploy operations are not sufficient reason to delegate"
+    policy = "Routine commands are not sufficient reason to delegate"
 
     assert policy in section
     assert policy in task_tool.description

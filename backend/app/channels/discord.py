@@ -677,7 +677,7 @@ class DiscordChannel(Channel):
             },
             status="connected",
         )
-        await self._send_connection_reply(message, "Discord connected to DeerFlow.")
+        await self._send_connection_reply(message, "Discord connected to Matrix-Law.")
         return True
 
     @staticmethod

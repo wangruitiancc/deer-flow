@@ -12,18 +12,24 @@ import asyncio
 import dataclasses
 import importlib.resources
 import inspect
+import ssl
 
 import pytest
 from deerflow_extension_api import (
     API_VERSION,
     AgentBuildContext,
     AgentScope,
+    ControlledGatewayTransport,
+    ControlledModelRuntime,
+    ControlledModelRuntimeBinding,
+    DeploymentIdentityClaim,
     ExtensionData,
     ExtensionInstall,
     ExtensionRegistry,
     ExtensionRuntimeDeps,
     ExtensionService,
     HostPolicySnapshot,
+    MatterScopeBinding,
     MiddlewareContributor,
     MiddlewarePlacement,
     Placement,
@@ -31,6 +37,7 @@ from deerflow_extension_api import (
     SystemModelRequest,
     SystemModelResult,
     SystemOperationKind,
+    TaskAdmissionContributor,
     TaskInfo,
     TaskLifecycleContributor,
     TaskOutcome,
@@ -65,6 +72,8 @@ def test_middleware_placement_defaults():
     "cls",
     [
         HostPolicySnapshot,
+        ControlledGatewayTransport,
+        DeploymentIdentityClaim,
         ExtensionRuntimeDeps,
         AgentBuildContext,
         TaskInfo,
@@ -80,7 +89,15 @@ def test_every_dataclass_is_frozen(cls):
 
 @pytest.mark.parametrize(
     "cls",
-    [HostPolicySnapshot, ExtensionRuntimeDeps, TaskInfo, SystemModelRequest, SystemModelResult],
+    [
+        HostPolicySnapshot,
+        ControlledGatewayTransport,
+        DeploymentIdentityClaim,
+        ExtensionRuntimeDeps,
+        TaskInfo,
+        SystemModelRequest,
+        SystemModelResult,
+    ],
 )
 def test_additive_dataclasses_are_constructible_with_required_fields_only(cls):
     """Fields added later must carry defaults, or old extensions break on upgrade.
@@ -165,6 +182,78 @@ def test_task_lifecycle_contract_is_public_and_defaults_to_noop():
     assert asyncio.run(TaskLifecycleContributor.on_task_stop(_Bare(), app_store, task_store, info, TaskOutcome.COMPLETED)) is None
 
 
+def test_task_admission_contract_is_public_and_defaults_to_noop():
+    class _Bare:
+        pass
+
+    info = TaskInfo(
+        task_id="task-1",
+        run_id="run-1",
+        thread_id="thread-1",
+        kind="lead",
+        user_id="user-1",
+    )
+    assert info.user_id == "user-1"
+    assert (
+        asyncio.run(
+            TaskAdmissionContributor.admit_task(
+                _Bare(),
+                ExtensionData("app"),
+                ExtensionData("task-1"),
+                info,
+            )
+        )
+        is None
+    )
+
+
+def test_controlled_model_runtime_contract_is_opaque_and_task_scoped():
+    class _Bare:
+        pass
+
+    runtime = _Bare()
+    assert ControlledModelRuntime.gateway_base_url.__get__(runtime) == ""
+    assert ControlledModelRuntime.allows_model(runtime, "any-model") is False
+    assert (
+        ControlledModelRuntime.request_headers(
+            runtime,
+            model_name="any-model",
+            purpose="agent",
+            call_id="call-1",
+            attempt_id="call-1.a1",
+        )
+        == {}
+    )
+    assert ControlledModelRuntime.deployment_identity.__get__(runtime) is None
+    assert ControlledModelRuntime.gateway_transport.__get__(runtime) is None
+    assert (
+        ControlledModelRuntime.request_headers_for_request(
+            runtime,
+            model_name="any-model",
+            purpose="agent",
+            call_id="call-1",
+            attempt_id="call-1.a1",
+            request_method="POST",
+            request_path="/v3/proxy/model/v1/chat/completions",
+            request_body=b'{"messages":[]}',
+        )
+        == {}
+    )
+    assert (
+        DeploymentIdentityClaim(
+            issuer="https://law.example.test",
+            tenant_id="tenant-1",
+            deployment_id="dep_remote_0001",
+            identity_key_version=1,
+        ).deployment_id
+        == "dep_remote_0001"
+    )
+    transport = ControlledGatewayTransport(ssl_context=ssl.create_default_context())
+    assert transport.require_https is True
+    assert "SSLContext" not in repr(transport)
+    assert ControlledModelRuntimeBinding(runtime=runtime).runtime is runtime
+
+
 def test_system_model_observer_contract_reports_success_and_failure_shapes():
     class _Bare:
         pass
@@ -203,6 +292,11 @@ def test_gateway_contribution_points_are_part_of_the_public_surface():
     import deerflow_extension_api
 
     for name in (
+        "BackgroundWorkerMetrics",
+        "ControlledModelRuntime",
+        "ControlledModelRuntimeBinding",
+        "ControlledGatewayTransport",
+        "DeploymentIdentityClaim",
         "ExtensionRuntimeDeps",
         "ExtensionService",
     ):
@@ -231,6 +325,15 @@ def test_task_store_from_runtime_returns_none_on_missing_or_wrong_shape():
     assert task_store_from_runtime(_Runtime({})) is None
     assert task_store_from_runtime(_Runtime("not-a-mapping")) is None
     assert task_store_from_runtime(_Runtime({EXTENSION_TASK_STORE_KEY: "wrong type"})) is None
+
+
+def test_matter_scope_binding_is_an_immutable_identifier_only_contract():
+    scope = MatterScopeBinding(tenant_id="tenant-1", matter_id="matter-1", thread_id="thread-1")
+
+    assert dataclasses.is_dataclass(scope)
+    assert (scope.tenant_id, scope.matter_id, scope.thread_id) == ("tenant-1", "matter-1", "thread-1")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        scope.matter_id = "other-matter"
 
 
 def test_extension_decorator_stamps_api_requirement():
@@ -304,7 +407,7 @@ def test_runtime_api_version_matches_the_installed_contract_package():
     """Every additive contract slice bumps both gates together."""
     from importlib.metadata import version
 
-    assert API_VERSION == "0.2.0"
+    assert API_VERSION == "0.2.12"
     assert API_VERSION == version("deerflow-extension-api")
 
 
@@ -316,5 +419,6 @@ def test_extension_service_contract_is_public_and_defaults_to_noop():
 
     assert deps.app_store is None
     assert deps.session_factory is None
+    assert deps.worker_metrics is None
     assert asyncio.run(ExtensionService.start(_Bare(), deps)) is None
     assert asyncio.run(ExtensionService.stop(_Bare())) is None

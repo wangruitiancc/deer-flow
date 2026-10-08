@@ -59,6 +59,26 @@ def _fake_run(coro, *, timeout=None):
     return asyncio.run(coro)
 
 
+@pytest.fixture
+def fake_isolated_runtime(monkeypatch):
+    class Runtime:
+        closed = False
+
+        async def list_info(self):
+            return []
+
+        def close(self):
+            self.closed = True
+
+    instance = Runtime()
+
+    async def create_runtime(_provider):
+        return instance
+
+    monkeypatch.setattr(BoxliteProvider, "_create_isolated_runtime", create_runtime)
+    return instance
+
+
 # ── Config stub ───────────────────────────────────────────────────────
 
 
@@ -89,6 +109,18 @@ def _no_existing_boxlite_boxes(monkeypatch: pytest.MonkeyPatch) -> None:
             return []
 
     class _EmptyBoxlite:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            return self
+
+        def stop(self):
+            pass
+
+        def list_info(self):
+            return []
+
         @staticmethod
         def default():
             return _EmptyRuntime()
@@ -385,6 +417,143 @@ def test_create_box_passes_prefixed_sandbox_id_as_name(monkeypatch):
     assert box.id == "test-sandbox-id"
 
 
+def test_matrix_law_profile_applies_thread_mounts_network_security_and_limits(monkeypatch, tmp_path, fake_isolated_runtime):
+    """The native Matrix-Law profile gives one VM only its thread data and Skill view."""
+    config = _stub_config(
+        {
+            "matrix_law_isolation": True,
+            "image": "registry.example/matrix-law-sandbox@sha256:" + "a" * 64,
+            "memory_mib": 1024,
+            "cpus": 2,
+            "runtime_home_dir": str(tmp_path / "boxlite-runtime"),
+        }
+    )
+    config.skills = types.SimpleNamespace(container_path="/mnt/skills")
+    monkeypatch.setattr("deerflow.community.boxlite.provider.get_app_config", lambda: config)
+    paths = __import__("deerflow.config.paths", fromlist=["Paths"]).Paths(tmp_path)
+    monkeypatch.setattr("deerflow.config.paths.get_paths", lambda: paths)
+
+    thread_id = "law-thread-1"
+    user_id = "law-user-1"
+    thread_root = paths.thread_dir(thread_id, user_id=user_id)
+    skills_root = paths.thread_skills_view_dir(thread_id, user_id=user_id)
+    for category in ("public", "custom", "legacy", "integrations"):
+        (skills_root / category).mkdir(parents=True, exist_ok=True)
+    from deerflow.skills.projection import SkillProjectionPaths
+
+    monkeypatch.setattr("deerflow.skills.projection.thread_skill_projection_exists", lambda storage, thread: True)
+    monkeypatch.setattr(
+        "deerflow.skills.projection.get_thread_skill_projection_paths",
+        lambda storage, thread: SkillProjectionPaths(
+            public=skills_root / "public",
+            custom=skills_root / "custom",
+            legacy=skills_root / "legacy",
+            integrations=skills_root / "integrations",
+        ),
+    )
+    monkeypatch.setattr("deerflow.skills.storage.get_or_new_user_skill_storage", lambda user, app_config: object())
+
+    class _NetworkSpec:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class _SecurityOptions:
+        @classmethod
+        def maximum(cls):
+            return "maximum"
+
+    class _AdvancedBoxOptions:
+        def __init__(self, *, security):
+            self.security = security
+
+    monkeypatch.setattr(
+        "deerflow.community.boxlite.provider._import_isolation_types",
+        lambda: (_NetworkSpec, _AdvancedBoxOptions, _SecurityOptions),
+    )
+
+    created = []
+
+    class _RecordingBox(_FakeBox):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            created.append(kwargs)
+
+    monkeypatch.setattr("deerflow.community.boxlite.provider._import_simplebox", lambda: _RecordingBox)
+    provider = BoxliteProvider()
+    provider._loop.run = _fake_run
+    try:
+        box = provider._create_box("secure-sandbox", thread_id=thread_id, user_id=user_id)
+        options = created[0]
+
+        assert options["cpus"] == 2
+        assert options["memory_mib"] == 1024
+        assert options["network"].kwargs == {"mode": "disabled"}
+        assert options["advanced"].security == "maximum"
+        assert options["auto_remove"] is True
+        assert options["volumes"] == [
+            (str(thread_root), "/mnt/thread", True),
+            (str(paths.sandbox_user_data_dir(thread_id, user_id=user_id)), "/mnt/user-data", False),
+        ]
+        assert any("/mnt/thread/skills_view" in call[0][2] for call in box._box._exec_history)
+        assert any("/mnt/thread/acp-workspace" in call[0][2] for call in box._box._exec_history)
+    finally:
+        provider.shutdown()
+
+
+def test_matrix_law_profile_rejects_mutable_image_or_missing_limits(monkeypatch, tmp_path):
+    """Matrix-Law must not quietly start an unpinned, resource-unbounded guest."""
+    for attrs in (
+        {"matrix_law_isolation": True, "cpus": 2, "memory_mib": 1024},
+        {
+            "matrix_law_isolation": True,
+            "image": "python:3.12-slim",
+            "cpus": 2,
+            "memory_mib": 1024,
+        },
+        {
+            "matrix_law_isolation": True,
+            "image": "registry.example/sandbox@sha256:" + "b" * 64,
+            "cpus": 2,
+            "runtime_home_dir": str(tmp_path / "boxlite-runtime"),
+        },
+    ):
+        monkeypatch.setattr("deerflow.community.boxlite.provider.get_app_config", lambda attrs=attrs: _stub_config(attrs))
+        with pytest.raises(ValueError, match="Matrix-Law BoxLite isolation requires"):
+            BoxliteProvider()
+
+
+def test_matrix_law_release_stops_box_instead_of_parking(monkeypatch, tmp_path, fake_isolated_runtime):
+    """A legal thread VM and its guest disk are removed at release."""
+    monkeypatch.setattr(
+        "deerflow.community.boxlite.provider.get_app_config",
+        lambda: _stub_config(
+            {
+                "matrix_law_isolation": True,
+                "image": "registry.example/sandbox@sha256:" + "c" * 64,
+                "cpus": 1,
+                "memory_mib": 1024,
+                "runtime_home_dir": str(tmp_path / "boxlite-runtime"),
+            }
+        ),
+    )
+    provider = BoxliteProvider()
+    stopped = []
+
+    async def _stop():
+        stopped.append(True)
+
+    box = BoxliteBox("sandbox", box=types.SimpleNamespace(stop=_stop), run=_fake_run)
+    provider._boxes["sandbox"] = box
+    provider._active_box_identity["sandbox"] = ("user", "thread")
+
+    provider.release("sandbox")
+
+    assert stopped == [True]
+    assert "sandbox" not in provider._warm_pool
+    assert "sandbox" not in provider._boxes
+    provider.shutdown()
+
+
 def test_startup_reconciliation_adopts_prefixed_existing_boxes(monkeypatch):
     """Existing DeerFlow-named BoxLite boxes are adopted into the warm pool."""
     monkeypatch.setattr(
@@ -417,6 +586,12 @@ def test_startup_reconciliation_adopts_prefixed_existing_boxes(monkeypatch):
             raise AssertionError(f"unexpected box lookup: {name}")
 
     class _Boxlite:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            return _Runtime()
+
         @staticmethod
         def default():
             return _Runtime()
@@ -431,6 +606,90 @@ def test_startup_reconciliation_adopts_prefixed_existing_boxes(monkeypatch):
 
     provider.shutdown()
     assert stopped == ["adopted"]
+
+
+def test_matrix_law_startup_removes_stale_boxes_without_adopting(monkeypatch, tmp_path):
+    """A native legal-work restart removes guest disks left by the prior process."""
+    monkeypatch.setattr(
+        "deerflow.community.boxlite.provider.get_app_config",
+        lambda: _stub_config(
+            {
+                "matrix_law_isolation": True,
+                "image": "registry.example/sandbox@sha256:" + "d" * 64,
+                "cpus": 1,
+                "memory_mib": 1024,
+                "runtime_home_dir": str(tmp_path / "boxlite-runtime"),
+            }
+        ),
+    )
+    stopped = []
+
+    class _NativeBox:
+        async def stop(self):
+            stopped.append("stale")
+
+        async def remove(self):
+            pass
+
+    class _AsyncRuntime:
+        async def list_info(self):
+            return [
+                types.SimpleNamespace(id="stale-id", name="deer-flow-boxlite-stale"),
+                types.SimpleNamespace(id="other-id", name="unrelated-box"),
+            ]
+
+        async def get(self, box_id):
+            assert box_id == "stale-id"
+            return _NativeBox()
+
+        def close(self):
+            pass
+
+    async def _runtime(self):
+        return _AsyncRuntime()
+
+    monkeypatch.setattr(BoxliteProvider, "_create_isolated_runtime", _runtime)
+    provider = BoxliteProvider()
+
+    assert stopped == ["stale"]
+    assert provider._warm_pool == {}
+    provider.shutdown()
+
+
+def test_matrix_law_startup_fails_closed_when_stale_box_cleanup_fails(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "deerflow.community.boxlite.provider.get_app_config",
+        lambda: _stub_config(
+            {
+                "matrix_law_isolation": True,
+                "image": "registry.example/sandbox@sha256:" + "e" * 64,
+                "cpus": 1,
+                "memory_mib": 1024,
+                "runtime_home_dir": str(tmp_path / "boxlite-runtime"),
+            }
+        ),
+    )
+
+    class _AsyncRuntime:
+        async def list_info(self):
+            return [types.SimpleNamespace(id="stale-id", name="deer-flow-boxlite-stale")]
+
+        async def get(self, box_id):
+            async def _fail():
+                raise RuntimeError("stop failed")
+
+            return types.SimpleNamespace(stop=_fail)
+
+        def close(self):
+            pass
+
+    async def _runtime(self):
+        return _AsyncRuntime()
+
+    monkeypatch.setattr(BoxliteProvider, "_create_isolated_runtime", _runtime)
+
+    with pytest.raises(RuntimeError, match="Could not prove stale Matrix-Law BoxLite guests were removed"):
+        BoxliteProvider()
 
 
 def test_release_parks_in_warm_pool(monkeypatch):

@@ -179,6 +179,9 @@ def test_escapes_blocked_tag(tag):
 # test_denylist_covers_framework_authority_blocks pins the list against the
 # actual framework source so a newly added block cannot silently slip past.
 _FRAMEWORK_STRUCTURED_TAGS = [
+    "legal_work_rules",
+    "legal_workflow_context",
+    "tool_truth_rules",
     "soul",
     "self_update",
     "thinking_style",

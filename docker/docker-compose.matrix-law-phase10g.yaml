@@ -1,0 +1,50 @@
+name: matrix-law-phase10g
+
+services:
+  provider:
+    image: python:3.12-alpine
+    command: ["python", "/provider.py"]
+    environment:
+      PHASE10G_DB_PATH: /state/provider.db
+    volumes:
+      - ./matrix-law-phase10g/provider.py:/provider.py:ro
+      - provider-state:/state
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16777216,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2); raise SystemExit(0 if r.status == 200 else 1)"]
+      interval: 1s
+      timeout: 3s
+      retries: 20
+    networks: [phase10g]
+
+  verifier:
+    image: matrix-law-phase10f-gateway:verify
+    entrypoint: ["/app/backend/.venv/bin/python", "/verify.py"]
+    command: ["exercise"]
+    working_dir: /app/backend
+    environment:
+      PYTHONPATH: /app/backend
+      PYTHONIOENCODING: utf-8
+    volumes:
+      - ./matrix-law-phase10g/verify.py:/verify.py:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16777216,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    depends_on:
+      provider:
+        condition: service_healthy
+    networks: [phase10g]
+
+networks:
+  phase10g:
+
+volumes:
+  provider-state:

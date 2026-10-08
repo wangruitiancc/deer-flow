@@ -60,6 +60,37 @@ def checkpoint_cache_key_prefix(app_config: AppConfig) -> str:
     return f"ckpt-hist:v{CACHE_FORMAT_VERSION}:{checkpoint_cache_db_hash(app_config.database)}"
 
 
+def _resolve_inventory_redis_url(app_config: AppConfig) -> str:
+    """Resolve the exact Redis endpoint used by the checkpoint-cache writer."""
+    config = app_config.database.checkpoint_cache
+    return _resolve_redis_url(config)
+
+
+async def inventory_checkpoint_cache_namespace(
+    app_config: AppConfig,
+    *,
+    max_keys: int,
+    max_bytes: int,
+) -> list[dict[str, Any]]:
+    """Inventory current checkpoint-cache namespace without exporting values."""
+    from deerflow.runtime.checkpoint_cache.redis import RedisCheckpointHistoryCache
+
+    config = app_config.database.checkpoint_cache
+    cache = RedisCheckpointHistoryCache(
+        _resolve_inventory_redis_url(app_config),
+        serde=None,
+        ttl_seconds=config.ttl_seconds,
+    )
+    try:
+        return await cache.inventory_namespace(
+            checkpoint_cache_key_prefix(app_config),
+            max_keys=max_keys,
+            max_bytes=max_bytes,
+        )
+    finally:
+        await cache.aclose()
+
+
 @contextlib.asynccontextmanager
 async def make_checkpoint_cache(
     app_config: AppConfig | None = None,

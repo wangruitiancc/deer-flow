@@ -127,7 +127,12 @@ async def scan_skill_content(
     try:
         config = app_config or get_app_config()
         model_name = config.skill_evolution.moderation_model_name
-        model_kwargs = {"thinking_enabled": False, "app_config": config, "attach_tracing": attach_tracing}
+        model_kwargs = {
+            "thinking_enabled": False,
+            "app_config": config,
+            "attach_tracing": attach_tracing,
+            "purpose": "security_scan",
+        }
         model = create_chat_model(name=model_name, **model_kwargs) if model_name else create_chat_model(**model_kwargs)
         invoke_config: dict[str, Any] = {"run_name": "security_agent"}
         if attach_tracing:

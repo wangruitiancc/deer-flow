@@ -1,16 +1,21 @@
 "use client";
 
+import { ArrowRightIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 
+import {
+  AuthShell,
+  authFieldClassName,
+  authPrimaryButtonClassName,
+} from "@/components/auth/auth-shell";
 import { RememberSessionOption } from "@/components/auth/remember-session-option";
 import { Button } from "@/components/ui/button";
-import { FlickeringGrid } from "@/components/ui/flickering-grid";
 import { Input } from "@/components/ui/input";
 import { getCsrfHeaders } from "@/core/api/fetcher";
 import { useAuth } from "@/core/auth/AuthProvider";
 import { loadRememberLoginPreference } from "@/core/auth/remember-login";
+import { getAuthenticatedHomePath } from "@/core/auth/role-routing";
 import {
   fetchSetupStatus,
   isSystemAlreadyInitializedError,
@@ -23,69 +28,61 @@ type SetupMode = "loading" | "init_admin" | "change_password" | "unavailable";
 export default function SetupPage() {
   const router = useRouter();
   const { user, isAuthenticated } = useAuth();
-  const { theme, resolvedTheme } = useTheme();
   const { t } = useI18n();
   const [mode, setMode] = useState<SetupMode>("loading");
   const [setupStatusAttempt, setSetupStatusAttempt] = useState(0);
-
-  // --- Shared state ---
   const [email, setEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [rememberMe, setRememberMe] = useState(
     () => loadRememberLoginPreference().rememberMe,
   );
 
-  // --- Change-password mode only ---
-  const [currentPassword, setCurrentPassword] = useState("");
-
   useEffect(() => {
     let cancelled = false;
-
     if (isAuthenticated && user?.needs_setup) {
       setMode("change_password");
     } else if (!isAuthenticated) {
-      // Check if the system has no users yet. A slow Gateway must not leave the
-      // setup page in an infinite loading state or silently redirect away.
       setMode("loading");
       void fetchSetupStatus()
-        .then((data: { needs_setup?: boolean }) => {
+        .then((data) => {
           if (cancelled) return;
-          if (data.needs_setup) {
-            setMode("init_admin");
-          } else {
-            // System already set up and user is not logged in — go to login
-            router.replace("/login");
-          }
+          if (data.needs_setup) setMode("init_admin");
+          else router.replace("/login");
         })
         .catch(() => {
           if (!cancelled) setMode("unavailable");
         });
     } else {
-      // Authenticated but needs_setup is false — already set up
-      router.replace("/workspace");
+      if (user) router.replace(getAuthenticatedHomePath(user));
     }
-
     return () => {
       cancelled = true;
     };
-  }, [isAuthenticated, user, router, setupStatusAttempt]);
+  }, [isAuthenticated, router, setupStatusAttempt, user]);
 
-  // ── Init-admin handler ─────────────────────────────────────────────
-  const handleInitAdmin = async (e: React.SubmitEvent) => {
-    e.preventDefault();
-    setError("");
-
-    if (newPassword !== confirmPassword) {
-      setError("Passwords do not match");
-      return;
+  const validatePasswords = () => {
+    if (newPassword.length < 8) {
+      setError("密码至少需要 8 位字符。");
+      return false;
     }
+    if (newPassword !== confirmPassword) {
+      setError("两次输入的密码不一致。");
+      return false;
+    }
+    return true;
+  };
 
+  const handleInitAdmin = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError("");
+    if (!validatePasswords()) return;
     setLoading(true);
     try {
-      const res = await fetch("/api/v1/auth/initialize", {
+      const response = await fetch("/api/v1/auth/initialize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -95,48 +92,34 @@ export default function SetupPage() {
           remember_me: rememberMe,
         }),
       });
-
-      if (!res.ok) {
-        const data = await res.json();
+      if (!response.ok) {
+        const data = await response.json();
         if (isSystemAlreadyInitializedError(data)) {
           router.replace("/login");
           return;
         }
-        const authError = parseAuthError(data);
-        setError(authError.message);
+        setError(parseAuthError(data).message);
         return;
       }
-
-      router.push("/workspace");
+      router.push("/admin");
     } catch {
-      setError("Network error. Please try again.");
+      setError("无法连接服务器，请稍后重试。");
     } finally {
       setLoading(false);
     }
   };
 
-  // ── Change-password handler ────────────────────────────────────────
-  const handleChangePassword = async (e: React.SubmitEvent) => {
-    e.preventDefault();
+  const handleChangePassword = async (
+    event: React.FormEvent<HTMLFormElement>,
+  ) => {
+    event.preventDefault();
     setError("");
-
-    if (newPassword !== confirmPassword) {
-      setError("Passwords do not match");
-      return;
-    }
-    if (newPassword.length < 8) {
-      setError("Password must be at least 8 characters");
-      return;
-    }
-
+    if (!validatePasswords()) return;
     setLoading(true);
     try {
-      const res = await fetch("/api/v1/auth/change-password", {
+      const response = await fetch("/api/v1/auth/change-password", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...getCsrfHeaders(),
-        },
+        headers: { "Content-Type": "application/json", ...getCsrfHeaders() },
         credentials: "include",
         body: JSON.stringify({
           current_password: currentPassword,
@@ -145,205 +128,170 @@ export default function SetupPage() {
           remember_me: rememberMe,
         }),
       });
-
-      if (!res.ok) {
-        const data = await res.json();
-        const authError = parseAuthError(data);
-        setError(authError.message);
+      if (!response.ok) {
+        setError(parseAuthError(await response.json()).message);
         return;
       }
-
-      router.push("/workspace");
+      if (user) router.push(getAuthenticatedHomePath(user));
     } catch {
-      setError("Network error. Please try again.");
+      setError("无法连接服务器，请稍后重试。");
     } finally {
       setLoading(false);
     }
   };
 
-  const actualTheme = theme === "system" ? resolvedTheme : theme;
-
   if (mode === "loading") {
     return (
-      <div className="flex min-h-screen items-center justify-center">
-        <p className="text-muted-foreground text-sm">Loading…</p>
-      </div>
+      <AuthShell
+        title="正在检查系统状态"
+        subtitle="请稍候，正在准备管理员账户设置。"
+      >
+        <p role="status" className="text-sm text-[#667074]">
+          正在读取初始化状态…
+        </p>
+      </AuthShell>
     );
   }
 
   if (mode === "unavailable") {
     return (
-      <div className="flex min-h-screen items-center justify-center px-4">
-        <div className="w-full max-w-md space-y-4 text-center">
-          <div>
-            <h1 className="text-xl font-semibold">
-              {t.login.serviceUnavailableTitle}
-            </h1>
-            <p className="text-muted-foreground mt-2 text-sm">
-              {t.login.serviceUnavailableDescription}
-            </p>
-          </div>
-          <div className="flex justify-center gap-3">
-            <Button
-              type="button"
-              onClick={() => {
-                setMode("loading");
-                setSetupStatusAttempt((attempt) => attempt + 1);
-              }}
-            >
-              {t.login.retry}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => router.replace("/login")}
-            >
-              {t.login.signIn}
-            </Button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Admin initialization form ──────────────────────────────────────
-  if (mode === "init_admin") {
-    return (
-      <div className="bg-background flex min-h-screen items-center justify-center">
-        <FlickeringGrid
-          className="absolute inset-0 z-0 mask-[url(/images/deer.svg)] mask-size-[100vw] mask-center mask-no-repeat md:mask-size-[72vh]"
-          squareSize={4}
-          gridGap={4}
-          color={actualTheme === "dark" ? "white" : "black"}
-          maxOpacity={0.3}
-          flickerChance={0.25}
-        />
-        <div className="border-border/20 bg-background/5 w-full max-w-md space-y-6 rounded-3xl border p-8 backdrop-blur-sm">
-          <div className="text-center">
-            <h1 className="font-serif text-3xl">DeerFlow</h1>
-            <p className="text-muted-foreground mt-2">Create admin account</p>
-            <p className="text-muted-foreground mt-1 text-xs">
-              Set up the administrator account to get started.
-            </p>
-          </div>
-          <form onSubmit={handleInitAdmin} className="space-y-2">
-            <div className="flex flex-col space-y-1">
-              <label htmlFor="email" className="text-sm font-medium">
-                Email
-              </label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="you@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
-            </div>
-            <div className="flex flex-col space-y-1">
-              <label htmlFor="password" className="text-sm font-medium">
-                Password
-              </label>
-              <Input
-                id="password"
-                type="password"
-                placeholder="Password (min. 8 characters)"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                required
-                minLength={8}
-              />
-            </div>
-            <div className="flex flex-col space-y-1">
-              <label htmlFor="confirmPassword" className="text-sm font-medium">
-                Confirm Password
-              </label>
-              <Input
-                id="confirmPassword"
-                type="password"
-                placeholder="Confirm password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-                minLength={8}
-              />
-            </div>
-            <RememberSessionOption
-              checked={rememberMe}
-              onCheckedChange={setRememberMe}
-            />
-            {error && <p className="ms-1 text-sm text-red-500">{error}</p>}
-            <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "Creating account…" : "Create Admin Account"}
-            </Button>
-          </form>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Change-password form (needs_setup after login) ─────────────────
-  return (
-    <div className="bg-background flex min-h-screen items-center justify-center">
-      <FlickeringGrid
-        className="absolute inset-0 z-0 mask-[url(/images/deer.svg)] mask-size-[100vw] mask-center mask-no-repeat md:mask-size-[72vh]"
-        squareSize={4}
-        gridGap={4}
-        color={actualTheme === "dark" ? "white" : "black"}
-        maxOpacity={0.3}
-        flickerChance={0.25}
-      />
-      <div className="border-border/20 bg-background/5 w-full max-w-md space-y-6 rounded-3xl border p-8 backdrop-blur-sm">
-        <div className="text-center">
-          <h1 className="font-serif text-3xl">DeerFlow</h1>
-          <p className="text-muted-foreground mt-2">
-            Complete admin account setup
-          </p>
-          <p className="text-muted-foreground mt-1 text-xs">
-            Set your real email and a new password.
-          </p>
-        </div>
-        <form onSubmit={handleChangePassword} className="space-y-4">
-          <Input
-            type="email"
-            placeholder="Your email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-          <Input
-            type="password"
-            placeholder="Current password"
-            value={currentPassword}
-            onChange={(e) => setCurrentPassword(e.target.value)}
-            required
-          />
-          <Input
-            type="password"
-            placeholder="New password"
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-            required
-            minLength={8}
-          />
-          <Input
-            type="password"
-            placeholder="Confirm new password"
-            value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
-            required
-            minLength={8}
-          />
-          <RememberSessionOption
-            checked={rememberMe}
-            onCheckedChange={setRememberMe}
-          />
-          {error && <p className="text-sm text-red-500">{error}</p>}
-          <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? "Setting up…" : "Complete Setup"}
+      <AuthShell
+        title={t.login.serviceUnavailableTitle}
+        subtitle={t.login.serviceUnavailableDescription}
+      >
+        <div className="flex flex-wrap gap-3">
+          <Button
+            type="button"
+            className="bg-[#15523f] text-white hover:bg-[#123f32]"
+            onClick={() => {
+              setMode("loading");
+              setSetupStatusAttempt((attempt) => attempt + 1);
+            }}
+          >
+            {t.login.retry}
           </Button>
-        </form>
-      </div>
-    </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => router.replace("/login")}
+          >
+            {t.login.signIn}
+          </Button>
+        </div>
+      </AuthShell>
+    );
+  }
+
+  const changingPassword = mode === "change_password";
+  return (
+    <AuthShell
+      title={
+        changingPassword ? "完成管理员账户设置" : "初始化 Matrix-Law 管理员"
+      }
+      subtitle={
+        changingPassword
+          ? "设置真实工作邮箱和新密码后进入管理工作区。"
+          : "创建首个平台管理员账户，随后再配置租户和成员。"
+      }
+    >
+      <form
+        onSubmit={changingPassword ? handleChangePassword : handleInitAdmin}
+        className="space-y-5"
+      >
+        <div className="space-y-2">
+          <label htmlFor="setup-email" className="text-sm font-semibold">
+            工作邮箱
+          </label>
+          <Input
+            id="setup-email"
+            type="email"
+            autoComplete="email"
+            placeholder="请输入管理员工作邮箱"
+            value={email}
+            onChange={(event) => setEmail(event.currentTarget.value)}
+            className={authFieldClassName}
+            required
+          />
+        </div>
+
+        {changingPassword && (
+          <div className="space-y-2">
+            <label htmlFor="current-password" className="text-sm font-semibold">
+              当前密码
+            </label>
+            <Input
+              id="current-password"
+              type="password"
+              autoComplete="current-password"
+              placeholder="请输入当前密码"
+              value={currentPassword}
+              onChange={(event) =>
+                setCurrentPassword(event.currentTarget.value)
+              }
+              className={authFieldClassName}
+              required
+            />
+          </div>
+        )}
+
+        <div className="space-y-2">
+          <label htmlFor="new-password" className="text-sm font-semibold">
+            {changingPassword ? "新密码" : "密码"}
+          </label>
+          <Input
+            id="new-password"
+            type="password"
+            autoComplete="new-password"
+            placeholder="至少 8 位字符"
+            value={newPassword}
+            onChange={(event) => setNewPassword(event.currentTarget.value)}
+            className={authFieldClassName}
+            minLength={8}
+            required
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label htmlFor="confirm-password" className="text-sm font-semibold">
+            确认密码
+          </label>
+          <Input
+            id="confirm-password"
+            type="password"
+            autoComplete="new-password"
+            placeholder="请再次输入密码"
+            value={confirmPassword}
+            onChange={(event) => setConfirmPassword(event.currentTarget.value)}
+            className={authFieldClassName}
+            minLength={8}
+            required
+          />
+        </div>
+
+        <RememberSessionOption
+          checked={rememberMe}
+          onCheckedChange={setRememberMe}
+        />
+        {error && (
+          <p role="alert" className="text-sm text-red-600">
+            {error}
+          </p>
+        )}
+        <Button
+          type="submit"
+          className={authPrimaryButtonClassName}
+          disabled={loading}
+        >
+          <span>
+            {loading
+              ? "正在保存…"
+              : changingPassword
+                ? "完成设置"
+                : "创建管理员账户"}
+          </span>
+          {!loading && <ArrowRightIcon />}
+        </Button>
+      </form>
+    </AuthShell>
   );
 }

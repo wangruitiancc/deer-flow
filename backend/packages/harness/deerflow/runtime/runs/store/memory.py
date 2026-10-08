@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from deerflow.runtime.runs.store.base import LeaseRenewal, RunIdempotencyConflict, RunStore, StatusFinalization
+from deerflow.runtime.runs.store.base import LeaseRenewal, RunCapacityExceeded, RunIdempotencyConflict, RunStore, StatusFinalization
 
 
 class MemoryRunStore(RunStore):
@@ -39,6 +39,7 @@ class MemoryRunStore(RunStore):
         thread_id,
         assistant_id=None,
         user_id=None,
+        tenant_capacity_key=None,
         model_name=None,
         status="pending",
         operation_kind="run",
@@ -59,6 +60,7 @@ class MemoryRunStore(RunStore):
             "thread_id": thread_id,
             "assistant_id": assistant_id,
             "user_id": user_id,
+            "tenant_capacity_key": tenant_capacity_key,
             "model_name": model_name,
             "status": status,
             "operation_kind": operation_kind,
@@ -399,12 +401,16 @@ class MemoryRunStore(RunStore):
         multitask_strategy: str = "reject",
         assistant_id: str | None = None,
         user_id: str | None = None,
+        tenant_capacity_key: str | None = None,
         model_name: str | None = None,
         metadata: dict[str, Any] | None = None,
         kwargs: dict[str, Any] | None = None,
         created_at: str | None = None,
         grace_seconds: int = 10,
         idempotency_key: str | None = None,
+        max_active_global: int = 0,
+        max_active_per_tenant: int = 0,
+        max_active_per_user: int = 0,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         from deerflow.runtime.runs.manager import ConflictError
 
@@ -430,8 +436,8 @@ class MemoryRunStore(RunStore):
         # interrupted state on raise, diverging from SQL where a raise rolls
         # the whole transaction back.
         claimed = []
+        candidates: list[dict[str, Any]] = []
         if multitask_strategy in ("interrupt", "rollback"):
-            candidates: list[dict[str, Any]] = []
             for r in self._runs.values():
                 if r["thread_id"] != thread_id:
                     continue
@@ -461,6 +467,24 @@ class MemoryRunStore(RunStore):
                 if r.get("operation_kind", "run") != "run" and not lease_expired:
                     raise ConflictError(f"Thread {thread_id} has an active checkpoint write")
                 candidates.append(r)
+        excluded_ids = {candidate["run_id"] for candidate in candidates}
+        active_runs = [
+            item
+            for item in self._runs.values()
+            if item["status"] in ("pending", "running")
+            and item.get("operation_kind", "run") == "run"
+            and item["run_id"] not in excluded_ids
+        ]
+        if max_active_global and len(active_runs) >= max_active_global:
+            raise RunCapacityExceeded(scope="global", limit=max_active_global)
+        active_tenant = sum(item.get("tenant_capacity_key") == tenant_capacity_key for item in active_runs)
+        if tenant_capacity_key is not None and max_active_per_tenant and active_tenant >= max_active_per_tenant:
+            raise RunCapacityExceeded(scope="tenant", limit=max_active_per_tenant)
+        active_user = sum(item.get("user_id") == user_id for item in active_runs)
+        if max_active_per_user and active_user >= max_active_per_user:
+            raise RunCapacityExceeded(scope="user", limit=max_active_per_user)
+
+        if multitask_strategy in ("interrupt", "rollback"):
             for r in candidates:
                 r["status"] = "interrupted"
                 r["error"] = "Cancelled by newer run"
@@ -473,6 +497,7 @@ class MemoryRunStore(RunStore):
             "thread_id": thread_id,
             "assistant_id": assistant_id,
             "user_id": user_id,
+            "tenant_capacity_key": tenant_capacity_key,
             "model_name": model_name,
             "status": "pending",
             "operation_kind": operation_kind,

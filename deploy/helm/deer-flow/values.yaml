@@ -30,18 +30,38 @@ gateway:
                             # work (cancel/dedup/reconcile). Scheduler multi_instance
                              # recovery is safe only when its config prerequisites are met;
                              # max_concurrent_runs is shared across Pods in that mode.
-  # Pod termination grace period (seconds). MUST exceed the Gateway's graceful
-  # shutdown work: channel stop (~5s) + memory queue drain
-  # (memory.shutdown_flush_timeout_seconds, default 30s) + buffer. K8s defaults
-  # to 30s, which SIGKILLs the memory drain mid-flight and silently re-introduces
-  # the memory loss that shutdown_flush is fixing. Raise this when you raise the
-  # memory timeout. See gateway-deployment.yaml + README "Graceful shutdown".
-  terminationGracePeriodSeconds: 45
-  # preStop hook sleep (seconds) before SIGTERM, so the Service/ingress
-  # deregisters the pod and in-flight HTTP requests drain before graceful
-  # shutdown begins (which runs the memory queue drain). 0 disables the hook.
-  # Counts against terminationGracePeriodSeconds.
-  preStopSleepSeconds: 5
+  # Pod termination grace period (seconds). MUST include preStopSleepSeconds,
+  # channel/browser shutdown (up to ~10s), run drain (5s), memory queue drain
+  # (memory.shutdown_flush_timeout_seconds, default 30s), and safety buffer.
+  # K8s defaults to 30s, which can SIGKILL the process mid-drain. Raise this
+  # whenever any component budget grows. See the chart README.
+  terminationGracePeriodSeconds: 90
+  # preStop creates DEER_FLOW_GATEWAY_DRAIN_MARKER first, making /ready return
+  # 503, then waits this many seconds before SIGTERM. This lets EndpointSlice,
+  # Service, ingress, and external load balancers stop new routing while
+  # existing requests drain. 0 disables the hook. The wait counts against the
+  # termination grace period.
+  preStopSleepSeconds: 10
+  # Low-cardinality Prometheus endpoint on the internal Gateway Service.
+  # The application default is disabled outside Helm. Metrics never label
+  # tenant/user/thread ids or raw request paths.
+  metrics:
+    enabled: true
+    serviceMonitor:
+      # Requires the Prometheus Operator monitoring.coreos.com/v1 CRD.
+      enabled: false
+      interval: 15s
+      scrapeTimeout: 5s
+      additionalLabels: {}
+    prometheusRule:
+      # Requires the Prometheus Operator monitoring.coreos.com/v1 CRD.
+      enabled: false
+      forDuration: 10m
+      evaluationWindow: 5m
+      minimumRequestRate: 0.1
+      maximum5xxRatio: 0.05
+      maximumP99LatencySeconds: 10
+      additionalLabels: {}
   resources:
     requests:
       cpu: 200m
@@ -249,7 +269,7 @@ ingress:
 # -- DeerFlow config.yaml content. Secrets MUST stay as $VAR references — never
 #    inline literal secret values here. The default enables provisioner sandbox.
 config: |
-  config_version: 39
+  config_version: 42
   log_level: info
 
   models: []
@@ -276,6 +296,32 @@ config: |
     postgres_url: $DATABASE_URL
     pool_recycle: 300
     command_timeout: 30
+
+  # Initial fail-fast overload guard. It is enforced through PostgreSQL across
+  # all Gateway Pods; tune these values from production-equivalent load tests.
+  run_capacity:
+    max_active_global: 32
+    max_active_per_tenant: 8
+    max_active_per_user: 4
+    retry_after_seconds: 5
+
+  # Matrix Law is mandatory in this product fork. The chart's runnable default
+  # shares the host PostgreSQL pool; production-candidate values must switch to
+  # the dedicated RLS API/worker identities and inject both URLs as secrets.
+  plugins:
+    - name: matrix-law
+      package: matrix-law-extension
+      use: matrix_law_extension:install
+      enabled: true
+      required: true
+      table_prefix: law_
+      config:
+        api_prefix: /api/law
+        audit_payload_max_bytes: 8192
+        deployment_mode: vertical-slice
+        database:
+          enabled: false
+          schema_name: deerflow
 
   # The LangGraph Store (cross-thread memory + thread list) reads this legacy
   # `checkpointer:` section — it does NOT fall back to `database:` the way the

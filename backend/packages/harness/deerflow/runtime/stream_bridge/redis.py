@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import json
 import logging
@@ -12,7 +13,7 @@ from typing import Any
 
 try:
     from redis.asyncio import Redis
-    from redis.exceptions import RedisError, ResponseError
+    from redis.exceptions import RedisError, ResponseError, WatchError
 except ImportError:  # pragma: no cover - only hit when the optional extra is missing
     # ``redis`` is an optional extra (mirrors the ``postgres``/asyncpg path in
     # persistence/engine.py). This module is imported lazily from
@@ -189,6 +190,209 @@ class RedisStreamBridge(StreamBridge):
     async def stream_exists(self, run_id: str) -> bool:
         """Return whether Redis still has retained stream data for *run_id*."""
         return bool(await self._redis.exists(self._stream_key(run_id)))
+
+    async def readiness_probe(self) -> bool:
+        """Check Redis reachability without reading or writing application data."""
+        return bool(await self._redis.ping())
+
+    async def export_retained(self, run_id: str, *, max_entries: int, max_bytes: int) -> list[dict[str, Any]]:
+        """Return a bounded snapshot of the currently retained entries for one run.
+
+        Callers must derive ``run_id`` from an authorized durable record. This
+        method deliberately does not enumerate Redis keys. Stream TTL/trim may
+        have removed older history; the result is only the retained window.
+        """
+        if max_entries < 0 or max_bytes < 0:
+            raise ValueError("export limits must be non-negative")
+        key = self._stream_key(run_id)
+        first = await self._redis.xrange(key, min="-", max="+", count=1)
+        last = await self._redis.xrevrange(key, max="+", min="-", count=1)
+        if not first and not last:
+            return []
+        if not first or not last:
+            raise ValueError("retained stream changed during export")
+        first_id = self._decode(first[0][0])
+        tail_id = self._decode(last[0][0])
+
+        exported: list[dict[str, Any]] = []
+        used_bytes = 0
+        cursor = "-"
+        while True:
+            raw_entries = await self._redis.xrange(key, min=cursor, max=tail_id, count=1)
+            if not raw_entries:
+                break
+            raw_id, raw_fields = raw_entries[0]
+            event_id = self._decode(raw_id)
+            if len(exported) >= max_entries:
+                raise ValueError("retained stream exceeds export entry limit")
+            fields = self._normalise_fields(raw_fields)
+            kind = fields.get("kind")
+            if kind == _KIND_EVENT and set(fields) == {"kind", "event", "data"}:
+                item = {
+                    "id": event_id,
+                    "event": fields["event"],
+                    "data": self._decode_data(fields["data"]),
+                }
+            elif kind == _KIND_END and set(fields) == {"kind"}:
+                item = {"id": event_id, "kind": "end"}
+            else:
+                raise ValueError("retained stream entry has an unreviewed shape")
+            item_bytes = len(json.dumps(item, ensure_ascii=False, separators=(",", ":"), default=str).encode())
+            if used_bytes + item_bytes > max_bytes:
+                raise ValueError("retained stream exceeds export byte limit")
+            exported.append(item)
+            used_bytes += item_bytes
+            cursor = f"({event_id}"
+
+        first_after = await self._redis.xrange(key, min="-", max="+", count=1)
+        if not first_after or self._decode(first_after[0][0]) != first_id:
+            raise ValueError("retained stream changed during export")
+        return exported
+
+    async def delete_retained_many_if_unchanged(
+        self,
+        expected_fingerprints: Mapping[str, str],
+        *,
+        max_entries: int,
+        max_bytes: int,
+    ) -> int:
+        """Atomically delete a bounded set of run streams after fingerprint checks.
+
+        WATCH covers present and absent keys alike. Each stream is read again
+        while the watched transaction is open, then all keys are deleted in
+        one MULTI/EXEC so an interrupted tenant purge cannot leave a partial
+        set behind.
+        """
+        if max_entries < 0 or max_bytes < 0:
+            raise ValueError("delete limits must be non-negative")
+        if any(not isinstance(run_id, str) or not run_id for run_id in expected_fingerprints):
+            raise ValueError("run identifiers must not be blank")
+        if any(re.fullmatch(r"[0-9a-f]{64}", digest) is None for digest in expected_fingerprints.values()):
+            raise ValueError("retained stream fingerprints must be SHA-256 hex digests")
+        run_ids = sorted(expected_fingerprints)
+        if not run_ids:
+            return 0
+
+        keys = [self._stream_key(run_id) for run_id in run_ids]
+        total_entries = 0
+        total_bytes = 0
+        try:
+            async with self._redis.pipeline(transaction=True) as pipe:
+                await pipe.watch(*keys)
+                for run_id in run_ids:
+                    entries = await self.export_retained(
+                        run_id,
+                        max_entries=max_entries - total_entries,
+                        max_bytes=max_bytes - total_bytes,
+                    )
+                    encoded = (
+                        json.dumps(
+                            entries,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            allow_nan=False,
+                            default=str,
+                        )
+                        + "\n"
+                    ).encode("utf-8")
+                    digest = hashlib.sha256(encoded).hexdigest()
+                    if digest != expected_fingerprints[run_id]:
+                        raise ValueError("retained stream fingerprint changed")
+                    total_entries += len(entries)
+                    total_bytes += len(encoded)
+                    if total_entries > max_entries or total_bytes > max_bytes:
+                        raise ValueError("retained streams exceed delete limits")
+
+                pipe.multi()
+                pipe.delete(*keys)
+                await pipe.execute()
+        except WatchError as exc:
+            raise ValueError("retained stream fingerprint changed during delete") from exc
+        return total_entries
+
+    async def export_unmapped_retained(
+        self,
+        known_run_ids: set[str],
+        *,
+        max_entries: int,
+        max_streams: int,
+        max_bytes: int,
+        max_scan_batches: int = 2048,
+    ) -> list[dict[str, Any]]:
+        """Export retained streams under this bridge prefix absent from durable run rows.
+
+        This is tenant-wide recovery data, not matter attribution. Callers must
+        only use it for an owner-authorized tenant export. Redis SCAN and stream
+        reads are not atomic with the database or concurrent writers; the
+        returned key fingerprints support a later compare-before-purge plan.
+        """
+        if max_entries < 0 or max_streams < 0 or max_bytes < 0:
+            raise ValueError("export limits must be non-negative")
+        if max_scan_batches < 1 or max_scan_batches > 2048:
+            raise ValueError("unmapped Redis scan batch limit is invalid")
+
+        pattern = f"{self._key_prefix}:*"
+        records: list[dict[str, Any]] = []
+        entries_used = 0
+        bytes_used = 0
+        seen_run_ids: set[str] = set()
+        cursor = 0
+        scan_batches = 0
+        while True:
+            cursor, raw_keys = await self._redis.scan(cursor=cursor, match=pattern, count=500)
+            for raw_key in raw_keys:
+                key = self._decode(raw_key)
+                if not key.startswith(f"{self._key_prefix}:"):
+                    raise ValueError("Redis SCAN returned a key outside the reviewed prefix")
+                run_id = key[len(self._key_prefix) + 1 :]
+                if not run_id:
+                    raise ValueError("Redis stream key has no run identifier")
+                if run_id in known_run_ids or run_id in seen_run_ids:
+                    continue
+                if len(records) >= max_streams:
+                    raise ValueError("unmapped Redis streams exceed export limits")
+                seen_run_ids.add(run_id)
+                remaining_entries = max_entries - entries_used
+                if remaining_entries < 0:
+                    raise ValueError("unmapped Redis streams exceed export limits")
+
+                raw_type = await self._redis.type(key)
+                key_type = self._decode(raw_type).lower()
+                if key_type != "stream":
+                    raise ValueError("unmapped Redis prefix contains an unreviewed key type")
+                entries = await self.export_retained(
+                    run_id,
+                    max_entries=remaining_entries,
+                    max_bytes=max_bytes - bytes_used,
+                )
+                if not await self._redis.exists(key):
+                    raise ValueError("unmapped Redis stream changed during export")
+                entry_bytes = len(self._encode_data(entries).encode("utf-8"))
+                entries_used += len(entries)
+                bytes_used += entry_bytes
+                if entries_used > max_entries or bytes_used > max_bytes:
+                    raise ValueError("unmapped Redis streams exceed export limits")
+                serialized_entries = self._encode_data(entries).encode("utf-8")
+                records.append(
+                    {
+                        "run_id": run_id,
+                        "entry_count": len(entries),
+                        "entries": entries,
+                        "purge_plan": {
+                            "key_sha256": hashlib.sha256(key.encode("utf-8")).hexdigest(),
+                            "expected_entry_count": len(entries),
+                            "entries_sha256": hashlib.sha256(serialized_entries).hexdigest(),
+                            "status": "planned_not_executed",
+                        },
+                    }
+                )
+            scan_batches += 1
+            if cursor == 0:
+                break
+            if scan_batches >= max_scan_batches:
+                raise ValueError("unmapped Redis scan exceeds scan work limit")
+        return records
 
     async def _resolve_start_stream_id(self, key: str, last_event_id: str | None) -> str:
         if last_event_id is None:

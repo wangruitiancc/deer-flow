@@ -658,7 +658,7 @@ async def task_tool(
       available when host bash is explicitly allowed or when using an isolated shell
       sandbox such as `AioSandboxProvider`. Use it only for a bounded shell workflow
       with clear context-isolation or independent-parallel benefit.
-      Routine git, build, test, or deploy operations are not sufficient reason to delegate.
+      Routine commands are not sufficient reason to delegate.
 
     Additional custom subagent types may be defined in config.yaml under
     `subagents.custom_agents`. Each custom type can have its own system prompt,

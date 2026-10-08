@@ -71,6 +71,18 @@ def client(mock_app_config, tmp_path):
         return DeerFlowClient()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_default_checkpointer(monkeypatch):
+    """Keep embedded-client unit tests independent from local config.yaml."""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    checkpointer = InMemorySaver()
+    monkeypatch.setattr(
+        "deerflow.runtime.checkpointer.get_checkpointer",
+        lambda: checkpointer,
+    )
+
+
 @pytest.fixture
 def allow_skill_security_scan():
     async def _scan(*args, **kwargs):

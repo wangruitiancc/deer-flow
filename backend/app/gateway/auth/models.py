@@ -30,6 +30,10 @@ class User(BaseModel):
     # Auth lifecycle
     needs_setup: bool = Field(default=False, description="True when a reset account must complete setup")
     token_version: int = Field(default=0, description="Incremented on password change to invalidate old JWTs")
+    mfa_enabled: bool = Field(default=False, description="Whether local administrator TOTP is active")
+    mfa_secret_ciphertext: str | None = Field(None, description="Encrypted local administrator TOTP secret")
+    mfa_last_counter: int = Field(default=-1, description="Newest TOTP step already accepted")
+    mfa_challenge_id: str | None = Field(None, description="Single active short-lived MFA challenge id")
 
 
 class UserResponse(BaseModel):

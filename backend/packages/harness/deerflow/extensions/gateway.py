@@ -19,8 +19,9 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from deerflow_extension_api import ExtensionRuntimeDeps
+from deerflow_extension_api import BackgroundWorkerMetrics, ExtensionRuntimeDeps
 
+from deerflow.extensions.artifacts import create_output_bytes, create_output_text, present_output_files, read_output_text, read_uploaded_bytes
 from deerflow.extensions.loader import Diagnostic
 from deerflow.extensions.policy import project_host_policy
 from deerflow.extensions.registry import LoadedExtensions
@@ -44,12 +45,20 @@ _HOST_PUBLIC_PATH_PREFIXES = (
 )
 _HOST_PUBLIC_EXACT_PATHS = frozenset(
     {
+        "/metrics",
+        "/ready",
         "/api/v1/auth/login/local",
+        "/api/v1/auth/mfa/setup",
+        "/api/v1/auth/mfa/setup/confirm",
+        "/api/v1/auth/mfa/verify",
         "/api/v1/auth/register",
         "/api/v1/auth/logout",
         "/api/v1/auth/setup-status",
         "/api/v1/auth/initialize",
         "/api/v1/auth/providers",
+        "/api/v1/auth/password-reset/status",
+        "/api/v1/auth/password-reset/request",
+        "/api/v1/auth/password-reset/complete",
     }
 )
 _HOST_CSRF_EXEMPT_EXACT_PATHS = frozenset({"/api/v1/auth/me"})
@@ -577,6 +586,7 @@ async def start_services(
     app_config: Any,
     session_factory: Any | None,
     *,
+    worker_metrics: BackgroundWorkerMetrics | None = None,
     attempted_services: list[tuple[str, Any]] | None = None,
 ) -> list[Diagnostic]:
     """Start extension services in registration order, failing open per item."""
@@ -584,10 +594,19 @@ async def start_services(
     if not extensions.services:
         return diagnostics
 
+    from deerflow.config.paths import get_paths
+
     deps = ExtensionRuntimeDeps(
         app_store=extensions.app_store,
         policy=project_host_policy(app_config),
         session_factory=session_factory,
+        read_output_text=read_output_text,
+        create_output_text=create_output_text,
+        present_output_files=present_output_files,
+        read_uploaded_bytes=read_uploaded_bytes,
+        create_output_bytes=create_output_bytes,
+        worker_metrics=worker_metrics,
+        workspace_root=get_paths().base_dir,
     )
     for entry in extensions.services:
         source, service = entry

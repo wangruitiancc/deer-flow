@@ -137,9 +137,10 @@ entry, the manager owns the controlled locked sync.
 
 The public package is `packages/extension-api/` and must never import `deerflow` or carry
 framework dependencies. Extensions declare any FastAPI, LangChain, or LangGraph imports
-themselves. Its registry contract exposes seven contribution kinds: middleware
-contributors, task-lifecycle contributors, system-model-call observers, agent-assembly
-observers, context-compaction observers, Gateway-lifetime services, and eager routers. Middleware contributions declare lead/subagent scope, stable
+themselves. Its registry contract exposes nine contribution kinds: middleware
+contributors, fail-closed task-admission contributors, task-lifecycle contributors,
+system-model-call observers, agent-assembly observers, context-compaction observers,
+Gateway-lifetime services, invite-only account-claim handlers, and eager routers. Middleware contributions declare lead/subagent scope, stable
 order, and a semantic placement (`MODEL_LOGICAL`, `MODEL_PHYSICAL`, `TOOL_VISIBLE`,
 `TOOL_RAW`, or `STANDARD`) rather than a fragile list index. `extensions/stack.py` is the
 single final composition point; do not inject inside
@@ -199,7 +200,7 @@ both sides when the extension must observe both synchronous and asynchronous exe
 paths.
 
 Lead runs and subagents allocate an `ExtensionData` task store only when middleware,
-task-lifecycle, or system-model observation is registered; services and routers are
+task admission, task-lifecycle, or system-model observation is registered; services and routers are
 app-scoped and do not allocate one. Middleware and system-call sites recover the
 live store through `EXTENSION_TASK_STORE_KEY` / `task_store_from_runtime()`; lifecycle
 contributors receive that same store directly. Each task resolves the immutable
@@ -215,7 +216,14 @@ written after the caller merge and popped when the run has none, so a caller-sup
 is never authoritative. Absent the key — embedded `DeerFlowClient`, standalone LangGraph
 Server — the executor keeps its `get_loaded_extensions()` fallback.
 
-The lead worker awaits `on_task_start` after the run has started and awaits `on_task_stop`
+The lead worker first awaits every `admit_task` contributor after the run has started but
+before agent construction or execution. Admission contributors receive the server-owned
+`TaskInfo.user_id`; exceptions, timeouts, and extension-loop dispatch failures propagate
+and terminalize the task. This hook is the extension surface for security-sensitive
+context validation. It is intentionally separate from the fail-open lifecycle pipeline.
+Subagents with a parent run use the same admission path and inherited server user.
+
+The lead worker awaits `on_task_start` after successful admission and awaits `on_task_stop`
 after completion persistence/hooks but before clearing any active finalizing barrier or
 publishing the stream end. A subagent with a parent `run_id` wraps its execution with the
 same start/stop pair. Outcomes are conservative (`completed`, `aborted`, or `failed`),
@@ -283,6 +291,47 @@ through the exit stack. Runtime diagnostics must be appended through
 `record_runtime_diagnostics()` so `app.state.extension_diagnostics` remains the canonical
 live list.
 
+`ExtensionRuntimeDeps.read_output_text(runtime, path, max_bytes)` is an optional async
+host capability for complete UTF-8 output inspection. It reuses native present-files path
+normalization, sandbox authorization/acquisition and off-thread reads. It does not use
+display truncation; the byte budget is checked after provider I/O, not an allocation cap.
+No immutable snapshot or legal approval is implied. Consumers must handle missing readers
+and read failures explicitly; domain validation belongs to their extension, not this host port.
+
+`ExtensionRuntimeDeps.create_output_text(runtime, content, suffix)` is an optional native
+output creation port. It accepts bounded UTF-8 text and .md/.txt/.json, not a target path;
+the host generates a UUID filename in the current thread's outputs. Sandbox authorization,
+async acquisition, off-thread local path resolution, per-file locking and read-back verification
+are reused. A preexisting target or uncertain absence fails closed. The lock is process-local,
+not distributed exclusive creation; failure/cancellation may leave an unpresented draft.
+Byte creation uses existing Sandbox.update_file and binary read-back, not model text write/read
+that can translate newlines or content paths. Local read-back uses the validated resolved host path;
+remote read-back uses download_file. Preserve BOM/CRLF/literal paths; never claim a normalized read is exact bytes.
+This port does not publish files, save project versions, run domain authorization or provide
+cross-system transactions/replay safety. Domain tools must reauthorize before calling and
+declare their write/replay policy. Matrix Law does that with GENERATE_DOCUMENT and forbid.
+Its packaged template_assets must match the authoritative Skill assets byte-for-byte;
+the six built-ins are read-only and do not provide tenant-custom CRUD or legal approval.
+`present_output_files(runtime, paths)` invokes the actual native `present_files` tool
+with callbacks and returns its Command. Returning a look-alike artifacts state update
+alone does not satisfy the worker's present_files delivery receipt. Domain validation
+remains caller-owned (Matrix Law uses this only for its verified new Markdown draft).
+
+`read_uploaded_bytes(runtime, path, max_bytes)` and `create_output_bytes(runtime, bytes, suffix)`
+are optional host capabilities, not new model-facing tools. Upload reads require an exact virtual
+uploads path and a state bucket matching native user/thread identity. Local POSIX reads reject
+hidden components, traversal, symlinks (including post-validation swaps) and nonregular files,
+and read at most budget + 1 bytes off-thread. Remote reads use native download_file and its
+provider boundaries; byte limits are checked after download. Do not claim local no-follow or
+allocation guarantees for remote providers without separate provider verification.
+Binary outputs reuse the existing UUID/authorization/lifecycle/lock/update_file/read-back path,
+accept safe compound suffixes, and cap at 16 MiB plus the native write budget (80 KiB by default).
+Larger legal imports require explicit operator budget configuration, not bypassing that limit.
+The existing text port retains its three suffixes and 64 KiB cap. Neither port validates legal
+reports, reauthorizes a legal project after I/O, publishes files or automatically saves versions.
+Session 56 adds these source-only ports; session 57 wires the managed legal import tool described
+below. Paired deployment and strict real-model acceptance remain pending; unit tests are not migration success.
+
 Routers are constructed eagerly during `install()` and mounted only after all host routes,
 so host handlers always win. The Gateway rejects a contributed router atomically when an
 earlier host or extension route provably covers one of its paths for the same HTTP method.
@@ -295,7 +344,8 @@ WebSocket routes are rejected until the host can supply authentication and Origi
 Because `include_router()` recompiles contributed routes, preflight projects the converter
 registry at include time. Nonstandard converters fail closed against reserved security
 paths but otherwise prove a shadow only when their normalized matchers are identical.
-Host authentication- and CSRF-exempt paths are reserved, and contributed Mounts, unsupported
+Host authentication- and CSRF-exempt paths are reserved, including the exact public `/ready`
+endpoint used for fail-closed orchestration readiness; contributed Mounts, unsupported
 route items, startup/shutdown hooks, and custom router lifespans are rejected; lifetime
 resources must use `ExtensionService`. Auth and CSRF classify
 `get_request_route_path(request)`, the same root-path-adjusted ASGI path Starlette routes
@@ -351,3 +401,115 @@ that the current host silently ignores.
 `test_extension_manager.py` creates temporary Git repositories for local extension sources.
 Temporary commits use an empty repository-local hook directory. They must not run developer or CI Git hooks.
 Tests for hook behavior must create and invoke their own hook fixtures.
+
+### Managed Matrix Law snapshot
+
+Session 57 adds `law_import_authorities(files)` over the optional native byte ports. Legal code
+cross-checks the complete frontend-v1 conversion report, original UTF-8 bytes/records, every mapping,
+stable ID, body/duplicate counts and output digest; it does not rewrite files or invent law/date fields.
+Use LegalSourceReader's admitted task, GENERATE_DOCUMENT and minimal audits; reauthorize after both
+reads, parsing and each write, then use fresh admission for actual native presentation. Neither
+successful format validation nor a digest is legal verification/approval. No automatic project save,
+no text-tool fallback, no replay safety or distributed rollback; failure can leave drafts, and an audit
+failure after native publication cannot retract its callback receipt. File bytes are checked at creation,
+not frozen against later edits. The model sees only two uploaded virtual paths, never scope overrides.
+This source-only increment passed real PostgreSQL/NOBYPASSRLS/native ToolNode with synthetic IO/model,
+and a real frontend converter parity check. Frontend handoff wording, budget configuration, paired
+images and strict live acceptance remain pending; 2035 is not upgraded by snapshot installation.
+
+Session 52 extends the authority v1 contract with legacy_reference sources and reference_only
+entries whose text is explicitly null. Require legacy_import, an original record without body,
+and a matching source provenance; do not invent placeholder text or loosen ordinary text rules.
+Legacy optional articleId/text/source preserve absent/null/empty/blank values within strict
+Unicode/size/field limits. Source paths and seed IDs remain inert, never citation authority.
+Frontend conversion retains all records and a byte-preserving report, but UI/native delivery
+is not yet connected. Paired extension/frontend rollout is required; no database migration
+or deployment follows from refreshing the package. Full version continuity remains pending.
+
+Session 49 adds source-only `.law-authorities.json` drafts using existing legal_research artifacts,
+not a new storage table or Agent. Native schema/validation tools use admitted scope/READ/audit;
+configured enforcement validates current file bytes before native publication, including mixed graph/authority
+batches. Save independently validates matching filename/source suffix, JSON kind/schema and project citation
+identity before existing scanning/version persistence. Keep ordinary Markdown legal research compatible.
+Hashes prove only payload consistency; URLs, completeness and legal analysis are unverified assertions.
+Only unreviewed/unverified draft states are accepted, not forged approvals. Publication diagnostics are not
+authorization or official-source receipts. Dedicated UI, full favorite history, official verification and
+legacy-reference import remain pending; no new runtime deployment is implied by snapshot refresh.
+
+Session 48 adds the source-only `law_search_common_laws` tool and authenticated
+`/api/law/common-law-catalog`. These search ten bundled legacy excerpts, not the web or a current
+statute database. Preserve IDs/text and legacy literal/JS-trim semantics; never fabricate official URLs,
+versions, validity or applicability. The native tool uses LegalSourceReader admission/READ/audit;
+off-thread bounded catalog loading is read_only/safe. The HTTP catalog contains no project references.
+Official-source verification, native right-panel authority artifacts and legacy favorites import remain pending.
+
+Session 47 supersedes the older deployment notes below: isolated 2035 runs template drafts plus the
+management frontend, including blank creation, Markdown import, archive/rename/restore and selected-version
+organization copies. Real API/scanning/browser checks and two synthetic real-model workflows passed;
+this is not full role coverage or legal-quality acceptance. 2030 is stopped and not upgraded.
+
+The extension head is `0016_custom_templates` (25 domain tables). Isolated 2035 was frozen,
+restore-rehearsed and upgraded to 0016; 2030 remains at 0015. Freeze the current candidate
+before further deployment; never blindly restore the old baseline over newer user writes.
+Template Markdown is bounded inert tenant data, never an operator-owned Skill. Personal history
+is owner-only, shared writes require owner/admin, publication copies one selected immutable version,
+and deletion is recoverable archival. Seven extension-owned tenant template routes now wrap the repository
+with public identity, LawApiRuntime audit/transactions, idempotency and exact-byte scanning.
+Reads reauthorize after scanning; replay rechecks write access and stores only IDs/revisions.
+The native picker, exact copy, editor and explicit template/project saves passed one real-model
+desktop synthetic workflow on 2035. Legacy template import subsequently shipped in session 47;
+complete legacy-project migration remains pending. No new Agent runtime.
+
+Custom template tools discover active metadata and open one explicitly selected immutable
+version with native output creation/publication. Scope comes only from admitted task identity; scan and
+reauthorization fence awaited I/O. Copying an accessible shared template is distinct from updating it;
+only document-generating project roles may create a copy. The copy leaves placeholders unchanged, returns
+source ID/version/SHA, and has local_write/replay=forbid. Native editor Save-as-template is separate.
+`law_create_custom_template_draft` (deployed on isolated 2035) substitutes explicit display values with
+legacy placeholder/date syntax. Never infer server time/timezone/seconds or evaluate expressions;
+unknown variables stay literal, absent time components become 待填写, output overflow fails closed.
+Scan source and rendered bytes; reauthorize after awaits. Use off-thread bounded rendering, native
+file creation/presentation and separate source/output digests; do not put submitted values in receipts.
+No automatic library/project save. Rendering UI/deployment and individual Markdown import are available
+on the session 47 candidate; full project import and production acceptance remain pending.
+
+`backend/extensions/sources/matrix-law-extension/` is a deployable snapshot whose authority
+lives in the sibling `matrix-law-deerflow` repository. Its evidence persistence layer keeps
+file bytes, credentials, and signed URLs behind a provider-neutral storage port; PostgreSQL
+stores only tenant/matter-scoped immutable version metadata. `law_evidence_versions` is
+append-only at both repository and PostgreSQL-trigger layers. Do not add host-internal imports,
+physical evidence deletion, or storage-provider logic outside the provider-neutral adapter boundary.
+
+Matrix Law enforcement must be explicitly configured through the existing
+`extensions.middlewares: [matrix_law_extension.runtime.enforcement:LawEnforcementMiddleware]`
+entry point. Observer contributions ignore returned request/result replacements and cannot
+block tools. The native configured middleware retrieves its service from the admitted task
+store (no process-global service), applies the legal model policy, and validates each
+`.law-graph.json` before native publication. Read/validation failures return error ToolMessages;
+missing task services and genuine cancellation propagate. The sync graph path rejects publication.
+Installing the package without that operator configuration does not enable enforcement.
+Its SHA receipt is diagnostic only, never reusable authorization or human-review evidence.
+Ordinary file writes/edits and non-graph publication retain native behavior; project saves
+remain independently authorized/scanned. This is a publication-time check, not an immutable
+file or protection from later edits/concurrent external file mutation.
+
+The Matrix Law C2B snapshot now includes its own provider-neutral S3-compatible adapter, clamd
+scanner, evidence routes, and retention/legal-hold deletion worker; this remains extension-owned
+code and must not add storage/scanner dependencies or credentials to DeerFlow core. Credentials
+come only from `MATRIX_LAW_S3_*` environment variables. Uploads claim idempotency after matter
+authorization, stream through byte-size and SHA-256 verification, require a clean scan before the
+business transaction commits, and register compensation so a later scan/database/audit failure
+removes the UUID-keyed object. Downloads reauthorize every request and recheck scan, deletion, and
+object metadata. Archive remains metadata-only; physical deletion requires a due retention policy,
+no legal hold, a leased job, and a final row-locked recheck. Production-candidate storage must use
+AES256 or aws:kms and fail closed when persisted encryption is absent. Because a managed source
+snapshot is installed rather than editable, changing it without changing the distribution version
+requires a locked `--reinstall-package matrix-law-extension`; preserve the configured database
+extra when refreshing the environment.
+
+`ExtensionRuntimeDeps.worker_metrics` is an optional host-owned, thread-safe recorder for
+background worker batches and aggregate queue observations. It accepts only fixed worker names,
+batch count/duration/error state, and queue depth/oldest age; never add tenant, matter, membership,
+user, task, provider endpoint, or credential values. Failed snapshots preserve the last successful
+gauges and increment an identity-free error counter. Metrics are scraped only through the Gateway's
+loopback `/metrics` route, remain opt-in, and must not affect task success if reading or recording fails.

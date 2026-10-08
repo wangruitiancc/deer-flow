@@ -1,11 +1,13 @@
 import asyncio
 import logging
+import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from deerflow_extension_api import EXTENSION_PRINCIPAL_RESOLVER_KEY, ExtensionPrincipal
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
 
 from app.gateway.auth_disabled import AUTH_SOURCE_INTERNAL, AUTH_SOURCE_PAT, warn_if_auth_disabled_enabled
 from app.gateway.auth_middleware import AuthMiddleware
@@ -13,6 +15,14 @@ from app.gateway.browser_capability import ensure_browser_runtime_available
 from app.gateway.config import get_gateway_config
 from app.gateway.csrf_middleware import CORS_EXPOSED_HEADERS, CSRFMiddleware, get_configured_cors_origins
 from app.gateway.deps import langgraph_runtime
+from app.gateway.readiness import (
+    gateway_lifecycle_status,
+    gateway_readiness_status,
+    mark_gateway_not_ready,
+    mark_gateway_ready,
+    prepare_gateway_startup,
+    probe_gateway_dependencies,
+)
 from app.gateway.routers import (
     agents,
     artifacts,
@@ -70,16 +80,17 @@ _RETRIEVAL_WARM_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 
 
 async def _ensure_admin_user(app: FastAPI) -> None:
-    """Startup hook: handle first boot and migrate orphan threads otherwise.
+    """Bootstrap the configured platform administrator and migrate orphan threads.
 
     After admin creation, migrate orphan threads from the LangGraph
     store (metadata.user_id unset) to the admin account. This is the
     "no-auth → with-auth" upgrade path: users who ran DeerFlow without
     authentication have existing LangGraph thread data that needs an
     owner assigned.
-        First boot (no admin exists):
-            - Does NOT create any user accounts automatically.
-            - The operator must visit ``/setup`` to create the first admin.
+    First boot creates an administrator only when both
+    ``DEERFLOW_BOOTSTRAP_ADMIN_EMAIL`` and
+    ``DEERFLOW_BOOTSTRAP_ADMIN_PASSWORD`` are configured. Deployments without
+    those values retain the interactive ``/setup`` fallback.
 
     Subsequent boots (admin already exists):
       - Runs the one-time "no-auth → with-auth" orphan thread migration for
@@ -111,11 +122,33 @@ async def _ensure_admin_user(app: FastAPI) -> None:
     admin_count = await provider.count_admin_users()
 
     if admin_count == 0:
-        logger.info("=" * 60)
-        logger.info("  First boot detected — no admin account exists.")
-        logger.info("  Visit /setup to complete admin account creation.")
-        logger.info("=" * 60)
-        return
+        bootstrap_email = os.getenv("DEERFLOW_BOOTSTRAP_ADMIN_EMAIL", "").strip()
+        bootstrap_password = os.getenv("DEERFLOW_BOOTSTRAP_ADMIN_PASSWORD", "")
+        if bootstrap_email and bootstrap_password:
+            try:
+                bootstrap = auth.InitializeAdminRequest(
+                    email=bootstrap_email,
+                    password=bootstrap_password,
+                    remember_me=True,
+                )
+                await provider.create_user(
+                    email=str(bootstrap.email),
+                    password=bootstrap.password,
+                    system_role="admin",
+                    needs_setup=False,
+                )
+            except ValueError as exc:
+                raise RuntimeError("Configured bootstrap administrator conflicts with an existing account") from exc
+            logger.info("Created configured platform administrator %s", bootstrap.email)
+            admin_count = 1
+        elif bootstrap_email or bootstrap_password:
+            raise RuntimeError("DEERFLOW_BOOTSTRAP_ADMIN_EMAIL and DEERFLOW_BOOTSTRAP_ADMIN_PASSWORD must be configured together")
+        else:
+            logger.info("=" * 60)
+            logger.info("  First boot detected — no admin account exists.")
+            logger.info("  Visit /setup to complete admin account creation.")
+            logger.info("=" * 60)
+            return
 
     # Admin already exists — run orphan thread migration for any
     # LangGraph thread metadata that pre-dates the auth module.
@@ -194,6 +227,12 @@ async def _warm_memory_retrieval(manager) -> None:
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler."""
 
+    # Liveness only proves that the process can answer HTTP. Readiness remains
+    # fail-closed until every startup dependency below has initialized. A
+    # container-local preStop marker is cleared here so a same-container
+    # process restart cannot inherit an earlier drain state.
+    prepare_gateway_startup(app)
+
     # Load config and check necessary environment variables at startup.
     # `startup_config` is a local snapshot used only for one-shot bootstrap
     # work (logging level, langgraph_runtime engines, channels). Request-time
@@ -203,6 +242,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # snapshot on `app.state` to keep that contract enforceable.
     try:
         startup_config = get_app_config()
+        from app.gateway.legal_run_admission import validate_matrix_law_runtime_config
+
+        validate_matrix_law_runtime_config(startup_config)
         from deerflow.config.subagent_batches_config import SubagentBatchesConfig
         from deerflow.config.subagent_runtime_config import SubagentRuntimeConfig
         from deerflow.subagents.capacity import configure_subagent_execution_capacity
@@ -351,6 +393,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         from app.mcp_tasks import McpTaskService
         from deerflow.config.extensions_config import ExtensionsConfig
         from deerflow.config.mcp_tasks_config import McpTasksConfig
+        from deerflow.mcp.controlled import MANAGED_MCP_TASK_DRIVER, ControlledMcpTaskDriver
         from deerflow.mcp.task_tool_caller import McpTaskToolCaller
         from deerflow.mcp.tasks import (
             ORDINARY_MCP_TASK_DRIVER,
@@ -377,6 +420,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         if mcp_task_repo is not None:
             mcp_task_drivers = McpTaskDriverRegistry()
+            # This driver has no local transport/config dependency. A managed
+            # task without a retained extension runtime fails closed in-driver.
+            mcp_task_drivers.register(MANAGED_MCP_TASK_DRIVER, ControlledMcpTaskDriver())
             if configured_task_toolset_count(task_extensions_config):
                 mcp_task_drivers.register(
                     ORDINARY_MCP_TASK_DRIVER,
@@ -427,7 +473,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 set_subagent_batch_submitter(batch_service)
                 app.state.subagent_batches_available = True
 
-        yield
+        mark_gateway_ready(app)
+        try:
+            yield
+        finally:
+            # Flip readiness before any potentially long shutdown hook. This
+            # covers ordinary SIGTERM; the Helm preStop marker performs the
+            # same transition before SIGTERM so endpoint propagation has a
+            # configurable drain window.
+            mark_gateway_not_ready(app)
 
         try:
             await auth.close_oidc_service()
@@ -581,31 +635,16 @@ def create_app() -> FastAPI:
         Configured FastAPI application instance.
     """
     config = get_gateway_config()
+    from app.gateway.legal_run_admission import matrix_law_product_required
+
+    product_required = matrix_law_product_required()
     docs_url = "/docs" if config.enable_docs else None
     redoc_url = "/redoc" if config.enable_docs else None
     openapi_url = "/openapi.json" if config.enable_docs else None
 
     app = FastAPI(
-        title="DeerFlow API Gateway",
-        description="""
-## DeerFlow API Gateway
-
-API Gateway for DeerFlow - A LangGraph-based AI agent backend with sandbox execution capabilities.
-
-### Features
-
-- **Models Management**: Query and retrieve available AI models
-- **MCP Configuration**: Manage Model Context Protocol (MCP) server configurations
-- **Memory Management**: Access and manage global memory data for personalized conversations
-- **Skills Management**: Query and manage skills and their enabled status
-- **Artifacts**: Access thread artifacts and generated files
-- **Health Monitoring**: System health check endpoints
-
-### Architecture
-
-LangGraph-compatible requests are routed through nginx to this gateway.
-This gateway provides runtime endpoints for agent runs plus custom endpoints for models, MCP configuration, skills, and artifacts.
-        """,
+        title="Matrix-Law API Gateway",
+        description="Dedicated multi-tenant legal-matter API. Every agent run requires server-resolved tenant, matter, owner, and membership context.",
         version="0.1.0",
         lifespan=lifespan,
         docs_url=docs_url,
@@ -638,7 +677,7 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
             },
             {
                 "name": "threads",
-                "description": "Manage DeerFlow thread-local filesystem data",
+                "description": "Manage Matrix-Law thread-local workspace files",
             },
             {
                 "name": "agents",
@@ -670,6 +709,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
             },
         ],
     )
+    # App construction is not readiness. Tests, import-time app creation and
+    # any startup failure must all remain out of service endpoints.
+    app.state.gateway_ready = False
 
     # Auth: reject unauthenticated requests to non-public paths (fail-closed safety net)
     app.add_middleware(AuthMiddleware)
@@ -743,6 +785,21 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
     # whether that id is printed into log records.
     app.add_middleware(TraceMiddleware)
 
+    # Prometheus scraping is an explicit process-level opt-in. The registry
+    # deliberately labels route templates, never raw paths or tenant/user IDs.
+    from app.gateway.metrics import (
+        PROMETHEUS_CONTENT_TYPE,
+        GatewayMetricsMiddleware,
+        GatewayMetricsRegistry,
+        gateway_metrics_enabled,
+    )
+
+    metrics_registry: GatewayMetricsRegistry | None = None
+    if gateway_metrics_enabled():
+        metrics_registry = GatewayMetricsRegistry()
+        app.state.gateway_metrics_registry = metrics_registry
+        app.add_middleware(GatewayMetricsMiddleware, registry=metrics_registry)
+
     # Python extensions load once while the Gateway app is constructed. Agent
     # middleware builders consume the same immutable set through the process
     # singleton; app.state exposes it to the Gateway runtime.
@@ -781,6 +838,14 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
     app.state.extensions = loaded_extensions
     app.state.extension_diagnostics = initialize_runtime_diagnostics(extension_diagnostics)
 
+    # Matrix Law deployments are deliberately not a generic DeerFlow profile.
+    # The production image and Helm chart set MATRIX_LAW_PRODUCT_REQUIRED=1;
+    # fail during app construction if the mandatory legal admission vanished.
+    from app.gateway.legal_run_admission import validate_matrix_law_product
+
+    validate_matrix_law_product(loaded_extensions)
+    generic_control_plane_enabled = not product_required
+
     # Include routers
     # Models API is mounted at /api/models
     app.include_router(models.router)
@@ -788,24 +853,20 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
     # Features API is mounted at /api/features
     app.include_router(features.router)
 
-    # Console API (cross-thread observability) is mounted at /api/console
-    app.include_router(console.router)
-
-    # MCP API is mounted at /api/mcp
-    app.include_router(mcp.router)
+    if generic_control_plane_enabled:
+        # Generic DeerFlow operator APIs are engine compatibility surfaces,
+        # never Matrix Law product capabilities.
+        app.include_router(console.router)
+        app.include_router(mcp.router)
 
     # Durable MCP tasks are scoped to their owning thread.
     app.include_router(mcp_tasks.router)
     app.include_router(subagent_batches.router)
 
-    # Memory API is mounted at /api/memory
-    app.include_router(memory.router)
-
-    # Skills API is mounted at /api/skills
-    app.include_router(skills.router)
-
-    # First-party integrations API is mounted at /api/integrations
-    app.include_router(integrations.router)
+    if generic_control_plane_enabled:
+        app.include_router(memory.router)
+        app.include_router(skills.router)
+        app.include_router(integrations.router)
 
     # Artifacts API is mounted at /api/threads/{thread_id}/artifacts
     app.include_router(artifacts.router)
@@ -819,14 +880,10 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
     # Thread cleanup API is mounted at /api/threads/{thread_id}
     app.include_router(threads.router)
 
-    # Scheduled tasks API is mounted at /api/scheduled-tasks
-    app.include_router(scheduled_tasks.router)
-
-    # Agents API is mounted at /api/agents
-    app.include_router(agents.router)
-
-    # Deployment-level subagent catalog and admin management.
-    app.include_router(subagents.router)
+    if generic_control_plane_enabled:
+        app.include_router(scheduled_tasks.router)
+        app.include_router(agents.router)
+        app.include_router(subagents.router)
 
     # Suggestions API is mounted at /api/threads/{thread_id}/suggestions
     app.include_router(suggestions.router)
@@ -834,14 +891,10 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
     # Input polishing API is mounted at /api/input-polish
     app.include_router(input_polish.router)
 
-    # User-facing IM channel connection API is mounted at /api/channels
-    app.include_router(channel_connections.router)
-
-    # Channels API is mounted at /api/channels
-    app.include_router(channels.router)
-
-    # Assistants compatibility API (LangGraph Platform stub)
-    app.include_router(assistants_compat.router)
+    if generic_control_plane_enabled:
+        app.include_router(channel_connections.router)
+        app.include_router(channels.router)
+        app.include_router(assistants_compat.router)
 
     # Auth API is mounted at /api/v1/auth
     app.include_router(auth.router)
@@ -867,11 +920,11 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
     # dev opt-in is set). A misconfigured deployment without a secret cannot
     # serve forged deliveries because the URL responds 404 — there is no
     # handler to reach.
-    if github_webhooks.is_route_enabled():
+    if generic_control_plane_enabled and github_webhooks.is_route_enabled():
         app.include_router(github_webhooks.router)
         logger.info("GitHub webhooks route mounted at /api/webhooks/github")
     else:
-        logger.warning("GitHub webhooks route NOT mounted: GITHUB_WEBHOOK_SECRET unset and DEER_FLOW_ALLOW_UNVERIFIED_GITHUB_WEBHOOKS not set. /api/webhooks/github will respond 404. Configure either env var to enable the route.")
+        logger.info("GitHub webhooks route not mounted")
 
     @app.get("/health", tags=["health"])
     async def health_check() -> dict[str, str]:
@@ -880,7 +933,34 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
         Returns:
             Service health status information.
         """
-        return {"status": "healthy", "service": "deer-flow-gateway"}
+        return {
+            "status": "healthy",
+            "service": "matrix-law-gateway" if product_required else "deer-flow-gateway",
+        }
+
+    @app.get("/ready", tags=["health"])
+    async def readiness_check():
+        """Readiness checks process lifecycle and configured Redis stream health."""
+        checks: dict[str, str] = {}
+        if gateway_lifecycle_status(app) == "ready":
+            checks = await probe_gateway_dependencies(app)
+        status = gateway_readiness_status(app)
+        payload = {
+            "status": status,
+            "service": "matrix-law-gateway" if product_required else "deer-flow-gateway",
+            "checks": checks,
+        }
+        if status != "ready":
+            return JSONResponse(status_code=503, content=payload)
+        return payload
+
+    if metrics_registry is not None:
+
+        @app.get("/metrics", include_in_schema=False)
+        async def prometheus_metrics() -> Response:
+            """Expose low-cardinality operational metrics for internal scraping."""
+            body = metrics_registry.render(ready=gateway_readiness_status(app) == "ready")
+            return Response(content=body, media_type=PROMETHEUS_CONTENT_TYPE)
 
     # Extension routes are deliberately last: FastAPI/Starlette dispatches in
     # registration order, so every host route (including conditional routes

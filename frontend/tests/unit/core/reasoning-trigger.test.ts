@@ -26,3 +26,30 @@ test("ReasoningTrigger default message uses phrasing content", () => {
   expect(html).toContain("Thought for a few seconds");
   expect(html).not.toMatch(/<button\b[^>]*>[\s\S]*?<p\b/i);
 });
+
+test("Reasoning content is collapsed by default", () => {
+  const html = renderToStaticMarkup(
+    createElement(
+      Reasoning,
+      { isStreaming: false },
+      createElement(ReasoningTrigger, null),
+      createElement(ReasoningContent, null, "hidden reasoning body"),
+    ),
+  );
+
+  expect(html).toContain("Thought for a few seconds");
+  expect(html).not.toContain("hidden reasoning body");
+});
+
+test("Reasoning content renders when explicitly opened", () => {
+  const html = renderToStaticMarkup(
+    createElement(
+      Reasoning,
+      { isStreaming: false, open: true },
+      createElement(ReasoningTrigger, null),
+      createElement(ReasoningContent, null, "expanded reasoning body"),
+    ),
+  );
+
+  expect(html).toContain("expanded reasoning body");
+});

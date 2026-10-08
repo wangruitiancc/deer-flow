@@ -1,0 +1,128 @@
+# Independent, synthetic-only P1 integration environment. Never point at 2030 data.
+name: matrix-law-project-artifacts
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_DB: deerflow
+      POSTGRES_USER: deerflow
+      POSTGRES_PASSWORD: synthetic-p1-db
+    volumes: [p1-db:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U deerflow -d deerflow"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  migrate:
+    image: matrix-law-gateway:tenant-admin-v2
+    working_dir: /app/backend
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - >-
+        .venv/bin/python /verify/prepare_database.py &&
+        .venv/bin/matrix-law-provision-roles
+    environment:
+      PYTHONPATH: /app/backend
+      DATABASE_URL: postgresql+asyncpg://deerflow:synthetic-p1-db@postgres:5432/deerflow
+      MATRIX_LAW_DATABASE_SCHEMA: deerflow
+      MATRIX_LAW_API_DATABASE_PASSWORD: synthetic-p1-api-db
+      MATRIX_LAW_WORKER_DATABASE_PASSWORD: synthetic-p1-worker-db
+    volumes:
+      - ./matrix-law-phase10j/prepare_database.py:/verify/prepare_database.py:ro
+    depends_on:
+      postgres: {condition: service_healthy}
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: [server, /data]
+    environment:
+      MINIO_ROOT_USER: phase9-access-key
+      MINIO_ROOT_PASSWORD: phase9-secret-key
+    volumes: [p1-objects:/data]
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - >-
+        until mc alias set p1 http://minio:9000 phase9-access-key phase9-secret-key; do sleep 1; done;
+        mc mb --ignore-existing p1/matrix-law-artifacts-p1
+    depends_on: [minio]
+  clamav:
+    image: clamav/clamav:1.5.4-debian13-slim
+    environment:
+      CLAMD_CONF_StreamMaxLength: "2147483648"
+      CLAMD_CONF_MaxFileSize: "2147483648"
+      CLAMD_CONF_MaxScanSize: "2147483648"
+      CLAMD_CONF_MaxScanTime: "600000"
+    healthcheck:
+      test: [CMD-SHELL, "printf 'PING\\n' | nc -w 2 127.0.0.1 3310 | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 20s
+    volumes: [p1-signatures:/var/lib/clamav]
+  runtime-init:
+    image: postgres:16.4-alpine
+    entrypoint: [sh, -ec, "mkdir -p /runtime/.upload-spool && chmod 700 /runtime/.upload-spool && chown 65532:65532 /runtime /runtime/.upload-spool"]
+    volumes: [p1-home:/runtime]
+  gateway:
+    image: matrix-law-gateway:tenant-admin-v2
+    user: "65532:65532"
+    environment:
+      PYTHONPATH: /app/backend
+      DATABASE_URL: postgresql+asyncpg://deerflow:synthetic-p1-db@postgres:5432/deerflow
+      MATRIX_LAW_API_DATABASE_URL: postgresql+asyncpg://matrix_law_api:synthetic-p1-api-db@postgres:5432/deerflow
+      MATRIX_LAW_WORKER_DATABASE_URL: postgresql+asyncpg://matrix_law_worker:synthetic-p1-worker-db@postgres:5432/deerflow
+      DEER_FLOW_CONFIG_PATH: /etc/matrix-law/config.yaml
+      DEER_FLOW_PROJECT_ROOT: /app
+      DEER_FLOW_HOME: /runtime
+      # Multipart spools use disk, not the bounded 128 MiB /tmp tmpfs.
+      TMPDIR: /runtime/.upload-spool
+      DEER_FLOW_AUTH_DISABLED: "0"
+      # Bounded native writes accommodate complete 16 MiB import reports.
+      # This also caps ordinary write_file; legal templates remain 64 KiB.
+      DEERFLOW_WRITE_FILE_MAX_BYTES: "16777216"
+      MATRIX_LAW_PRODUCT_REQUIRED: "1"
+      AUTH_JWT_SECRET: synthetic-p1-jwt-secret-not-for-production
+      DEERFLOW_BOOTSTRAP_ADMIN_EMAIL: "${MATRIX_LAW_ADMIN_EMAIL:-admin@matrix.law}"
+      DEERFLOW_BOOTSTRAP_ADMIN_PASSWORD: "${MATRIX_LAW_ADMIN_PASSWORD:-MatrixLaw@2026!}"
+      MATRIX_LAW_S3_ACCESS_KEY: phase9-access-key
+      MATRIX_LAW_S3_SECRET_KEY: phase9-secret-key
+      MATRIX_LAW_OCR_USER_CREDENTIAL_KEY: synthetic-p1-user-ocr-credential-key
+      UV_CACHE_DIR: /tmp/uv-cache
+      LANGSMITH_TRACING: "false"
+      NO_PROXY: localhost,127.0.0.1,postgres,minio,clamav,matrix-ocr,host.docker.internal
+    volumes:
+      - ./matrix-law-project-artifacts/config.yaml:/etc/matrix-law/config.yaml:ro
+      - p1-home:/runtime
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=134217728,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    healthcheck:
+      test: [CMD, /app/backend/.venv/bin/python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/ready', timeout=3).read()"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      runtime-init: {condition: service_completed_successfully}
+      minio-init: {condition: service_completed_successfully}
+      clamav: {condition: service_healthy}
+  frontend:
+    image: matrix-law-frontend:tenant-admin-v2
+    environment:
+      DEER_FLOW_AUTH_DISABLED: "0"
+      DEER_FLOW_INTERNAL_GATEWAY_BASE_URL: http://gateway:8001
+    depends_on: [gateway]
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./matrix-law-project-artifacts/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports: ["127.0.0.1:2035:2026"]
+    depends_on: [frontend]
+volumes:
+  p1-db:
+  p1-objects:
+  p1-signatures:
+  p1-home:

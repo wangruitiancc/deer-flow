@@ -69,3 +69,7 @@ config.yaml.bak
 
 # Monocle agent-observability trace output (local file exporter)
 .monocle/
+.phase9-runtime/
+
+# Operator build snapshot; authoritative source is the paired Matrix Law repo.
+/backend/extensions/sources/matrix-law-extension/

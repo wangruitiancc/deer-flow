@@ -992,7 +992,7 @@ def test_cli_reports_invalid_config_without_a_traceback(
 
     captured = capsys.readouterr()
     assert exit_code == 1
-    assert "invalid DeerFlow config YAML" in captured.err
+    assert "invalid Matrix-Law config YAML" in captured.err
     assert "Traceback" not in captured.err
 
 
@@ -1044,7 +1044,7 @@ def test_deerflow_extensions_remove_uninstalls_dependency_source_and_activation(
     assert exit_code == 0
     output = capsys.readouterr().out
     assert "Removed demo" in output
-    assert "Restart DeerFlow" in output
+    assert "Restart Matrix-Law" in output
     config = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
     assert config["plugins"] == []
     assert not (root / "backend" / "extensions" / "sources" / "deerflow-extension-demo").exists()

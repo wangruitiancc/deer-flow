@@ -1,0 +1,48 @@
+{
+  "format": "matrix-law.templates",
+  "schema_version": 1,
+  "templates": [
+    {
+      "id": "meeting-notes",
+      "title": "会见笔录",
+      "file": "meeting-notes.md",
+      "legacy_file_name": "会见笔录.md",
+      "artifact_kind": "note"
+    },
+    {
+      "id": "hearing-notes",
+      "title": "庭审笔记",
+      "file": "hearing-notes.md",
+      "legacy_file_name": "庭审笔记.md",
+      "artifact_kind": "note"
+    },
+    {
+      "id": "legal-opinion",
+      "title": "法律意见书",
+      "file": "legal-opinion.md",
+      "legacy_file_name": "法律意见书.md",
+      "artifact_kind": "document"
+    },
+    {
+      "id": "evidence-list",
+      "title": "证据清单",
+      "file": "evidence-list.md",
+      "legacy_file_name": "证据清单.md",
+      "artifact_kind": "document"
+    },
+    {
+      "id": "case-timeline",
+      "title": "案件时间线",
+      "file": "case-timeline.md",
+      "legacy_file_name": "案件时间线.md",
+      "artifact_kind": "note"
+    },
+    {
+      "id": "contract-review",
+      "title": "合同审查要点",
+      "file": "contract-review.md",
+      "legacy_file_name": "合同审查要点.md",
+      "artifact_kind": "document"
+    }
+  ]
+}

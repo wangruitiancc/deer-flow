@@ -60,7 +60,7 @@ describe("MessageGroup", () => {
           {
             id: "call-1",
             name: "web_search",
-            args: { query: "DeerFlow issue 4027" },
+            args: { query: "Matrix-Law issue 4027" },
           },
         ],
       } as Message,
@@ -69,7 +69,7 @@ describe("MessageGroup", () => {
     expect(html).toContain(
       "The browser action failed, so I will try another approach.",
     );
-    expect(html).toContain("DeerFlow issue 4027");
+    expect(html).toContain("Matrix-Law issue 4027");
   });
 
   it("keeps assistant text visible while older tool steps stay collapsed", () => {
@@ -478,7 +478,7 @@ describe("MessageGroup", () => {
           {
             id: "call-search",
             name: "web_search",
-            args: { query: "DeerFlow" },
+            args: { query: "Matrix-Law" },
           },
         ],
       } as Message,

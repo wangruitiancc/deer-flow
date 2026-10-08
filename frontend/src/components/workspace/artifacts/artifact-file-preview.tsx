@@ -121,11 +121,13 @@ export function ArtifactFilePreview({
   language,
   scrollKey,
   url,
+  externalLinksOnly = false,
 }: {
   content: string;
   language: string;
   scrollKey: string;
   url?: string;
+  externalLinksOnly?: boolean;
 }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const scrollPositionRef = useRef({ x: 0, y: 0 });
@@ -210,7 +212,13 @@ export function ArtifactFilePreview({
         <SafeStreamdown
           className="min-w-0"
           {...artifactMarkdownPlugins}
-          components={toStreamdownComponents({ a: ArtifactLink })}
+          components={toStreamdownComponents({
+            a: externalLinksOnly
+              ? (props) => (
+                  <ArtifactLink {...props} allowRelativeLinks={false} />
+                )
+              : ArtifactLink,
+          })}
         >
           {content ?? ""}
         </SafeStreamdown>

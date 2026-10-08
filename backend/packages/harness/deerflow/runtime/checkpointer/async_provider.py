@@ -35,6 +35,12 @@ from deerflow.runtime.store._sqlite_utils import ensure_sqlite_parent_dir, resol
 
 logger = logging.getLogger(__name__)
 
+# Stable, application-specific 63-bit key used only while LangGraph applies
+# its own checkpoint migrations. ``AsyncPostgresSaver.setup()`` is idempotent
+# when called sequentially, but its read-then-insert migration loop is not safe
+# when multiple Gateway processes perform a cold start at the same instant.
+_POSTGRES_CHECKPOINTER_SETUP_LOCK_KEY = 0x3D33F10C5A17E001
+
 
 def _prepare_sqlite_checkpointer_path(raw: str) -> str:
     conn_str = resolve_sqlite_conn_str(raw)
@@ -85,6 +91,80 @@ async def _ensure_postgres_schema_with_pool(pool, schema: str) -> None:
         await conn.execute(statement)
 
 
+async def _assert_postgres_saver_ready(pool, saver) -> None:
+    """Verify required LangGraph tables and migration head using read-only SQL."""
+    async with pool.connection() as conn:
+        result = await conn.execute(
+            """
+            SELECT
+                to_regclass('checkpoint_migrations') IS NOT NULL AS migrations,
+                to_regclass('checkpoints') IS NOT NULL AS checkpoints,
+                to_regclass('checkpoint_blobs') IS NOT NULL AS blobs,
+                to_regclass('checkpoint_writes') IS NOT NULL AS writes
+            """
+        )
+        row = await result.fetchone()
+        values = dict(row) if isinstance(row, dict) else dict(zip(("migrations", "checkpoints", "blobs", "writes"), row, strict=True))
+        if not all(values.values()):
+            raise RuntimeError(
+                "LangGraph checkpointer schema is missing; run the explicit database migration command before starting the Gateway"
+            )
+        result = await conn.execute("SELECT max(v) AS version FROM checkpoint_migrations")
+        version_row = await result.fetchone()
+        version = version_row["version"] if isinstance(version_row, dict) else version_row[0]
+    expected = len(saver.MIGRATIONS) - 1
+    if version != expected:
+        raise RuntimeError(
+            f"LangGraph checkpointer migration head mismatch (expected {expected}); run the explicit database migration command before starting the Gateway"
+        )
+
+
+async def _setup_postgres_saver(pool, saver, schema: str, *, auto_migrate: bool = True) -> None:
+    """Serialise LangGraph checkpointer DDL across Gateway processes.
+
+    The advisory lock is session-scoped and held on a dedicated pool
+    connection while ``saver.setup()`` uses the remaining pool connections.
+    PostgreSQL releases it automatically if the process dies; the explicit
+    unlock keeps normal startup from retaining the session lock in the pool.
+    """
+    if not auto_migrate:
+        await _assert_postgres_saver_ready(pool, saver)
+        return
+
+    await _ensure_postgres_schema_with_pool(pool, schema)
+    async with pool.connection() as conn:
+        # Do not block inside ``pg_advisory_lock``. LangGraph creates indexes
+        # concurrently, and PostgreSQL waits for transactions that were active
+        # when that DDL phase began. A second Gateway blocked in the advisory
+        # lock query would therefore create a cycle: DDL waits for Gateway B,
+        # while Gateway B waits for Gateway A's advisory lock. Polling the
+        # non-blocking form lets every unsuccessful statement end immediately.
+        while True:
+            cursor = await conn.execute(
+                "SELECT pg_try_advisory_lock(%s)",
+                (_POSTGRES_CHECKPOINTER_SETUP_LOCK_KEY,),
+            )
+            row = await cursor.fetchone()
+            acquired = bool(next(iter(row.values()))) if isinstance(row, dict) else bool(row[0])
+            if acquired:
+                break
+            await asyncio.sleep(0.05)
+        try:
+            logger.info(
+                "checkpointer: acquired postgres setup lock key=0x%x",
+                _POSTGRES_CHECKPOINTER_SETUP_LOCK_KEY,
+            )
+            await saver.setup()
+        finally:
+            try:
+                await conn.execute("SELECT pg_advisory_unlock(%s)", (_POSTGRES_CHECKPOINTER_SETUP_LOCK_KEY,))
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "checkpointer: pg_advisory_unlock raised; session close will release",
+                    exc_info=True,
+                )
+
+
 def _ensure_postgres_imports():
     """Import and return (AsyncPostgresSaver, AsyncConnectionPool), raising ImportError on failure."""
     try:
@@ -106,7 +186,7 @@ def _ensure_postgres_imports():
 
 
 @contextlib.asynccontextmanager
-async def _async_checkpointer(config) -> AsyncIterator[Checkpointer]:
+async def _async_checkpointer(config, *, auto_migrate: bool = True) -> AsyncIterator[Checkpointer]:
     """Async context manager that constructs and tears down a checkpointer."""
     if config.type == "memory":
         from langgraph.checkpoint.memory import InMemorySaver
@@ -115,6 +195,8 @@ async def _async_checkpointer(config) -> AsyncIterator[Checkpointer]:
         return
 
     if config.type == "sqlite":
+        if not auto_migrate:
+            raise RuntimeError("Explicit migration mode currently requires PostgreSQL persistence")
         try:
             from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
         except ImportError as exc:
@@ -133,9 +215,8 @@ async def _async_checkpointer(config) -> AsyncIterator[Checkpointer]:
         AsyncPostgresSaver, _ = _ensure_postgres_imports()
         pool = _build_postgres_pool(config.connection_string, config.postgres_schema)
         async with pool:
-            await _ensure_postgres_schema_with_pool(pool, config.postgres_schema)
             saver = AsyncPostgresSaver(conn=pool)
-            await saver.setup()
+            await _setup_postgres_saver(pool, saver, config.postgres_schema)
             yield saver
         return
 
@@ -148,8 +229,10 @@ async def _async_checkpointer(config) -> AsyncIterator[Checkpointer]:
 
 
 @contextlib.asynccontextmanager
-async def _async_checkpointer_from_database(db_config) -> AsyncIterator[Checkpointer]:
+async def _async_checkpointer_from_database(db_config, *, auto_migrate: bool | None = None) -> AsyncIterator[Checkpointer]:
     """Async context manager that constructs a checkpointer from unified DatabaseConfig."""
+    if auto_migrate is None:
+        auto_migrate = db_config.auto_migrate
     if db_config.backend == "memory":
         from langgraph.checkpoint.memory import InMemorySaver
 
@@ -157,6 +240,8 @@ async def _async_checkpointer_from_database(db_config) -> AsyncIterator[Checkpoi
         return
 
     if db_config.backend == "sqlite":
+        if not auto_migrate:
+            raise RuntimeError("Explicit migration mode currently requires PostgreSQL persistence")
         try:
             from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
         except ImportError as exc:
@@ -175,9 +260,8 @@ async def _async_checkpointer_from_database(db_config) -> AsyncIterator[Checkpoi
         AsyncPostgresSaver, _ = _ensure_postgres_imports()
         pool = _build_postgres_pool(db_config.postgres_url, db_config.postgres_schema)
         async with pool:
-            await _ensure_postgres_schema_with_pool(pool, db_config.postgres_schema)
             saver = AsyncPostgresSaver(conn=pool)
-            await saver.setup()
+            await _setup_postgres_saver(pool, saver, db_config.postgres_schema, auto_migrate=auto_migrate)
             yield saver
         return
 
@@ -185,7 +269,7 @@ async def _async_checkpointer_from_database(db_config) -> AsyncIterator[Checkpoi
 
 
 @contextlib.asynccontextmanager
-async def _select_inner_checkpointer(app_config: AppConfig) -> AsyncIterator[Checkpointer]:
+async def _select_inner_checkpointer(app_config: AppConfig, *, auto_migrate: bool | None = None) -> AsyncIterator[Checkpointer]:
     """Yield the raw checkpointer selected by *app_config* (no delta-cache wrapping).
 
     Priority:
@@ -193,16 +277,19 @@ async def _select_inner_checkpointer(app_config: AppConfig) -> AsyncIterator[Che
     2. Unified ``database:`` config section
     3. Default InMemorySaver
     """
+    if auto_migrate is None:
+        auto_migrate = getattr(getattr(app_config, "database", None), "auto_migrate", True)
+
     # Legacy: standalone checkpointer config takes precedence
     if app_config.checkpointer is not None:
-        async with _async_checkpointer(app_config.checkpointer) as saver:
+        async with _async_checkpointer(app_config.checkpointer, auto_migrate=auto_migrate) as saver:
             yield saver
             return
 
     # Unified database config
     db_config = getattr(app_config, "database", None)
     if db_config is not None and db_config.backend != "memory":
-        async with _async_checkpointer_from_database(db_config) as saver:
+        async with _async_checkpointer_from_database(db_config, auto_migrate=auto_migrate) as saver:
             yield saver
             return
 
@@ -213,7 +300,7 @@ async def _select_inner_checkpointer(app_config: AppConfig) -> AsyncIterator[Che
 
 
 @contextlib.asynccontextmanager
-async def make_checkpointer(app_config: AppConfig | None = None) -> AsyncIterator[Checkpointer]:
+async def make_checkpointer(app_config: AppConfig | None = None, *, auto_migrate: bool | None = None) -> AsyncIterator[Checkpointer]:
     """Async context manager that yields a checkpointer for the caller's lifetime.
     Resources are opened on enter and closed on exit -- no global state::
 
@@ -237,7 +324,7 @@ async def make_checkpointer(app_config: AppConfig | None = None) -> AsyncIterato
     if app_config is None:
         app_config = get_app_config()
 
-    async with _select_inner_checkpointer(app_config) as saver:
+    async with _select_inner_checkpointer(app_config, auto_migrate=auto_migrate) as saver:
         db_config = getattr(app_config, "database", None)
         mode = frozen_checkpoint_channel_mode() or (db_config.checkpoint_channel_mode if db_config is not None else "full")
         if mode == "delta":

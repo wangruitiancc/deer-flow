@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import sys
+from contextlib import asynccontextmanager
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from deerflow_extension_api import EXTENSION_TASK_STORE_KEY, ExtensionData
+from deerflow_extension_api import EXTENSION_TASK_STORE_KEY, ExtensionData, MatterScopeBinding, TaskWriteGateBinding
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -114,16 +115,37 @@ class _TaskStoreReadingAgent:
     def __init__(self) -> None:
         self.task_store = None
         self.extensions = None
+        self.runtime_store = "unset"
+        self.graph_store = "unset"
 
     async def astream(self, graph_input, config=None, stream_mode=None, subgraphs=False):
         runtime = (config or {})["configurable"]["__pregel_runtime"]
         self.task_store = runtime.context.get(EXTENSION_TASK_STORE_KEY)
         self.extensions = resolve_run_extensions(runtime.context)
+        self.runtime_store = runtime.store
+        self.graph_store = getattr(self, "store", "unset")
         yield {"messages": []}
 
 
+class _MatterScopeAdmission:
+    async def admit_task(self, _app_store, task_store, info):
+        class Gate:
+            @asynccontextmanager
+            async def hold(self, **_kwargs):
+                yield
+
+        task_store.set(TaskWriteGateBinding(Gate()))
+        task_store.set(
+            MatterScopeBinding(
+                tenant_id="tenant-1",
+                matter_id="matter-1",
+                thread_id=info.thread_id,
+            )
+        )
+
+
 def _bridge():
-    return SimpleNamespace(publish=AsyncMock(), publish_end=AsyncMock(), cleanup=AsyncMock())
+    return SimpleNamespace(heartbeat_interval=1.0, supports_cross_process=False, publish=AsyncMock(), publish_end=AsyncMock(), cleanup=AsyncMock())
 
 
 _MOCKED_SUBAGENT_MODULES = (
@@ -236,6 +258,34 @@ async def test_lead_middleware_receives_a_run_scoped_store(_isolated_extensions)
 
     assert agent.task_store is not None
     assert agent.task_store.scope_id == record.run_id
+
+
+@pytest.mark.anyio
+async def test_matter_scoped_run_withholds_and_clears_generic_langgraph_store(_isolated_extensions):
+    registry = ExtensionRegistry()
+    with registry.attributed_to("matrix-law:admission"):
+        registry.task_admission(_MatterScopeAdmission())
+    set_loaded_extensions(registry.build())
+
+    run_manager = RunManager()
+    record = await run_manager.create("thread-matter-store")
+    agent = _TaskStoreReadingAgent()
+    agent.store = object()
+    shared_store = object()
+
+    await run_agent(
+        _bridge(),
+        run_manager,
+        record,
+        ctx=RunContext(checkpointer=InMemorySaver(), store=shared_store),
+        agent_factory=lambda *, config: agent,
+        graph_input={},
+        config={},
+    )
+
+    assert agent.task_store is not None
+    assert agent.runtime_store is None
+    assert agent.graph_store is None
 
 
 @pytest.mark.anyio

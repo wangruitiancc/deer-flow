@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from app.gateway.authz import SandboxRequestLease, require_permission, try_acquire_sandbox_for_request
 from app.gateway.deps import get_config
+from app.gateway.legal_run_admission import gate_matrix_law_thread_write
 from deerflow.config.app_config import AppConfig
 from deerflow.config.paths import get_paths
 from deerflow.runtime.user_context import get_effective_user_id
@@ -299,6 +300,7 @@ def _auto_convert_documents_enabled(app_config: AppConfig) -> bool:
 
 @router.post("", response_model=UploadResponse)
 @require_permission("threads", "write", owner_check=True, require_existing=False)
+@gate_matrix_law_thread_write
 async def upload_files(
     thread_id: ThreadId,
     request: Request,
@@ -502,6 +504,7 @@ async def list_uploaded_files(thread_id: ThreadId, request: Request) -> UploadLi
 
 @router.delete("/{filename}")
 @require_permission("threads", "delete", owner_check=True, require_existing=True)
+@gate_matrix_law_thread_write
 async def delete_uploaded_file(thread_id: ThreadId, filename: str, request: Request) -> dict:
     """Delete a file from a thread's uploads directory."""
     try:

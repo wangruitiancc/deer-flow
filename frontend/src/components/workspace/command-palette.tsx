@@ -1,10 +1,6 @@
 "use client";
 
-import {
-  KeyboardIcon,
-  MessageSquarePlusIcon,
-  SettingsIcon,
-} from "lucide-react";
+import { KeyboardIcon, ScaleIcon, SettingsIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -37,8 +33,8 @@ export function CommandPalette() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [isMac, setIsMac] = useState(false);
 
-  const handleNewChat = useCallback(() => {
-    router.push("/workspace/chats/new");
+  const handleOpenLegalMatters = useCallback(() => {
+    router.push("/workspace/law");
     setOpen(false);
   }, [router]);
 
@@ -55,11 +51,11 @@ export function CommandPalette() {
   const shortcuts = useMemo(
     () => [
       { key: "k", meta: true, action: () => setOpen((o) => !o) },
-      { key: "n", meta: true, shift: true, action: handleNewChat },
+      { key: "n", meta: true, shift: true, action: handleOpenLegalMatters },
       { key: ",", meta: true, action: handleOpenSettings },
       { key: "/", meta: true, action: handleShowShortcuts },
     ],
-    [handleNewChat, handleOpenSettings, handleShowShortcuts],
+    [handleOpenLegalMatters, handleOpenSettings, handleShowShortcuts],
   );
 
   useGlobalShortcuts(shortcuts);
@@ -77,9 +73,9 @@ export function CommandPalette() {
         <CommandList>
           <CommandEmpty>{t.shortcuts.noResults}</CommandEmpty>
           <CommandGroup heading={t.shortcuts.actions}>
-            <CommandItem onSelect={handleNewChat}>
-              <MessageSquarePlusIcon className="mr-2 h-4 w-4" />
-              {t.sidebar.newChat}
+            <CommandItem onSelect={handleOpenLegalMatters}>
+              <ScaleIcon className="mr-2 h-4 w-4" />
+              {t.sidebar.lawMatters}
               <CommandShortcut>
                 {metaKey}
                 {shiftKey}N
@@ -110,7 +106,7 @@ export function CommandPalette() {
           <div className="space-y-3 text-sm">
             {[
               { keys: `${metaKey}K`, label: t.shortcuts.openCommandPalette },
-              { keys: `${metaKey}${shiftKey}N`, label: t.sidebar.newChat },
+              { keys: `${metaKey}${shiftKey}N`, label: t.sidebar.lawMatters },
               { keys: `${metaKey}B`, label: t.shortcuts.toggleSidebar },
               { keys: `${metaKey},`, label: t.common.settings },
               {

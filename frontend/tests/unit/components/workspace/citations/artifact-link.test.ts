@@ -8,6 +8,17 @@ import { ArtifactLink } from "@/components/workspace/citations/artifact-link";
 // prompt-injected javascript:/data: href must never reach a real anchor in
 // the main document (mirrors the MarkdownLink guard).
 describe("ArtifactLink rendering", () => {
+  it("does not resolve project snapshot relative links against the active conversation", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        ArtifactLink,
+        { href: "/mnt/user-data/outputs/other.md", allowRelativeLinks: false },
+        "related file",
+      ),
+    );
+    expect(html).not.toContain("href=");
+    expect(html).toContain("related file");
+  });
   it("renders an unsafe href as a disabled span, never an anchor", () => {
     const html = renderToStaticMarkup(
       createElement(ArtifactLink, { href: "javascript:alert(1)" }, "click me"),

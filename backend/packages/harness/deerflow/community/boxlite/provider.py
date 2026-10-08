@@ -16,11 +16,13 @@ from __future__ import annotations
 import asyncio
 import atexit
 import logging
+import re
 import threading
 import time
 import uuid
 from collections.abc import Awaitable
 from functools import partial
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from deerflow.config import get_app_config
@@ -37,6 +39,7 @@ from .box import BoxliteBox
 if TYPE_CHECKING:
     from boxlite import SimpleBox
 
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
@@ -44,6 +47,7 @@ T = TypeVar("T")
 DEFAULT_IMAGE = "python:3.12-slim"
 _BOX_NAME_PREFIX = "deer-flow-boxlite-"
 _NO_ACTIVE_IDENTITY = object()
+_IMAGE_DIGEST_PATTERN = re.compile(r"^.+@sha256:[0-9a-f]{64}$")
 # DeerFlow's virtual prefixes, materialised on the box rootfs at start so the
 # Sandbox file APIs (which address /mnt/user-data/...) resolve natively.
 _VIRTUAL_DIRS = (
@@ -86,6 +90,15 @@ def _import_sync_boxlite_runtime():
     except ImportError as e:  # pragma: no cover - depends on the optional dependency
         raise ImportError("BoxliteProvider requires the optional 'boxlite' dependency. Install it with: pip install 'deerflow-harness[boxlite]' or pip install boxlite.") from e
     return SyncBoxlite
+
+
+def _import_isolation_types():
+    """Import the SDK's security and network policy types lazily."""
+    try:
+        from boxlite import AdvancedBoxOptions, NetworkSpec, SecurityOptions
+    except ImportError as e:  # pragma: no cover - depends on the optional dependency
+        raise ImportError("Matrix-Law BoxLite isolation requires boxlite>=0.10.5") from e
+    return NetworkSpec, AdvancedBoxOptions, SecurityOptions
 
 
 class _EventLoopThread:
@@ -171,7 +184,6 @@ def _run_sync_adapter[T](coro: Awaitable[T], *, timeout: float | None = None) ->
 class BoxliteProvider(WarmPoolLifecycleMixin[BoxliteBox], SandboxProvider):
     """Run each DeerFlow sandbox as a BoxLite micro-VM."""
 
-    uses_thread_data_mounts = False
     needs_upload_permission_adjustment = True
     _idle_checker_thread_name = "boxlite-idle-reaper"
 
@@ -205,12 +217,38 @@ class BoxliteProvider(WarmPoolLifecycleMixin[BoxliteBox], SandboxProvider):
         self._shutdown_called = False
         self._config = self._load_config()
         self._loop = _EventLoopThread()
+        self._runtime = None
+        if self._config["matrix_law_isolation"]:
+            try:
+                self._prepare_runtime_home()
+                self._runtime = self._loop.run(self._create_isolated_runtime())
+            except Exception:
+                self._loop.close()
+                raise
+        try:
+            self._reconcile_orphans()
+        except Exception:
+            if self._runtime is not None:
+                try:
+                    self._loop.run(self._close_runtime())
+                except Exception:
+                    logger.exception("Error closing Matrix-Law BoxLite runtime after startup reconciliation failed")
+            self._loop.close()
+            raise
         atexit.register(self.shutdown)
-        self._reconcile_orphans()
         self._start_idle_checker()
 
+    @property
+    def uses_thread_data_mounts(self) -> bool:
+        return self._config["matrix_law_isolation"]
+
+    @property
+    def supports_agent_skill_isolation(self) -> bool:
+        return self._config["matrix_law_isolation"]
+
     def _load_config(self) -> dict[str, Any]:
-        sandbox_config = get_app_config().sandbox
+        app_config = get_app_config()
+        sandbox_config = app_config.sandbox
 
         def _opt(name: str, default: Any = None) -> Any:
             return getattr(sandbox_config, name, default)
@@ -220,11 +258,37 @@ class BoxliteProvider(WarmPoolLifecycleMixin[BoxliteBox], SandboxProvider):
         replicas = _opt("replicas")
         idle_timeout = _opt("idle_timeout")
         health_check_skip_seconds = _opt("health_check_skip_seconds")
+        image = _opt("image") or DEFAULT_IMAGE
+        matrix_law_isolation = bool(_opt("matrix_law_isolation", False))
+        memory_mib = _opt("memory_mib")
+        cpus = _opt("cpus")
+        runtime_home_dir = _opt("runtime_home_dir")
+        environment = dict(_opt("environment") or {})
+        configured_mounts = _opt("mounts") or []
+        if matrix_law_isolation:
+            required = "Matrix-Law BoxLite isolation requires"
+            if not _IMAGE_DIGEST_PATTERN.fullmatch(image):
+                raise ValueError(f"{required} an immutable OCI image reference ending in @sha256:<64 lowercase hex chars>")
+            if not isinstance(cpus, int) or cpus < 1 or not isinstance(memory_mib, int) or not 128 <= memory_mib <= 65536:
+                raise ValueError(f"{required} explicit cpus and memory_mib limits")
+            if not isinstance(runtime_home_dir, str) or not Path(runtime_home_dir).is_absolute():
+                raise ValueError(f"{required} an absolute runtime_home_dir for its disposable guest cache")
+            if environment:
+                raise ValueError(f"{required} an empty sandbox environment; secrets must stay outside the guest")
+            if configured_mounts:
+                raise ValueError(f"{required} no operator mounts; only the active thread is exposed")
+            skills_config = getattr(app_config, "skills", None)
+            skills_container_path = getattr(skills_config, "container_path", DEFAULT_SKILLS_CONTAINER_PATH)
+            if skills_container_path.rstrip("/") != DEFAULT_SKILLS_CONTAINER_PATH:
+                raise ValueError(f"{required} skills.container_path=/mnt/skills")
+
         return {
-            "image": _opt("image") or DEFAULT_IMAGE,
-            "memory_mib": _opt("memory_mib"),
-            "cpus": _opt("cpus"),
-            "environment": dict(_opt("environment") or {}),
+            "image": image,
+            "memory_mib": memory_mib,
+            "cpus": cpus,
+            "runtime_home_dir": runtime_home_dir,
+            "matrix_law_isolation": matrix_law_isolation,
+            "environment": environment,
             "replicas": replicas if replicas is not None else self.DEFAULT_REPLICAS,
             "idle_timeout": idle_timeout if idle_timeout is not None else self.DEFAULT_IDLE_TIMEOUT,
             "health_check_skip_seconds": float(health_check_skip_seconds if health_check_skip_seconds is not None else 0.0),
@@ -298,29 +362,92 @@ class BoxliteProvider(WarmPoolLifecycleMixin[BoxliteBox], SandboxProvider):
         box_to_close.close()
 
     def _reconcile_orphans(self) -> None:
-        """Adopt DeerFlow-owned BoxLite boxes left by a previous provider/process.
+        """Reconcile DeerFlow-owned BoxLite boxes left by a prior process.
 
-        BoxLite boxes are discovered by a DeerFlow-specific name prefix. Adopted
-        boxes enter the warm pool so the normal idle reaper can reclaim them.
+        Ordinary BoxLite use adopts owned boxes into the warm pool. Matrix-Law
+        execution treats guest disks as ephemeral and destroys any orphan before
+        accepting new work.
         """
         try:
+            if self._config["matrix_law_isolation"]:
+                removed = self._remove_existing_boxes()
+                if removed:
+                    logger.info("Startup reconciliation removed %s stale Matrix-Law BoxLite box(es)", removed)
+                return
             adopted = self._adopt_existing_boxes()
-        except ImportError:
+        except ImportError as e:
+            if self._config["matrix_law_isolation"]:
+                raise RuntimeError("Matrix-Law BoxLite isolation runtime is unavailable") from e
             logger.debug("BoxLite is not installed; skipping startup reconciliation")
             return
         except Exception as e:
+            if self._config["matrix_law_isolation"]:
+                raise RuntimeError("Could not prove stale Matrix-Law BoxLite guests were removed") from e
             logger.warning("Failed to reconcile existing BoxLite boxes: %s", e)
             return
 
         if adopted:
             logger.info("Startup reconciliation adopted %s BoxLite box(es)", adopted)
 
-    def _adopt_existing_boxes(self) -> int:
+    def _remove_existing_boxes(self) -> int:
+        """Stop every stale DeerFlow-owned guest and require cleanup to succeed."""
+
+        async def _remove() -> int:
+            if self._runtime is None:
+                raise RuntimeError("Matrix-Law BoxLite runtime is unavailable")
+            infos = await self._runtime.list_info()
+            owned = [info for info in infos if self._sandbox_id_from_box_name(getattr(info, "name", None)) is not None]
+            for info in owned:
+                box_id = getattr(info, "id", None)
+                if not isinstance(box_id, str) or not box_id:
+                    raise RuntimeError("BoxLite returned an owned guest without an identifier")
+                box = await self._runtime.get(box_id)
+                if box is None:
+                    raise RuntimeError(f"BoxLite no longer returned stale box {box_id}")
+                await box.stop()
+                # auto_remove is enabled for new guests, but explicitly remove
+                # any legacy box that was created with persistence enabled.
+                remaining = await self._runtime.get(box_id)
+                if remaining is not None:
+                    await remaining.remove()
+            return len(owned)
+
+        return self._loop.run(_remove())
+
+    def _prepare_runtime_home(self) -> Path:
+        """Create the private BoxLite metadata/image cache owned by this tenant."""
+        home = Path(self._config["runtime_home_dir"])
+        if home.is_symlink():
+            raise RuntimeError("Matrix-Law BoxLite runtime home must not be a symlink")
+        home.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if home.is_symlink() or not home.is_dir():
+            raise RuntimeError("Matrix-Law BoxLite runtime home is not a regular directory")
+        home.chmod(0o700)
+        return home
+
+    async def _create_isolated_runtime(self):
+        try:
+            from boxlite import Boxlite, Options
+        except ImportError as e:  # pragma: no cover - optional dependency
+            raise ImportError("Matrix-Law BoxLite isolation requires boxlite>=0.10.5") from e
+        return Boxlite(Options(home_dir=str(self._config["runtime_home_dir"])))
+
+    async def _close_runtime(self) -> None:
+        if self._runtime is not None:
+            self._runtime.close()
+
+    def _new_sync_runtime(self):
         runtime_cls = _import_sync_boxlite_runtime()
+        if not self._config["matrix_law_isolation"]:
+            return runtime_cls.default().start()
+        raise RuntimeError("Matrix-Law guest cleanup must use its exclusive async runtime")
+
+    def _adopt_existing_boxes(self) -> int:
+        _import_sync_boxlite_runtime()
         now = time.time()
         adopted = 0
 
-        list_runtime = runtime_cls.default().start()
+        list_runtime = self._new_sync_runtime()
         try:
             infos = list_runtime.list_info()
         finally:
@@ -335,7 +462,7 @@ class BoxliteProvider(WarmPoolLifecycleMixin[BoxliteBox], SandboxProvider):
                 if sandbox_id in self._boxes or sandbox_id in self._warm_pool:
                     continue
 
-            box_runtime = runtime_cls.default().start()
+            box_runtime = self._new_sync_runtime()
             try:
                 box = box_runtime.get(name)
             except Exception as e:
@@ -361,6 +488,15 @@ class BoxliteProvider(WarmPoolLifecycleMixin[BoxliteBox], SandboxProvider):
     # ── Acquire / release ────────────────────────────────────────────────
 
     def acquire(self, thread_id: str | None = None, *, user_id: str | None = None) -> str:
+        if self._config["matrix_law_isolation"]:
+            if thread_id is None:
+                raise ValueError("Matrix-Law BoxLite isolation requires a thread id and user id")
+            if user_id is None:
+                from deerflow.runtime.user_context import get_effective_user_id
+
+                user_id = get_effective_user_id()
+            if not user_id:
+                raise ValueError("Matrix-Law BoxLite isolation requires a resolved user id")
         if thread_id is None:
             sandbox_id = str(uuid.uuid4())[:8]
             box = self._create_box(sandbox_id)
@@ -408,7 +544,10 @@ class BoxliteProvider(WarmPoolLifecycleMixin[BoxliteBox], SandboxProvider):
                 self._thread_boxes[key] = reclaimed
             return reclaimed
 
-        box = self._create_box(sandbox_id)
+        if self._config["matrix_law_isolation"]:
+            box = self._create_box(sandbox_id, thread_id=key[1], user_id=key[0])
+        else:
+            box = self._create_box(sandbox_id)
         conflict: tuple[str, str] | None | object = _NO_ACTIVE_IDENTITY
         with self._lock:
             if box.id in self._boxes:
@@ -429,14 +568,62 @@ class BoxliteProvider(WarmPoolLifecycleMixin[BoxliteBox], SandboxProvider):
                 )
         return box.id
 
-    def _create_box(self, sandbox_id: str) -> BoxliteBox:
+    def _matrix_law_thread_mounts(self, *, thread_id: str, user_id: str) -> tuple[list[tuple[str, str, bool]], str]:
+        """Prepare the thread's writable data and read-only thread root mounts."""
+        from deerflow.config import get_app_config
+        from deerflow.config.paths import get_paths
+        from deerflow.skills.projection import ensure_thread_skill_projection, get_thread_skill_projection_paths, thread_skill_projection_exists
+        from deerflow.skills.storage import get_or_new_user_skill_storage
+
+        paths = get_paths()
+        paths.ensure_thread_dirs(thread_id, user_id=user_id)
+        thread_root = paths.thread_dir(thread_id, user_id=user_id)
+        storage = get_or_new_user_skill_storage(user_id, app_config=get_app_config())
+        if not thread_skill_projection_exists(storage, thread_id):
+            enabled_skills = storage.load_skills(enabled_only=True)
+            ensure_thread_skill_projection(storage, thread_id, {skill.name for skill in enabled_skills})
+
+        skill_paths = get_thread_skill_projection_paths(storage, thread_id)
+        skills_root = skill_paths.public.parent
+        if not skills_root.is_dir() or not all(path.is_dir() for path in (skill_paths.public, skill_paths.custom, skill_paths.legacy, skill_paths.integrations)):
+            raise RuntimeError(f"Matrix-Law thread Skill projection is incomplete for {user_id}/{thread_id}")
+        if not skills_root.resolve().is_relative_to(thread_root.resolve()):
+            raise RuntimeError("Matrix-Law thread Skill projection escaped its thread directory")
+
+        user_data = paths.sandbox_user_data_dir(thread_id, user_id=user_id)
+        return [
+            (str(thread_root), "/mnt/thread", True),
+            (str(user_data), "/mnt/user-data", False),
+        ], "; ".join(
+            (
+                "mkdir -p /mnt",
+                "ln -s /mnt/thread/skills_view /mnt/skills",
+                "ln -s /mnt/thread/acp-workspace /mnt/acp-workspace",
+            )
+        )
+
+    def _create_box(self, sandbox_id: str, *, thread_id: str | None = None, user_id: str | None = None) -> BoxliteBox:
         # Enforce replica limit: evict oldest warm-pool box if active + warm boxes are at capacity.
         replicas, total = self._replica_count()
         if total >= replicas:
             evicted = self._evict_oldest_warm()
             self._log_replicas_soft_cap(replicas, sandbox_id, evicted)
         simplebox_cls = _import_simplebox()
-        mkdir_cmd = "mkdir -p " + " ".join(_VIRTUAL_DIRS)
+        strict_isolation = self._config["matrix_law_isolation"]
+        if strict_isolation:
+            if not thread_id or not user_id:
+                raise ValueError("Matrix-Law BoxLite isolation requires a thread-scoped sandbox")
+            volumes, init_cmd = self._matrix_law_thread_mounts(thread_id=thread_id, user_id=user_id)
+            network_cls, advanced_cls, security_cls = _import_isolation_types()
+            box_options: dict[str, Any] = {
+                "volumes": volumes,
+                "network": network_cls(mode="disabled"),
+                "advanced": advanced_cls(security=security_cls.maximum()),
+                "auto_remove": True,
+            }
+        else:
+            init_cmd = "mkdir -p " + " ".join(_VIRTUAL_DIRS)
+            box_options = {}
 
         async def _make() -> SimpleBox:
             box = simplebox_cls(
@@ -444,10 +631,15 @@ class BoxliteProvider(WarmPoolLifecycleMixin[BoxliteBox], SandboxProvider):
                 image=self._config["image"],
                 memory_mib=self._config["memory_mib"],
                 cpus=self._config["cpus"],
+                **({"runtime": self._runtime} if strict_isolation else {}),
+                **box_options,
             )
             await box.start()
-            # Materialise DeerFlow's virtual prefixes so file ops resolve natively.
-            await box.exec("sh", "-lc", mkdir_cmd)
+            # Materialise DeerFlow virtual paths or Matrix-Law's mounted aliases.
+            setup = await box.exec("sh", "-lc", init_cmd)
+            if getattr(setup, "exit_code", 0) not in (0, None):
+                await box.stop()
+                raise RuntimeError(f"Failed to prepare BoxLite guest paths: {getattr(setup, 'stderr', '')}")
             return box
 
         box = self._loop.run(_make())
@@ -474,7 +666,7 @@ class BoxliteProvider(WarmPoolLifecycleMixin[BoxliteBox], SandboxProvider):
             active_identity = self._active_box_identity.pop(sandbox_id, None)
             if box is None:
                 return
-            if self._shutdown_called:
+            if self._shutdown_called or self._config["matrix_law_isolation"]:
                 close_box = box
                 self._skip_health_check_warm_ids.discard(sandbox_id)
                 self._warm_pool_identity.pop(sandbox_id, None)
@@ -484,8 +676,9 @@ class BoxliteProvider(WarmPoolLifecycleMixin[BoxliteBox], SandboxProvider):
                 self._skip_health_check_warm_ids.add(sandbox_id)
 
         if close_box is not None:
-            close_box.close()
-            logger.info("Closed released sandbox %s because shutdown is in progress", sandbox_id)
+            close_box.close(raise_errors=self._config["matrix_law_isolation"])
+            reason = "Matrix-Law guest disk cleanup" if self._config["matrix_law_isolation"] else "shutdown is in progress"
+            logger.info("Closed released sandbox %s because %s", sandbox_id, reason)
         else:
             logger.info("Released sandbox %s to warm pool (VM still running)", sandbox_id)
 
@@ -625,16 +818,38 @@ class BoxliteProvider(WarmPoolLifecycleMixin[BoxliteBox], SandboxProvider):
         leaves running VMs alive, but keeps them visible to this instance's idle
         reaper and atexit shutdown instead of orphaning them.
         """
+        strict_isolation = self._config["matrix_law_isolation"]
+        strict_boxes: list[BoxliteBox] = []
         with self._lock:
-            now = time.time()
-            for sandbox_id, box in self._boxes.items():
-                self._warm_pool.setdefault(sandbox_id, (box, now))
-                self._warm_pool_identity.setdefault(sandbox_id, self._active_box_identity.get(sandbox_id))
-                self._skip_health_check_warm_ids.discard(sandbox_id)
-            self._boxes.clear()
-            self._active_box_identity.clear()
-            self._thread_boxes.clear()
-            self._acquire_serializer.close()
+            if strict_isolation:
+                strict_boxes = list(self._boxes.values()) + [box for box, _ in self._warm_pool.values()]
+                self._boxes.clear()
+                self._warm_pool.clear()
+                self._active_box_identity.clear()
+                self._warm_pool_identity.clear()
+                self._thread_boxes.clear()
+                self._skip_health_check_warm_ids.clear()
+                self._acquire_serializer.close()
+            else:
+                now = time.time()
+                for sandbox_id, box in self._boxes.items():
+                    self._warm_pool.setdefault(sandbox_id, (box, now))
+                    self._warm_pool_identity.setdefault(sandbox_id, self._active_box_identity.get(sandbox_id))
+                    self._skip_health_check_warm_ids.discard(sandbox_id)
+                self._boxes.clear()
+                self._active_box_identity.clear()
+                self._thread_boxes.clear()
+                self._acquire_serializer.close()
+
+        if strict_isolation:
+            errors: list[Exception] = []
+            for box in strict_boxes:
+                try:
+                    box.close(raise_errors=True)
+                except Exception as exc:
+                    errors.append(exc)
+            if errors:
+                raise RuntimeError(f"Could not remove {len(errors)} Matrix-Law BoxLite guest(s) during provider reset") from errors[0]
 
     def shutdown(self) -> None:
         with self._lock:
@@ -660,4 +875,9 @@ class BoxliteProvider(WarmPoolLifecycleMixin[BoxliteBox], SandboxProvider):
                 box.close()
             except Exception as e:  # pragma: no cover - defensive
                 logger.warning("Error closing BoxLite box %s during shutdown: %s", box.id, e)
+        if self._runtime is not None:
+            try:
+                self._loop.run(self._close_runtime())
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning("Error closing Matrix-Law BoxLite runtime: %s", e)
         self._loop.close()

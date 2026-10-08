@@ -8,6 +8,28 @@ DeerFlow is a LangGraph-based AI super agent with sandbox execution, persistent 
 
 ## Architecture
 
+Matrix Law templates use native Markdown artifacts; templates remain data, not installed Skills.
+New source-only host capabilities read exact current-thread upload bytes and create verified,
+host-named binary outputs with compound suffixes. They reuse native sandbox authorization,
+lifecycle and transport. Local POSIX reads are bounded and reject symlink components; remote
+download limits/containment remain provider-dependent. The 16 MiB port ceiling does not override
+the native write budget (80 KiB by default); existing template text limits remain unchanged.
+The managed legal extension now uses these ports in `law_import_authorities`: it validates the
+complete legacy report/records/mapping and rechecks project permissions after I/O before native
+presentation. This source increment has PostgreSQL/ToolNode tests with synthetic file ports and a
+real frontend converter parity check, not real-model acceptance. Frontend handoff wording,
+paired deployment, operator budgets and strict live verification are still pending.
+No runtime image or model configuration is changed by this source increment.
+Matrix Law managed runtime bindings now cover both controlled models and controlled MCP tools:
+when a bound `ControlledMcpRuntime` is present, local MCP discovery from
+`extensions_config.json` is skipped for that task, durable managed MCP tasks keep remote
+handles server-side, and callers receive only local task IDs. This is a source/test
+boundary; it is not a production deployment or a tenant-facing MCP control plane.
+Matrix-Law tenant exit can optionally register a mapped-run Redis adapter: it derives run IDs from the tenant's
+authorized matter/thread/run records, blocks active or unknown run states, and uses WATCH plus one MULTI/EXEC
+to delete only the bounded retained streams whose SHA-256 fingerprints still match. This covers mapped Redis
+streams only; unmapped keys, checkpoint caches, and retention gaps keep tenant-wide exit blocked.
+
 ```
                         ┌──────────────────────────────────────┐
                         │          Nginx (Port 2026)           │
@@ -39,6 +61,20 @@ DeerFlow is a LangGraph-based AI super agent with sandbox execution, persistent 
 ---
 
 ## Core Components
+
+### Password Recovery
+
+Optional self-service password recovery is available for local email/password
+accounts when SMTP and a fixed HTTPS public base URL are configured. Reset
+requests use a generic response, short-lived reset-only tokens, and an atomic
+single-use password update that invalidates prior sessions. See
+[Password recovery](docs/PASSWORD_RESET.md) for configuration and the API.
+
+Local tenant Gateway administrators can be required to enroll TOTP MFA with
+`AUTH_MFA_REQUIRED_FOR_ADMINS=1`. This does not cover OIDC administrators or
+the separate Matrix capability-platform console. Read
+[Local administrator MFA](docs/ADMIN_MFA.md) for key handling, recovery limits,
+and production rollout requirements.
 
 ### Lead Agent
 
@@ -131,6 +167,14 @@ FastAPI application providing REST endpoints for frontend integration:
 | `GET /api/threads/{id}/uploads/list` | List uploaded files |
 | `DELETE /api/threads/{id}` | Delete DeerFlow-managed local thread data after LangGraph thread deletion; unexpected failures are logged server-side and return a generic 500 detail |
 | `GET /api/threads/{id}/artifacts/{path}` | Serve generated artifacts |
+| `POST /api/threads/{id}/artifacts/import-text` | Verify the supplied source digest and create a new host-named Markdown, text, or JSON artifact copy; initializes the owner-scoped thread directories when the thread has not run yet |
+| `GET /health` | Process liveness; remains 200 while the Gateway drains |
+| `GET /ready` | Startup/drain readiness plus a bounded Redis StreamBridge probe when Redis-backed streaming is configured |
+| `GET /metrics` | Optional loopback-only Prometheus scrape; Matrix-Law adds fixed-label OCR and speech worker batch counts, claimed-job counts, duration histograms, claimable queue depth/oldest age, observation timestamp, and batch/observation errors |
+
+`/ready` returns 503 with the fixed check `stream_bridge: unavailable` when the configured Redis StreamBridge cannot respond within 500 ms. It does not expose Redis endpoints or exception text. The in-memory bridge has no external dependency and remains ready after process startup.
+
+Worker metrics exclude tenant, matter, membership, user, task, provider, supplier endpoint, and credential labels. Queue snapshot failures preserve the previous successful gauges, increment a fixed-label error counter, and do not change job outcomes. The endpoint is not proxied through Nginx.
 
 ### IM Channels
 
@@ -323,6 +367,7 @@ Key sections:
 Provider note:
 - `models[*].use` references provider classes by module path (for example `langchain_openai:ChatOpenAI`).
 - If a provider module is missing, DeerFlow now returns an actionable error with install guidance (for example `uv add langchain-google-genai`).
+- A vertical extension may, after trusted task admission, bind the public `ControlledModelRuntime` contract to route fixed-purpose model calls through its own gateway. The private signer and provider credentials remain runtime-only; a denied controlled model does not fall back to the ordinary provider. This is opt-in: embedded `DeerFlowClient`, TUI, and CLI calls are not covered unless their entry point installs a trusted binding.
 
 ### Extensions Configuration (`extensions_config.json`)
 
@@ -552,3 +597,10 @@ See the [LICENSE](../LICENSE) file in the project root.
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
+# Native output port for domain extensions
+
+The optional `ExtensionRuntimeDeps.create_output_text(runtime, content, suffix)` creates
+a new host-named draft through the existing authorized sandbox and verifies its UTF-8
+content. It neither publishes nor saves project versions. Domain authorization and exact
+template rendering stay in Matrix Law's extension; uncertain writes are not replay-safe.
+See `packages/harness/deerflow/extensions/AGENTS.md` for the scope and concurrency limits.

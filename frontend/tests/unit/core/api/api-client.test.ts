@@ -242,6 +242,94 @@ test("short-circuits reconnect to a terminal run", async () => {
   expect(sessionStorage.removeItem).toHaveBeenCalledWith("lg:stream:thread-1");
 });
 
+test("surfaces orphan recovery when reconnect preflight finds a recovered run", async () => {
+  const sessionStorage = makeSessionStorage();
+  sessionStorage.setItem("lg:stream:thread-1", "run-1");
+  const fetchFn = rs.fn(async (url: string | URL) => {
+    const path = url.toString();
+    if (path.endsWith("/runs/run-1")) {
+      return new Response(
+        JSON.stringify({
+          run_id: "run-1",
+          status: "error",
+          stop_reason: "orphan_recovered",
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response(JSON.stringify({ detail: "unexpected join" }), {
+      status: 500,
+    });
+  });
+  rs.stubGlobal("window", {
+    location: { origin: "http://localhost:2026" },
+    sessionStorage,
+  });
+  rs.stubGlobal("fetch", fetchFn);
+
+  const gen = getAPIClient(true).runs.joinStream("thread-1", "run-1");
+  await expect(gen.next()).resolves.toEqual({
+    done: false,
+    value: {
+      event: "custom",
+      data: {
+        type: "run_recovery_required",
+        code: "orphan_recovered",
+        run_id: "run-1",
+        recovery: "start_new_run",
+      },
+    },
+  });
+  await expect(gen.next()).resolves.toMatchObject({ done: true });
+
+  expect(fetchFn).toHaveBeenCalledTimes(1);
+  expect(sessionStorage.removeItem).toHaveBeenCalledWith("lg:stream:thread-1");
+});
+
+test("surfaces graceful Gateway shutdown when reconnect preflight finds an interrupted run", async () => {
+  const sessionStorage = makeSessionStorage();
+  sessionStorage.setItem("lg:stream:thread-1", "run-1");
+  const fetchFn = rs.fn(async (url: string | URL) => {
+    const path = url.toString();
+    if (path.endsWith("/runs/run-1")) {
+      return new Response(
+        JSON.stringify({
+          run_id: "run-1",
+          status: "interrupted",
+          stop_reason: "gateway_shutdown",
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response(JSON.stringify({ detail: "unexpected join" }), {
+      status: 500,
+    });
+  });
+  rs.stubGlobal("window", {
+    location: { origin: "http://localhost:2026" },
+    sessionStorage,
+  });
+  rs.stubGlobal("fetch", fetchFn);
+
+  const gen = getAPIClient(true).runs.joinStream("thread-1", "run-1");
+  await expect(gen.next()).resolves.toEqual({
+    done: false,
+    value: {
+      event: "custom",
+      data: {
+        type: "run_recovery_required",
+        code: "gateway_shutdown",
+        run_id: "run-1",
+        recovery: "start_new_run",
+      },
+    },
+  });
+  await expect(gen.next()).resolves.toMatchObject({ done: true });
+
+  expect(fetchFn).toHaveBeenCalledTimes(1);
+  expect(sessionStorage.removeItem).toHaveBeenCalledWith("lg:stream:thread-1");
+});
+
 test("falls back to join when preflight cannot resolve the run", async () => {
   const sessionStorage = makeSessionStorage();
   sessionStorage.setItem("lg:stream:thread-1", "run-1");

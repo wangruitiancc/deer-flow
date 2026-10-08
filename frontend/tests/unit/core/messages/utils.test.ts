@@ -1231,6 +1231,109 @@ describe("multi-part content with bare-string continuations", () => {
 });
 
 describe("orphan tool messages", () => {
+  test("returns a late blocked write to its invocation without polluting the final answer", () => {
+    const messages = [
+      { id: "human", type: "human", content: "Create a legal graph" },
+      {
+        id: "write",
+        type: "ai",
+        content: "Writing a draft",
+        tool_calls: [{ id: "blocked-write", name: "write_file", args: {} }],
+      },
+      {
+        id: "present",
+        type: "ai",
+        content: "",
+        tool_calls: [
+          {
+            id: "present-call",
+            name: "present_files",
+            args: {
+              file_paths: ["/mnt/user-data/outputs/test.law-graph.json"],
+            },
+          },
+        ],
+      },
+      {
+        id: "presented",
+        type: "tool",
+        tool_call_id: "present-call",
+        content: "Successfully presented files",
+      },
+      {
+        id: "final",
+        type: "ai",
+        content: "Validated graph delivered; all sources remain unverified.",
+      },
+      {
+        id: "late-error",
+        type: "tool",
+        tool_call_id: "blocked-write",
+        content:
+          "Error: write_file blocked — read the current version before modifying.",
+        status: "error",
+        additional_kwargs: { deerflow_seq: 32 },
+      },
+    ] as Message[];
+
+    for (const isCurrentTurnLoading of [false, true]) {
+      const groups = getMessageGroups(messages, { isCurrentTurnLoading });
+      expect(
+        groups
+          .find((group) => group.id === "write")
+          ?.messages.map((message) => message.id),
+      ).toEqual(["write", "late-error"]);
+      expect(
+        groups
+          .find((group) => group.id === "final")
+          ?.messages.map((message) => message.id),
+      ).toEqual(["final"]);
+      expect(
+        groups
+          .find((group) => group.id === "present")
+          ?.messages.map((message) => message.id),
+      ).toEqual(["present", "presented"]);
+    }
+    expect(messages.at(-1)?.id).toBe("late-error"); // The authoritative feed order is untouched.
+  });
+
+  test("late results keep their original turn when a newer turn is already processing", () => {
+    const messages = [
+      { id: "h1", type: "human", content: "First" },
+      {
+        id: "a1",
+        type: "ai",
+        content: "",
+        tool_calls: [{ id: "c1", name: "write_file", args: {} }],
+      },
+      { id: "final", type: "ai", content: "Done" },
+      { id: "h2", type: "human", content: "Second" },
+      {
+        id: "a2",
+        type: "ai",
+        content: "",
+        tool_calls: [{ id: "c2", name: "read_file", args: {} }],
+      },
+      {
+        id: "t1",
+        type: "tool",
+        tool_call_id: "c1",
+        content: "Earlier failure",
+      },
+    ] as Message[];
+    const groups = getMessageGroups(messages);
+    expect(
+      groups
+        .find((group) => group.id === "a1")
+        ?.messages.map((message) => message.id),
+    ).toEqual(["a1", "t1"]);
+    expect(
+      groups
+        .find((group) => group.id === "a2")
+        ?.messages.map((message) => message.id),
+    ).toEqual(["a2"]);
+  });
+
   // LangGraph stream-mode "messages-tuple" can emit tool-result events out of order or
   // replayed from subagent state (e.g. bash subagent under LocalSandboxProvider with
   // allow_host_bash). When that happens, the tool message arrives after a terminal

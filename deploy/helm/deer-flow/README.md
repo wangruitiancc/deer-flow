@@ -1,9 +1,19 @@
-# DeerFlow Helm Chart
+# Matrix Law Helm Chart
 
-Deploys the full DeerFlow stack to Kubernetes: **gateway** (backend + embedded
+Deploys the Matrix Law multi-tenant legal Agent stack to Kubernetes: **gateway** (backend + embedded
 LangGraph runtime), **frontend** (Next.js), **nginx** (internal reverse proxy
 preserving the compose routing), and the **provisioner** (K8s-native sandbox
 that spawns code-execution Pods on demand).
+
+The Matrix Law module is required by the rendered configuration. Public Agent
+runs must resolve an authorized active legal work item before durable admission; the item may be a case,
+one-off consultation, contract review, research task, or legal draft. This is
+not a general-purpose DeerFlow deployment profile.
+
+The Web workspace is likewise legal-only: it lands on the legal-work workspace and
+does not expose generic new-chat, custom-agent, scheduler, or channel navigation.
+Only a thread created and bound from an authorized legal work item can enter the chat
+execution surface.
 
 This chart translates the production `docker/docker-compose.yaml` into native
 Kubernetes resources. No existing repo files are modified.
@@ -246,17 +256,46 @@ kubectl -n deer-flow exec deploy/deer-flow-provisioner -- curl -s localhost:8002
       username: deerflow
       password: changeme
   ```
-- **Graceful shutdown & memory drain.** The gateway pod sets `terminationGracePeriodSeconds` (default 45s, overridable via `gateway.terminationGracePeriodSeconds`) plus an optional `preStop` sleep (`gateway.preStopSleepSeconds`, default 5s). The grace period MUST exceed the Gateway's graceful-shutdown work — channel stop (~5s) plus the memory-queue drain (`memory.shutdown_flush_timeout_seconds`, default 30s) plus a buffer — because the drain runs on a daemon thread and K8s SIGKILLs anything still running at the end of the grace window. K8s defaults to 30s, which SIGKILLs the drain mid-flight and silently re-introduces the memory loss the drain is fixing. **When you raise `memory.shutdown_flush_timeout_seconds`, raise `gateway.terminationGracePeriodSeconds` to match** (channel stop + drain + buffer).
-- **Gateway replicas.** Postgres + the Redis stream bridge together make the
-  gateway's *persisted* state (checkpointer + run/thread metadata) and *live
-  stream* path cross-pod-safe. The default is still 1 replica: **do not raise
-  `gateway.replicas` past 1 yet.** Run control — `create_or_reject` dedup,
-  `cancel`, and orphan reconciliation — is still worker-local (in-process
-  `asyncio.Lock` + in-memory `record.task`), tracked by [issue
-  #3948](https://github.com/bytedance/deer-flow/issues/3948). With >1 replica a
-  double-submit can create two runs on one thread (checkpoint corruption), a
-  cancel can land on a non-owner pod (409), and a crashed pod's runs stay
-  `pending`/`running` forever. Stay on 1 replica until that work lands.
+- **Readiness, drain, and graceful shutdown.** `/health` is process liveness and remains 200 while the Gateway
+  drains; `/ready` is fail-closed during startup and returns 503 after drain begins. The readiness probe uses
+  `/ready` with a two-second period and one-failure threshold, while liveness stays on `/health`. The `preStop`
+  hook first creates the file named by `DEER_FLOW_GATEWAY_DRAIN_MARKER`, which immediately makes `/ready`
+  return 503, then waits `gateway.preStopSleepSeconds` (default 10s) for EndpointSlice, Service, ingress, and
+  external load balancers to remove the pod before Kubernetes sends SIGTERM. The production command uses
+  `exec`, so SIGTERM reaches Uvicorn rather than stopping at PID 1's shell. The pod's
+  `terminationGracePeriodSeconds` defaults to 90s and MUST include the preStop window, channel/browser shutdown,
+  the 5s run drain, the memory-queue drain (`memory.shutdown_flush_timeout_seconds`, default 30s), and a safety
+  buffer. **When any component budget grows, raise `gateway.terminationGracePeriodSeconds` too.** A probe or
+  template render is not proof that a specific cloud load balancer has completed connection draining; verify
+  that behavior in the target cluster.
+- **Prometheus metrics and alert templates.** Helm enables the Gateway's internal `/metrics` endpoint with
+  `DEER_FLOW_METRICS_ENABLED=true` and annotates the ClusterIP Gateway Service for scraping. Metrics use route
+  templates plus method/status-class and a fixed response kind only; tenant, user, thread, raw URL, request body, and
+  credentials never become labels. End-to-end latency distinguishes ordinary requests from long-lived SSE sessions,
+  and the p99 alert filters to ordinary requests. Set `gateway.metrics.serviceMonitor.enabled=true` only when the
+  Prometheus Operator CRD exists. Likewise,
+  `gateway.metrics.prometheusRule.enabled=true` renders opt-in alerts for sustained 5xx ratio, p99 latency, and zero
+  available Gateway replicas. Tune every threshold from measured non-production load before production; rendered
+  rules are an alerting contract, not evidence that Prometheus is installed, scraping, routing notifications, or
+  meeting an SLO in a target cluster.
+- **Gateway replicas.** Postgres + the Redis stream bridge make persisted state
+  and live SSE cross-pod-visible. This fork also uses database run admission,
+  owner leases, orphan reconciliation, durable delivery receipts, and explicit
+  `orphan_recovered` / `gateway_shutdown` recovery events. The default remains
+  one replica because multi-replica operation is conditional: configure shared
+  Postgres, `run_events.backend: db`, Redis stream bridge,
+  `run_ownership.heartbeat_enabled: true`, and database-backed agent storage;
+  keep process-local browser sessions disabled. A recovered or gracefully
+  interrupted Agent request is terminalized and must be sent as a new run; it
+  is not resumed or automatically replayed. Validate rolling replacement and
+  failure recovery in the target cluster before increasing replicas.
+- **Top-level run overload protection.** The Matrix deployment profile starts with provisional limits of 32 active
+  Agent runs globally, 8 per legal tenant, and 4 per authenticated user. Shared PostgreSQL serializes admission across Gateway Pods;
+  rejected requests fail fast with HTTP 429, `Retry-After`, and `X-DeerFlow-Overload: run-capacity`. Requests are
+  not queued or replayed. These initial values are safety defaults, not measured capacity or an SLO; tune them with
+  representative non-production load. The tenant key is a one-way digest resolved from trusted matter context and is
+  never exported as a metric label. The limit prevents one tenant from monopolizing all slots, but does not reserve a
+  minimum share or provide perfect fairness when the global cap is already exhausted.
 - **Scheduled task recovery.** If a deployment explicitly enables
   `scheduler.multi_instance: true`, it must use shared Postgres,
   `run_ownership.heartbeat_enabled: true`, and `run_events.backend: db`.

@@ -66,7 +66,10 @@ class _CloseableSaver(InMemorySaver):
 @pytest.mark.asyncio
 async def test_shutdown_cancels_and_awaits_inflight_run():
     """shutdown() cancels the in-flight task, waits for it, marks it interrupted."""
-    rm = RunManager()
+    from deerflow.runtime.runs.store.memory import MemoryRunStore
+
+    store = MemoryRunStore()
+    rm = RunManager(store=store)
     record = await rm.create("t-drain")
     await rm.set_status(record.run_id, RunStatus.running)
 
@@ -90,6 +93,11 @@ async def test_shutdown_cancels_and_awaits_inflight_run():
         assert record.task.done()
         assert cancelled.is_set()
         assert record.status == RunStatus.interrupted
+        assert record.stop_reason == "gateway_shutdown"
+        persisted = await store.get(record.run_id)
+        assert persisted is not None
+        assert persisted["status"] == "interrupted"
+        assert persisted["stop_reason"] == "gateway_shutdown"
     finally:
         if not record.task.done():
             record.task.cancel()
@@ -392,8 +400,10 @@ async def test_shutdown_preserves_status_of_run_completed_during_drain():
         await rm.shutdown(timeout=5.0)
 
         assert record.status == RunStatus.success, f"shutdown overwrote in-memory status: {record.status}"
+        assert record.stop_reason is None
         persisted = await store.get(record.run_id)
         assert persisted is not None and persisted["status"] == "success", f"shutdown overwrote persisted status: {persisted}"
+        assert persisted.get("stop_reason") is None
     finally:
         if not record.task.done():
             record.task.cancel()

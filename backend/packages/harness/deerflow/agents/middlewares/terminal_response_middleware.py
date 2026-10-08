@@ -1,4 +1,4 @@
-"""Ensure tool-using lead-agent turns end with a visible assistant response."""
+"""Terminal answer guard for the lead LangChain agent."""
 
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ def _tool_result_in_current_turn(messages: list[Any]) -> bool:
 
 
 class TerminalResponseMiddleware(AgentMiddleware[AgentState]):
-    """Retry one empty post-tool response, then persist a visible error fallback."""
+    """Enforce a visible final answer when a post-tool model call is empty."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -120,12 +120,16 @@ class TerminalResponseMiddleware(AgentMiddleware[AgentState]):
             return None
 
         last = messages[-1]
-        if _has_visible_content(last) or _has_tool_call_intent_or_error(last):
-            return None
-        if not _tool_result_in_current_turn(messages):
+        if _has_tool_call_intent_or_error(last):
             return None
 
         key = self._key(runtime)
+        if _has_visible_content(last):
+            return None
+
+        if not _tool_result_in_current_turn(messages):
+            return None
+
         with self._lock:
             # The recovery budget is once per run, not once per empty message.
             # A retry that calls another tool must not refresh the budget and
@@ -162,14 +166,18 @@ class TerminalResponseMiddleware(AgentMiddleware[AgentState]):
         with self._lock:
             pending = key in self._pending_prompts
             self._pending_prompts.pop(key, None)
-        if not pending:
+        reminders = []
+        if pending:
+            reminders.append(
+                HumanMessage(
+                    content=_RECOVERY_PROMPT,
+                    name="terminal_response_recovery",
+                    additional_kwargs={"hide_from_ui": True},
+                )
+            )
+        if not reminders:
             return request
-        reminder = HumanMessage(
-            content=_RECOVERY_PROMPT,
-            name="terminal_response_recovery",
-            additional_kwargs={"hide_from_ui": True},
-        )
-        return request.override(messages=[*request.messages, reminder])
+        return request.override(messages=[*request.messages, *reminders])
 
     @override
     def before_agent(self, state: AgentState, runtime: Runtime) -> dict | None:

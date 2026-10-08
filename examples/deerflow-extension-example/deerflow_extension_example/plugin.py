@@ -68,6 +68,24 @@ class ExampleStats:
             }
 
 
+@dataclass(frozen=True)
+class ExampleAdmission:
+    thread_id: str
+
+
+class ExampleTaskAdmission:
+    async def admit_task(
+        self,
+        app_store: ExtensionData,
+        task_store: ExtensionData,
+        info: TaskInfo,
+    ) -> None:
+        del app_store
+        if not info.thread_id:
+            raise ValueError("thread_id is required")
+        task_store.set(ExampleAdmission(info.thread_id))
+
+
 def _stats(store: ExtensionData) -> ExampleStats:
     return store.get_or_init(ExampleStats, ExampleStats)
 

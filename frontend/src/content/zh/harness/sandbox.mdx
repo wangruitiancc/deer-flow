@@ -8,7 +8,7 @@ import { Callout, Tabs } from "nextra/components";
 # 沙箱
 
 <Callout type="info" emoji="📦">
-  沙箱是 Agent 进行文件和命令操作的隔离工作区。它让 DeerFlow
+  沙箱是 Agent 进行文件和命令操作的隔离工作区。它让 Matrix-Law
   能够采取真实行动，而不仅仅是对话。
 </Callout>
 
@@ -16,7 +16,7 @@ import { Callout, Tabs } from "nextra/components";
 
 ## 沙箱模式
 
-DeerFlow 支持四种沙箱模式，选择适合你部署的一种：
+以下模式决定 Agent 命令在哪里执行，不决定 Matrix-Law 服务如何部署。Docker 只用于本机两服务器模拟和隔离测试；云端服务目标是两台 Linux 主机上的原生 systemd 进程。当前 Matrix-Law 使用关闭 host Bash 的 LocalSandboxProvider，尚无线程级 OS/资源/网络隔离。获准真实法律材料进入云端前，必须单独完成沙箱安全与数据处理验收。
 
 ### LocalSandbox（默认）
 
@@ -35,7 +35,7 @@ sandbox:
 
 命令在隔离容器中运行（Linux/Windows 上的 Docker，macOS 上的 Apple Container）。每个沙箱会话获得一个全新的容器环境。
 
-- **适合**：多用户环境、生产部署，或任何需要执行隔离的场景。
+- **用途**：可选的 Agent 命令隔离后端；它不改变 Matrix-Law 服务的原生 systemd 部署方式。生产使用需单独通过安全和数据处理验收。
 
 ```yaml
 sandbox:
@@ -61,9 +61,9 @@ sandbox:
 
 ### E2B 云端沙箱
 
-命令在 [E2B](https://e2b.dev) 云端的 micro-VM 中执行。每个线程通过 metadata 绑定到一个独立的 e2b 沙箱，因此即使 Gateway 重启或在多进程之间，同一个 DeerFlow 线程也始终复用同一个 e2b 沙箱。当达到配置的空闲超时时，e2b 会自动回收云端 VM。
+命令在 [E2B](https://e2b.dev) 云端的 micro-VM 中执行。每个线程通过 metadata 绑定到一个独立的 e2b 沙箱，因此即使 Gateway 重启或在多进程之间，同一个 Matrix-Law 线程也始终复用同一个 e2b 沙箱。当达到配置的空闲超时时，e2b 会自动回收云端 VM。
 
-- **适合**：托管/Serverless 部署、不想自行运维 Docker 或 Kubernetes 的团队、开箱即用需要真实 Jupyter 内核的工作流。
+- **用途**：将 Agent 命令放到独立云端 micro-VM 执行。它不是 Matrix-Law 服务的部署方式；法律材料使用前还需完成第三方数据处理、地域、保留和人工复核审查。
 - **取舍**：需要访问 e2b 控制面网络以及一个 API Key；挂载只能在沙箱启动时**一次性上传**（云端沙箱无法做主机 bind-mount）。
 
 ```yaml
@@ -108,7 +108,7 @@ sandbox:
 在 [e2b.dev/dashboard](https://e2b.dev/dashboard) 申请 API Key，然后在 `config.yaml` 中直接配置 `sandbox.api_key`，或在 `.env` 中导出 `E2B_API_KEY`。
 
 <Callout type="info">
-  因为 e2b 是远程沙箱，DeerFlow 的虚拟前缀 `/mnt/user-data`
+  因为 e2b 是远程沙箱，Matrix-Law 的虚拟前缀 `/mnt/user-data`
   会被自动重映射到云端 VM 的 `home_dir`（默认 `/home/user`）。
   原本读写 `/mnt/user-data/...` 的工具无需任何改动即可正常工作。
 </Callout>
@@ -153,10 +153,9 @@ sandbox:
   <code>/mnt/user-data</code>。
 </Callout>
 
-当 `LocalSandboxProvider` 运行在生产 Docker（`make up`）中时，它实际运行在
-`deer-flow-gateway` 容器里。此时 `host_path` 是从 gateway
-容器的文件系统解析，而不是直接从 Docker 宿主机解析。需要先把宿主机目录 bind
-mount 到 gateway 服务，再在 `config.yaml` 中使用容器内路径：
+在本机两服务器 Docker 模拟中，`LocalSandboxProvider` 运行在律所模拟容器内；此时
+`host_path` 是从该模拟容器的文件系统解析。只对本机测试，先把目录挂载进律所模拟服务，
+再在 `config.yaml` 中使用容器内路径：
 
 ```yaml
 # docker/docker-compose.yaml 或 override 文件
@@ -175,7 +174,7 @@ sandbox:
       read_only: true
 ```
 
-如果配置的 `host_path` 对 gateway 进程不可见，DeerFlow 会记录错误日志并忽略该挂载。
+如果配置的 `host_path` 对 gateway 进程不可见，Matrix-Law 会记录错误日志并忽略该挂载。
 
 ## 输出截断
 
@@ -212,7 +211,7 @@ sandbox:
 
 ### 容器沙箱
 
-基于容器的沙箱提供文件系统和进程隔离。Agent 看不到或修改主机文件系统，除非通过显式挂载。Provisioner 管理模式增加了额外一层：每个线程获得自己的隔离 Pod。
+容器沙箱可以通过文件系统和进程边界限制访问，但实际隔离强度取决于运行时、权限、挂载和资源配置，不能据此宣称生产验收通过。Provisioner 模式可为线程分配独立 Pod；Matrix-Law 尚未将其选为生产沙箱。
 
 ### 审计中间件
 

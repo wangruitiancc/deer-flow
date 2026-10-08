@@ -1,13 +1,13 @@
 ---
 title: Agents and Threads
-description: DeerFlow App supports multiple named agents and maintains conversation state across sessions through threads and checkpointing.
+description: Matrix-Law App supports multiple named agents and maintains conversation state across sessions through threads and checkpointing.
 ---
 
 import { Callout, Steps } from "nextra/components";
 
 # Agents and Threads
 
-DeerFlow App supports multiple named agents and maintains conversation state across sessions through threads and checkpointing.
+Matrix-Law App supports multiple named agents and maintains conversation state across sessions through threads and checkpointing.
 
 ## Agents
 
@@ -128,7 +128,7 @@ backend/.deer-flow/threads/{thread_id}/user-data/
 
 This directory is mounted into the sandbox as `/mnt/user-data/` for the agent to read and write.
 
-In Docker deployments, this path is bind-mounted from the host so that thread data persists across container restarts. Set `DEER_FLOW_ROOT` to the absolute path of your deer-flow repository root to ensure the correct host path is used.
+In the local two-server simulation, thread data persists in the tenant-side data volume. On the cloud target, the native tenant service stores persistent workspace state under the systemd-managed `DEER_FLOW_HOME` directory; application containers are not the server deployment model.
 
 <Cards num={2}>
   <Cards.Card

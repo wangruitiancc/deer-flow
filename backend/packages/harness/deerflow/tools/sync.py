@@ -52,12 +52,12 @@ def make_sync_tool_wrapper(coro: Callable[..., Any], tool_name: str) -> Callable
         parameter. This covers DeerFlow's current config-sensitive tools, such
         as ``invoke_acp_agent``.
 
-        This wrapper intentionally does not synthesize a dynamic function
-        signature. A future async tool with a normal user-facing argument named
-        ``config`` and a separate ``RunnableConfig`` parameter named something
-        else, such as ``run_config``, may collide with LangChain's injected
-        ``config`` argument. Rename that user-facing field or extend this
-        helper before using that signature.
+        The wrapper preserves the coroutine's signature and annotations so
+        LangGraph can still discover hidden runtime/state injection parameters.
+        A future async tool with a normal user-facing argument named ``config``
+        and a separate ``RunnableConfig`` parameter named something else, such
+        as ``run_config``, may collide with LangChain's injected ``config``
+        argument. Rename that user-facing field or extend this helper first.
     """
     config_param = _get_runnable_config_param(coro)
 
@@ -84,9 +84,12 @@ def make_sync_tool_wrapper(coro: Callable[..., Any], tool_name: str) -> Callable
                 kwargs[config_param] = config
             return run_coroutine(*args, **kwargs)
 
-        return sync_wrapper
+        return functools.update_wrapper(sync_wrapper, coro)
 
     def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
         return run_coroutine(*args, **kwargs)
 
-    return sync_wrapper
+    # LangGraph discovers hidden ToolRuntime/InjectedState parameters from the
+    # callable annotations. Preserve the coroutine metadata so adding a sync
+    # compatibility path cannot silently disable trusted runtime injection.
+    return functools.update_wrapper(sync_wrapper, coro)

@@ -89,7 +89,7 @@ function SkillSettingsList({
   );
   const handleCreateSkill = () => {
     onClose?.();
-    router.push("/workspace/chats/new?mode=skill");
+    router.push("/workspace/law");
   };
   const handleSkillArchive = async (event: ChangeEvent<HTMLInputElement>) => {
     if (isUploading) {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from contextlib import contextmanager
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -17,6 +18,7 @@ _MOCKED_MODULE_NAMES = (
     "deerflow.agents",
     "deerflow.agents.thread_state",
     "deerflow.agents.middlewares",
+    "deerflow.agents.middlewares.audit_context",
     "deerflow.agents.middlewares.thread_data_middleware",
     "deerflow.sandbox",
     "deerflow.sandbox.middleware",
@@ -43,6 +45,27 @@ def env():
     try:
         for name in _MOCKED_MODULE_NAMES:
             sys.modules[name] = MagicMock()
+        # CP-02 binds a controlled model runtime around assembly and stream
+        # consumption.  Keep this lifecycle-only fixture isolated while
+        # preserving the production no-op behavior when no extension has
+        # installed such a binding.
+        models_module = ModuleType("deerflow.models")
+        models_module.create_chat_model = MagicMock()
+
+        @contextmanager
+        def _controlled_scope(_task_store):
+            yield
+
+        async def _iter_controlled(_task_store, stream):
+            async for item in stream:
+                yield item
+
+        models_module.controlled_model_runtime_scope = _controlled_scope
+        models_module.iter_with_controlled_model_runtime = _iter_controlled
+        sys.modules["deerflow.models"] = models_module
+        audit_context_module = ModuleType("deerflow.agents.middlewares.audit_context")
+        audit_context_module.LOOP_DETECTION_RECORDER_CONTEXT_KEY = "loop_detection_recorder"
+        sys.modules["deerflow.agents.middlewares.audit_context"] = audit_context_module
         storage_module = ModuleType("deerflow.skills.storage")
         storage_module.get_or_new_skill_storage = lambda **kwargs: SimpleNamespace(load_skills=lambda *, enabled_only: [])
         storage_module.get_or_new_user_skill_storage = lambda user_id, **kwargs: SimpleNamespace(load_skills=lambda *, enabled_only: [])

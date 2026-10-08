@@ -19,6 +19,14 @@ def test_runtime_deps_is_exported_under_its_documented_name():
     assert ExtensionRuntimeDeps.__name__ == "ExtensionRuntimeDeps"
 
 
+def test_background_worker_metrics_contract_includes_queue_observations():
+    from deerflow_extension_api import BackgroundWorkerMetrics
+
+    assert hasattr(BackgroundWorkerMetrics, "record_background_worker_batch")
+    assert hasattr(BackgroundWorkerMetrics, "record_background_worker_queue")
+    assert hasattr(BackgroundWorkerMetrics, "record_ocr_provider_outcome")
+
+
 def test_api_version_matches_the_packaging_metadata():
     """A contract version that disagrees with the wheel's version makes pip
     resolution and the ``@extension`` marker disagree about the same host."""
@@ -62,6 +70,7 @@ def test_registry_protocol_declares_every_registration_method():
 
     for method in (
         "middlewares",
+        "task_admission",
         "task_lifecycle",
         "system_model_observer",
         "agent_assembly_observer",

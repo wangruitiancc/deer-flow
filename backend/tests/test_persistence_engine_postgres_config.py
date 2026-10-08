@@ -129,6 +129,37 @@ async def test_init_engine_from_config_preserves_longer_command_timeout_override
 
 
 @pytest.mark.asyncio
+async def test_auto_migrate_false_only_runs_read_only_schema_preflight() -> None:
+    config = DatabaseConfig(
+        backend="postgres",
+        postgres_url="postgresql://user:password@localhost/deerflow",
+        auto_migrate=False,
+    )
+    mock_engine = MagicMock()
+    mock_engine.dispose = AsyncMock()
+    preflight = AsyncMock()
+    bootstrap_schema = AsyncMock()
+    auto_create = AsyncMock()
+
+    with (
+        patch.dict(sys.modules, {"asyncpg": ModuleType("asyncpg")}),
+        patch.object(engine_mod, "create_async_engine", return_value=mock_engine),
+        patch.object(engine_mod, "async_sessionmaker", return_value=MagicMock()),
+        patch.object(engine_mod, "_assert_schema_current", new=preflight),
+        patch.object(engine_mod, "_auto_create_postgres_db", new=auto_create),
+        patch("deerflow.persistence.bootstrap.bootstrap_schema", new=bootstrap_schema),
+    ):
+        try:
+            await engine_mod.init_engine_from_config(config)
+
+            preflight.assert_awaited_once_with(mock_engine)
+            bootstrap_schema.assert_not_awaited()
+            auto_create.assert_not_awaited()
+        finally:
+            await engine_mod.close_engine()
+
+
+@pytest.mark.asyncio
 async def test_init_engine_postgres_uses_hardened_kwargs() -> None:
     url = "postgresql+asyncpg://user:password@localhost/deerflow"
     mock_engine = MagicMock()

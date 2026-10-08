@@ -151,6 +151,7 @@ extensions = ["broken-extension @ {missing_extension.as_uri()}"]
     )
     environment = os.environ.copy()
     environment["UV_CACHE_DIR"] = str(tmp_path / "uv-cache")
+    environment.pop("UV_NO_SYNC", None)
     subprocess.run(["uv", "lock"], cwd=project, env=environment, check=True, capture_output=True)
     missing_extension.unlink()
 

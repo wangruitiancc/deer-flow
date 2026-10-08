@@ -1392,6 +1392,29 @@ def test_get_thread_history_returns_iso_for_legacy_checkpoint_metadata() -> None
         assert _ISO_TIMESTAMP_RE.match(entry["created_at"]), entry
 
 
+@pytest.mark.parametrize("artifacts", [[], ["/mnt/user-data/outputs/note.md"]])
+def test_get_thread_history_preserves_artifact_state_including_empty_list(artifacts) -> None:
+    app, _store, checkpointer = _build_thread_app()
+    thread_id = "history-artifact-state"
+
+    async def seed():
+        checkpoint = empty_checkpoint()
+        checkpoint["channel_values"] = {"artifacts": artifacts, "messages": []}
+        checkpoint["channel_versions"] = {"artifacts": 1, "messages": 1}
+        await checkpointer.aput(
+            {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}},
+            checkpoint,
+            {"step": 1, "source": "loop", "writes": {}, "parents": {}},
+            {"artifacts": 1, "messages": 1},
+        )
+
+    asyncio.run(seed())
+    with TestClient(app) as client:
+        response = client.post(f"/api/threads/{thread_id}/history", json={"limit": 1})
+    assert response.status_code == 200
+    assert response.json()[0]["values"]["artifacts"] == artifacts
+
+
 def test_get_thread_history_associates_tool_messages_from_checkpoint_turn() -> None:
     app, _store, checkpointer = _build_thread_app()
     app.state.run_event_store = SimpleNamespace(find_latest_ai_message_run_ids=AsyncMock(return_value={}))

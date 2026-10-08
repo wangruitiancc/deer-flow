@@ -163,6 +163,14 @@ class TestCrawl4AiClient:
 class TestCrawl4AiTools:
     """Tests for the Crawl4AI tool functions."""
 
+    @pytest.fixture(autouse=True)
+    def _stable_public_dns(self, monkeypatch):
+        """Keep public-URL tests independent from local proxy fake-IP DNS."""
+        monkeypatch.setattr(
+            "deerflow.community.url_safety.resolve_host_addresses",
+            lambda _host: [ipaddress.ip_address("93.184.216.34")],
+        )
+
     @patch("deerflow.community.crawl4ai.tools._build_client")
     async def test_web_fetch_tool_success(self, mock_build):
         from deerflow.community.crawl4ai import tools

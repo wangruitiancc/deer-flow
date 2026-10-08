@@ -99,6 +99,26 @@ class LocalAuthProvider(AuthProvider):
         """Update an existing user."""
         return await self._repo.update_user(user)
 
+    async def reset_password_if_token_version(self, user_id: str, expected_version: int, new_password: str) -> bool:
+        """Hash and atomically apply a password reset once."""
+        password_hash = await hash_password_async(new_password)
+        return await self._repo.set_password_if_token_version(user_id, expected_version, password_hash)
+
+    async def set_mfa_challenge(self, user_id: str, expected_version: int, challenge_id: str) -> bool:
+        return await self._repo.set_mfa_challenge(user_id, expected_version, challenge_id)
+
+    async def save_mfa_setup(self, user_id: str, expected_version: int, challenge_id: str, secret_ciphertext: str, recovery_hashes: list[str]) -> bool:
+        return await self._repo.save_mfa_setup(user_id, expected_version, challenge_id, secret_ciphertext, recovery_hashes)
+
+    async def confirm_mfa_setup(self, user_id: str, expected_version: int, challenge_id: str, counter: int) -> bool:
+        return await self._repo.confirm_mfa_setup(user_id, expected_version, challenge_id, counter)
+
+    async def consume_mfa_totp(self, user_id: str, expected_version: int, challenge_id: str, counter: int) -> bool:
+        return await self._repo.consume_mfa_totp(user_id, expected_version, challenge_id, counter)
+
+    async def consume_mfa_recovery_code(self, user_id: str, expected_version: int, challenge_id: str, code_hash: str) -> bool:
+        return await self._repo.consume_mfa_recovery_code(user_id, expected_version, challenge_id, code_hash)
+
     async def get_user_by_email(self, email: str) -> User | None:
         """Get user by email."""
         return await self._repo.get_user_by_email(email)

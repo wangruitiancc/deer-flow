@@ -37,7 +37,7 @@ from app.gateway.auth.models import User
 from app.gateway.routers import runs
 from deerflow.config.app_config import AppConfig, reset_app_config, set_app_config
 from deerflow.persistence.thread_meta.memory import MemoryThreadMetaStore
-from deerflow.runtime import ConflictError
+from deerflow.runtime import ConflictError, RunCapacityExceeded
 
 USER_A = User(email="owner-a@example.com", password_hash="x", system_role="user", id=uuid4())
 USER_B = User(email="intruder-b@example.com", password_hash="x", system_role="user", id=uuid4())
@@ -68,7 +68,7 @@ def _make_thread_store() -> MemoryThreadMetaStore:
 
 
 @contextmanager
-def _client(user):
+def _client(user, *, admission_error: Exception | None = None, retry_after_seconds: int = 5):
     """Yield a ``TestClient`` authenticated as ``user`` plus the stubbed
     ``create_or_reject`` mock, closing the client (and its anyio portal /
     background threads) on exit.
@@ -90,7 +90,10 @@ def _client(user):
     app.state.run_event_store = MagicMock()
     app.state.run_event_store.list_messages = AsyncMock(return_value=[])
     run_manager = MagicMock()
-    run_manager.create_or_reject = AsyncMock(side_effect=ConflictError("sentinel: owner check passed"))
+    run_manager.create_or_reject = AsyncMock(
+        side_effect=admission_error or ConflictError("sentinel: owner check passed")
+    )
+    run_manager.capacity_retry_after_seconds = retry_after_seconds
     app.state.run_manager = run_manager
     with TestClient(app) as client:
         yield client, run_manager.create_or_reject
@@ -135,6 +138,20 @@ def test_stream_owner_passes_owner_check():
     with _client(USER_A) as (client, create_or_reject):
         response = client.post("/api/runs/stream", json=_body(THREAD_A))
     assert response.status_code == 409
+    create_or_reject.assert_awaited()
+
+
+def test_stream_capacity_exhaustion_returns_retryable_429_without_scope_details():
+    error = RunCapacityExceeded(scope="user", limit=1)
+    with _client(USER_A, admission_error=error, retry_after_seconds=7) as (client, create_or_reject):
+        response = client.post("/api/runs/stream", json=_body(THREAD_A))
+
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "7"
+    assert response.headers["X-DeerFlow-Overload"] == "run-capacity"
+    assert response.json() == {"detail": "Agent run capacity is temporarily exhausted"}
+    assert "user" not in response.text
+    assert "1" not in response.text
     create_or_reject.assert_awaited()
 
 

@@ -98,13 +98,13 @@ services:
         NPM_REGISTRY: ${NPM_REGISTRY:-}
         LARK_CLI_NPM_VERSION: ${LARK_CLI_NPM_VERSION:-1.0.65}
     container_name: deer-flow-gateway
-    # Gateway hosts the agent runtime with in-process RunManager + StreamBridge
-    # singletons -- run state lives in this worker's memory. Default to a single
-    # worker: the Redis stream bridge solves cross-worker SSE delivery and
-    # reconnect, but run cancel, request dedup, and per-worker IM channel
-    # services remain worker-local. Override GATEWAY_WORKERS only when the
-    # Redis stream bridge is enabled and those limitations are acceptable.
-    command: sh -c "cd backend && PYTHONPATH=. uv run --no-sync uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --workers ${GATEWAY_WORKERS:-1}"
+    # A multi-worker Gateway requires the full shared-state profile: PostgreSQL
+    # for runs, events, checkpoints and agent definitions; Redis for SSE replay;
+    # and run_ownership heartbeats for leases, peer cancellation and orphan
+    # recovery. Startup refuses unsafe worker counts. IM transport processes
+    # are still per worker, so provider webhook routing/deduplication must use
+    # the configured shared store and be validated for the chosen topology.
+    command: sh -c "cd backend && exec env PYTHONPATH=. uv run --no-sync uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --workers ${GATEWAY_WORKERS:-1}"
     volumes:
       - ${DEER_FLOW_CONFIG_PATH}:/app/backend/config.yaml:ro
       # Writable on purpose: the Gateway edits this file at runtime (MCP
@@ -135,6 +135,7 @@ services:
       - DEER_FLOW_CHANNELS_LANGGRAPH_URL=${DEER_FLOW_CHANNELS_LANGGRAPH_URL:-http://gateway:8001/api}
       - DEER_FLOW_CHANNELS_GATEWAY_URL=${DEER_FLOW_CHANNELS_GATEWAY_URL:-http://gateway:8001}
       - DEER_FLOW_INTERNAL_AUTH_TOKEN=${DEER_FLOW_INTERNAL_AUTH_TOKEN}
+      - DEER_FLOW_GATEWAY_DRAIN_MARKER=/tmp/deer-flow-gateway-draining
       # DooD path/network translation
       - DEER_FLOW_HOST_BASE_DIR=${DEER_FLOW_HOME}
       - DEER_FLOW_SANDBOX_HOST=host.docker.internal
@@ -150,7 +151,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; response = urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3); raise SystemExit(0 if response.status == 200 else 1)"]
+      test: ["CMD", "python", "-c", "import urllib.request; response = urllib.request.urlopen('http://127.0.0.1:8001/ready', timeout=3); raise SystemExit(0 if response.status == 200 else 1)"]
       interval: 5s
       timeout: 5s
       retries: 30

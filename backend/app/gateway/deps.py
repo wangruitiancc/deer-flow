@@ -208,6 +208,26 @@ async def _publish_recovered_run_stream_end(
             except Exception:
                 logger.debug("Failed to check recovered stream existence for %s", record.run_id, exc_info=True)
         try:
+            await bridge.publish(
+                record.run_id,
+                "custom",
+                {
+                    "type": "run_recovery_required",
+                    "code": ORPHAN_RECOVERY_STOP_REASON,
+                    "run_id": record.run_id,
+                    "recovery": "start_new_run",
+                },
+            )
+        except Exception:
+            # Product signalling is additive. A failed control event must not
+            # prevent the liveness-critical END marker below; reconnect
+            # preflight can still recover the same signal from RunResponse.
+            logger.warning(
+                "Failed to publish recovered run control event for %s",
+                record.run_id,
+                exc_info=True,
+            )
+        try:
             await bridge.publish_end(record.run_id)
         except Exception:
             logger.warning(
@@ -495,6 +515,7 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
                 extensions,
                 config,
                 sf,
+                worker_metrics=getattr(app.state, "gateway_metrics_registry", None),
                 attempted_services=attempted_services,
             )
         )
@@ -555,12 +576,16 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
                 on_cleanup_scheduled=track_recovered_stream_cleanup,
             )
 
-        app.state.run_manager = RunManager(
-            store=app.state.run_store,
-            run_ownership_config=run_ownership_config,
-            event_store=app.state.run_event_store,
-            on_orphans_recovered=terminalize_recovered_runs,
-        )
+        run_manager_kwargs: dict[str, Any] = {
+            "store": app.state.run_store,
+            "run_ownership_config": run_ownership_config,
+            "event_store": app.state.run_event_store,
+            "on_orphans_recovered": terminalize_recovered_runs,
+        }
+        run_capacity_config = getattr(config, "run_capacity", None)
+        if run_capacity_config is not None:
+            run_manager_kwargs["run_capacity_config"] = run_capacity_config
+        app.state.run_manager = RunManager(**run_manager_kwargs)
         # Startup recovery: mark inflight runs whose lease has expired as error.
         # In single-worker mode (SQLite / backend=memory), no run has a lease, so
         # all inflight rows are reclaimed (unchanged behaviour). In multi-worker

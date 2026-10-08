@@ -1,17 +1,17 @@
 ---
 title: 配置
-description: 本页面涵盖 DeerFlow 应用的所有配置层——`config.yaml`、前端环境变量、`extensions_config.json` 和运行时环境变量。
+description: 本页面涵盖 Matrix-Law 应用的所有配置层——`config.yaml`、前端环境变量、`extensions_config.json` 和运行时环境变量。
 ---
 
 import { Callout, Tabs } from "nextra/components";
 
 # 配置
 
-本页面涵盖 DeerFlow 应用的所有配置层——`config.yaml`、前端环境变量、`extensions_config.json` 和运行时环境变量。
+本页面涵盖 Matrix-Law 应用的所有配置层——`config.yaml`、前端环境变量、`extensions_config.json` 和运行时环境变量。
 
 ## config.yaml
 
-`config.yaml` 是 DeerFlow 的主要配置文件。所有 Agent 行为、模型选择、工具加载和运行时功能都由它控制。
+`config.yaml` 是 Matrix-Law 的主要配置文件。所有 Agent 行为、模型选择、工具加载和运行时功能都由它控制。
 
 参见[配置](/docs/harness/configuration)参考页面了解文件格式和每个章节的详细说明。
 
@@ -116,7 +116,7 @@ sandbox:
   use: deerflow.sandbox.local:LocalSandboxProvider
   allow_host_bash: false
 
-# 基于容器（推荐用于多用户）
+# 可选容器沙箱（需单独完成安全审查；不代表应用服务采用容器部署）
 sandbox:
   use: deerflow.community.aio_sandbox:AioSandboxProvider
   replicas: 3
@@ -149,7 +149,7 @@ skills:
 
 ### 数据库后端
 
-DeerFlow 使用 `database` 配置同时管理 LangGraph 检查点数据和应用数据，例如运行记录、反馈和线程元数据。
+Matrix-Law 使用 `database` 配置同时管理 LangGraph 检查点数据和应用数据，例如运行记录、反馈和线程元数据。
 
 默认使用 SQLite，适合本地开发和单节点单用户持久化：
 
@@ -180,11 +180,11 @@ run_events:
 cd backend && uv sync --all-packages --extra postgres
 ```
 
-Docker 或脚本启动场景，在安装或构建前设置 `UV_EXTRAS=postgres`。旧的独立 `checkpointer` 配置仍然兼容，但新的部署应优先使用 `database`。
+本机候选 Compose 或脚本启动场景，在安装或构建前设置 `UV_EXTRAS=postgres`。旧的独立 `checkpointer` 配置仍然兼容，但新的部署应优先使用 `database`。
 
 ## 前端环境变量
 
-前端通过 `.env.local`（本地开发）或 Docker Compose 环境中的环境变量配置。
+前端通过 `.env.local`（本地开发）或本机候选 Compose 环境变量配置；云端运行环境由 systemd 管理。
 
 | 变量                  | 必需       | 描述                                               |
 | --------------------- | ---------- | -------------------------------------------------- |
@@ -225,8 +225,8 @@ BETTER_AUTH_SECRET=local-dev-secret-at-least-32-chars
 ```
 
 <Callout type="warning">
-  不要为 DeerFlow 工作区文件引入 MCP filesystem server。它会与 DeerFlow
-  内置文件工具形成路径语义不同的重复能力，让 LLM 行为不稳定。DeerFlow
+  不要为 Matrix-Law 工作区文件引入 MCP filesystem server。它会与 Matrix-Law
+  内置文件工具形成路径语义不同的重复能力，让 LLM 行为不稳定。Matrix-Law
   当前没有为 filesystem server 适配 MCP Roots 模式，也不会把{" "}
   <code>/mnt/user-data/...</code> 这类沙箱路径映射成{" "}
   <code>@modelcontextprotocol/server-filesystem</code> 可接受的路径。
@@ -234,17 +234,17 @@ BETTER_AUTH_SECRET=local-dev-secret-at-least-32-chars
 
 ### 技能启用状态
 
-技能启用状态会反映在 `extensions_config.json` 中。你可以直接编辑它，或通过 DeerFlow 应用界面进行管理。
+技能启用状态会反映在 `extensions_config.json` 中。你可以直接编辑它，或通过 Matrix-Law 应用界面进行管理。
 
 ## 运行时环境变量
 
-这些变量在 DeerFlow 进程中设置（通过 `.env`、Docker 环境或 shell）：
+这些变量在 Matrix-Law 进程中设置（本机候选使用 `.env`/Compose；云端由 systemd 配置注入）：
 
 | 变量                    | 默认值           | 描述                                             |
 | ----------------------- | ---------------- | ------------------------------------------------ |
 | `DEER_FLOW_CONFIG_PATH` | 自动发现         | `config.yaml` 的绝对路径                         |
 | `LOG_LEVEL`             | `info`           | 日志详细程度（`debug`/`info`/`warning`/`error`） |
-| `DEER_FLOW_ROOT`        | 仓库根目录       | 用于 Docker 中的技能和线程挂载                   |
+| `DEER_FLOW_ROOT`        | 仓库根目录       | 仅供本机候选挂载技能和线程数据；云端数据目录由宿主机 systemd 服务管理                   |
 
 <Cards num={2}>
   <Cards.Card title="Harness 配置" href="/docs/harness/configuration" />

@@ -9,16 +9,16 @@ describe("core copy loading", () => {
       loadTranslations("zh-CN"),
     ]);
     expect(english.inputBox.disclaimer).toBe(
-      "DeerFlow is AI and can make mistakes",
+      "AI output is for legal-work assistance and requires authorized professional review",
     );
     expect(chinese.inputBox.disclaimer).toBe(
-      "内容由AI生成，重要信息请务必核查",
+      "AI 输出仅供法律工作参考，须由授权专业人员复核",
     );
     expect(english.channels.descriptions.buzz).toBe(
-      "Buzz channels and direct messages through your DeerFlow agent.",
+      "Buzz channels and direct messages through your Matrix-Law agent.",
     );
     expect(chinese.channels.descriptions.buzz).toBe(
-      "通过 DeerFlow 智能体接收 Buzz 频道消息和私聊。",
+      "通过 Matrix-Law 智能体接收 Buzz 频道消息和私聊。",
     );
   });
 });

@@ -1,0 +1,165 @@
+# Disposable Phase 9 integration stack. It deliberately does not reuse the
+# active DeerFlow database, Redis, object store, network, or Gateway container.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: deerflow
+      POSTGRES_PASSWORD: phase9-test-password
+      POSTGRES_DB: deerflow
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deerflow -d deerflow"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [phase9]
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [phase9]
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: phase9-access-key
+      MINIO_ROOT_PASSWORD: phase9-secret-key
+    networks: [phase9]
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        until mc alias set phase9 http://minio:9000 phase9-access-key phase9-secret-key; do sleep 1; done
+        mc mb --ignore-existing phase9/matrix-law-phase9
+    networks: [phase9]
+
+  clamav:
+    image: clamav/clamav:1.5.4-debian13-slim
+    healthcheck:
+      test: ["CMD-SHELL", "printf 'PING\\n' | nc -w 2 127.0.0.1 3310 | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 20s
+    networks: [phase9]
+
+  matrix-ocr:
+    image: docker-matrix-ocr
+    environment:
+      MATRIX_OCR_HTTP_TOKEN: phase9-integration-ocr-token-32-chars
+      MATRIX_OCR_BIND_HOST: 0.0.0.0
+      MATRIX_OCR_PORT: 8090
+      MATRIX_OCR_DPI: 160
+      MATRIX_OCR_INTRA_OP_THREADS: 1
+      MATRIX_OCR_MAX_CONCURRENCY: 1
+      MATRIX_OCR_MAX_QUEUE: 4
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=1073741824,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/v1/ocr/health',{headers:{authorization:'Bearer '+process.env.MATRIX_OCR_HTTP_TOKEN}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+    networks: [phase9]
+
+  law-migrate:
+    image: ${MATRIX_LAW_GATEWAY_IMAGE:-matrix-law-phase10a-gateway:verify}
+    command: ["sh", "-c", "cd backend && uv run --no-sync matrix-law-migrate upgrade head"]
+    environment:
+      DATABASE_URL: postgresql://deerflow:phase9-test-password@postgres:5432/deerflow
+      MATRIX_LAW_DATABASE_SCHEMA: deerflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [phase9]
+
+  law-provision-roles:
+    image: ${MATRIX_LAW_GATEWAY_IMAGE:-matrix-law-phase10a-gateway:verify}
+    command: ["sh", "-c", "cd backend && uv run --no-sync matrix-law-provision-roles"]
+    environment:
+      DATABASE_URL: postgresql://deerflow:phase9-test-password@postgres:5432/deerflow
+      MATRIX_LAW_DATABASE_SCHEMA: deerflow
+      MATRIX_LAW_API_DATABASE_PASSWORD: phase9-api-database-password
+      MATRIX_LAW_WORKER_DATABASE_PASSWORD: phase9-worker-database-password
+    depends_on:
+      law-migrate:
+        condition: service_completed_successfully
+    networks: [phase9]
+
+  gateway:
+    image: ${MATRIX_LAW_GATEWAY_IMAGE:-matrix-law-phase10a-gateway:verify}
+    command: ["sh", "-c", "cd backend && exec env PYTHONPATH=. uv run --no-sync uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --workers 1"]
+    working_dir: /app
+    environment:
+      CI: "true"
+      DATABASE_URL: postgresql://deerflow:phase9-test-password@postgres:5432/deerflow
+      MATRIX_LAW_API_DATABASE_URL: postgresql://matrix_law_api:phase9-api-database-password@postgres:5432/deerflow
+      MATRIX_LAW_WORKER_DATABASE_URL: postgresql://matrix_law_worker:phase9-worker-database-password@postgres:5432/deerflow
+      DEER_FLOW_PROJECT_ROOT: /app
+      DEER_FLOW_HOME: /app/backend/.deer-flow
+      DEER_FLOW_CONFIG_PATH: /app/backend/config.yaml
+      DEER_FLOW_EXTENSIONS_CONFIG_PATH: /app/backend/extensions_config.json
+      DEER_FLOW_STREAM_BRIDGE_REDIS_URL: redis://redis:6379/0
+      DEER_FLOW_INTERNAL_AUTH_TOKEN: phase9-internal-auth-token-32-chars
+      DEER_FLOW_GATEWAY_DRAIN_MARKER: /tmp/deer-flow-gateway-draining
+      DEER_FLOW_AUTH_DISABLED: "0"
+      LANGSMITH_TRACING: "false"
+      MATRIX_LAW_S3_ACCESS_KEY: phase9-access-key
+      MATRIX_LAW_S3_SECRET_KEY: phase9-secret-key
+      MATRIX_LAW_OCR_HTTP_TOKEN: phase9-integration-ocr-token-32-chars
+      NO_PROXY: localhost,127.0.0.1,::1,postgres,redis,minio,clamav,matrix-ocr
+      no_proxy: localhost,127.0.0.1,::1,postgres,redis,minio,clamav,matrix-ocr
+    volumes:
+      - ${PHASE9_RUNTIME_DIR:?set PHASE9_RUNTIME_DIR}/config.yaml:/app/backend/config.yaml:ro
+      - ${PHASE9_RUNTIME_DIR:?set PHASE9_RUNTIME_DIR}/extensions_config.json:/app/backend/extensions_config.json:ro
+      - phase9-home:/app/backend/.deer-flow
+      - ../skills:/app/skills:ro
+    ports:
+      - 127.0.0.1:8019:8001
+    depends_on:
+      law-migrate:
+        condition: service_completed_successfully
+      law-provision-roles:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      clamav:
+        condition: service_healthy
+      matrix-ocr:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8001/ready', timeout=3); raise SystemExit(0 if r.status == 200 else 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    networks: [phase9]
+
+volumes:
+  phase9-home:
+
+networks:
+  phase9:
+    driver: bridge

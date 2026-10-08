@@ -3,7 +3,7 @@
 import pytest
 from starlette.testclient import TestClient
 
-from app.gateway.auth_middleware import AuthMiddleware, _is_public
+from app.gateway.auth_middleware import AuthMiddleware, _is_platform_admin_allowed, _is_public
 from app.gateway.csrf_middleware import CSRFMiddleware
 from deerflow.config.authorization_config import AuthorizationConfig
 
@@ -96,6 +96,34 @@ def test_unknown_api_path_is_protected():
     assert _is_public("/api/new-feature") is False
     assert _is_public("/api/v2/something") is False
     assert _is_public("/api/v1/auth/new-endpoint") is False
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/auth/me",
+        "/api/v1/auth/change-password",
+        "/api/law/platform/onboarding/overview",
+        "/api/law/platform/onboarding/applications/123/review",
+    ],
+)
+def test_platform_admin_console_paths_are_allowed(path: str):
+    assert _is_platform_admin_allowed(path) is True
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/models",
+        "/api/threads/123",
+        "/api/runs/stream",
+        "/api/law/tenants",
+        "/api/law/onboarding/applications",
+        "/api/v1/auth/pats",
+    ],
+)
+def test_platform_admin_agent_and_tenant_paths_are_denied(path: str):
+    assert _is_platform_admin_allowed(path) is False
 
 
 # ── Middleware integration tests ──────────────────────────────────────────
@@ -279,6 +307,29 @@ def test_protected_path_no_cookie_returns_401(client):
     assert res.status_code == 401
     body = res.json()
     assert body["detail"]["code"] == "not_authenticated"
+
+
+def test_session_platform_admin_cannot_call_agent_api(monkeypatch):
+    from types import SimpleNamespace
+
+    async def fake_current_user(request):
+        return SimpleNamespace(
+            id="platform-admin",
+            email="admin@matrix.law",
+            system_role="admin",
+            needs_setup=False,
+        )
+
+    monkeypatch.setenv("DEER_FLOW_AUTH_DISABLED", "")
+    monkeypatch.setattr(
+        "app.gateway.deps.get_current_user_from_request", fake_current_user
+    )
+    response = TestClient(_make_app()).get(
+        "/api/models", cookies={"access_token": "valid-session"}
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "platform_admin_console_only"
 
 
 def test_auth_disabled_allows_protected_path_without_cookie(monkeypatch):

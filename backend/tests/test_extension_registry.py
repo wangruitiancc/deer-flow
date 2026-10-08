@@ -15,6 +15,7 @@ class _Contributor:
 def test_empty_registry_builds_with_all_flags_false():
     loaded = ExtensionRegistry().build()
     assert loaded.has_middleware_contributors is False
+    assert loaded.has_task_admission is False
     assert loaded.has_task_lifecycle is False
     assert loaded.has_system_model_observers is False
     assert loaded.needs_task_store is False
@@ -22,6 +23,7 @@ def test_empty_registry_builds_with_all_flags_false():
 
 def test_empty_singleton_matches_an_empty_build():
     assert EMPTY_EXTENSIONS.has_middleware_contributors is False
+    assert EMPTY_EXTENSIONS.has_task_admission is False
     assert EMPTY_EXTENSIONS.has_task_lifecycle is False
     assert EMPTY_EXTENSIONS.has_system_model_observers is False
     assert EMPTY_EXTENSIONS.needs_task_store is False
@@ -31,10 +33,11 @@ def test_empty_singleton_matches_an_empty_build():
     "register",
     [
         lambda registry, contributor: registry.middlewares(contributor),
+        lambda registry, contributor: registry.task_admission(contributor),
         lambda registry, contributor: registry.task_lifecycle(contributor),
         lambda registry, contributor: registry.system_model_observer(contributor),
     ],
-    ids=["middleware", "task-lifecycle", "system-model-observer"],
+    ids=["middleware", "task-admission", "task-lifecycle", "system-model-observer"],
 )
 def test_task_scoped_contributions_require_a_task_store(register):
     registry = ExtensionRegistry()
@@ -64,6 +67,19 @@ def test_task_lifecycle_entries_are_attributed_and_require_task_storage():
 
     assert loaded.task_lifecycle == (("lifecycle_ext:install", contributor),)
     assert loaded.has_task_lifecycle is True
+    assert loaded.needs_task_store is True
+
+
+def test_task_admission_entries_are_attributed_and_require_task_storage():
+    registry = ExtensionRegistry()
+    contributor = _Contributor("admission")
+    with registry.attributed_to("admission_ext:install"):
+        registry.task_admission(contributor)
+
+    loaded = registry.build()
+
+    assert loaded.task_admission == (("admission_ext:install", contributor),)
+    assert loaded.has_task_admission is True
     assert loaded.needs_task_store is True
 
 

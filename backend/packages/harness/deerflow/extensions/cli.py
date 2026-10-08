@@ -18,7 +18,7 @@ _SOURCE_ENV = "DEER_FLOW_EXTENSION_SOURCE"
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="deerflow extensions",
-        description="Install and manage trusted Python extensions for this DeerFlow checkout.",
+        description="Install and manage trusted Python extensions for this Matrix-Law checkout.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
     install = commands.add_parser("install", help="install an extension and enable it in config.yaml")
@@ -66,15 +66,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                     print("Extension installation cancelled.", file=sys.stderr)
                     return 2
             installed = manager.install(source, yes=trusted, required=args.required)
-            print(f"Installed and enabled {installed.name} ({installed.distribution}). Restart DeerFlow to load it.")
+            print(f"Installed and enabled {installed.name} ({installed.distribution}). Restart Matrix-Law to load it.")
             return 0
         if args.command == "disable":
             name = manager.set_enabled(_name_argument(args), enabled=False)
-            print(f"Disabled {name}. Restart DeerFlow to apply the change.")
+            print(f"Disabled {name}. Restart Matrix-Law to apply the change.")
             return 0
         if args.command == "enable":
             name = manager.set_enabled(_name_argument(args), enabled=True)
-            print(f"Enabled {name}. Restart DeerFlow to apply the change.")
+            print(f"Enabled {name}. Restart Matrix-Law to apply the change.")
             return 0
         if args.command == "list":
             configured = manager.list_configured()
@@ -85,7 +85,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "remove":
             name = manager.remove(_name_argument(args))
-            print(f"Removed {name}. Restart DeerFlow to apply the change.")
+            print(f"Removed {name}. Restart Matrix-Law to apply the change.")
             return 0
     except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"extension command failed: {exc}", file=sys.stderr)
@@ -117,11 +117,11 @@ def find_project_root() -> Path:
         candidate = Path(configured).expanduser().resolve()
         if (candidate / "backend" / "pyproject.toml").is_file():
             return candidate
-        raise FileNotFoundError(f"DEER_FLOW_PROJECT_ROOT is not a DeerFlow checkout: {candidate}")
+        raise FileNotFoundError(f"DEER_FLOW_PROJECT_ROOT is not a Matrix-Law checkout: {candidate}")
 
     candidates = (Path.cwd(), *Path.cwd().parents)
     for candidate in candidates:
         candidate = candidate.resolve()
         if (candidate / "backend" / "pyproject.toml").is_file():
             return candidate
-    raise FileNotFoundError("could not find a DeerFlow checkout; set DEER_FLOW_PROJECT_ROOT")
+    raise FileNotFoundError("could not find a Matrix-Law checkout; set DEER_FLOW_PROJECT_ROOT")

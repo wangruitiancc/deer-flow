@@ -12,8 +12,9 @@ it subscribes to the stream bridge until ``END_SENTINEL``, polls
 ``on_disconnect`` mode by cancelling the background run on real client
 disconnect. Store-only consumers wait for the bridge's real terminal marker
 instead of treating an ordinary durable terminal status as proof that all tail
-events have already been published. A durable ``orphan_recovered`` stop reason
-provides the narrow heartbeat fallback when the publisher is known to be gone.
+events have already been published. Durable ``orphan_recovered`` and
+``gateway_shutdown`` stop reasons provide the narrow heartbeat fallback when
+the publisher is known to be gone or exiting.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
-from deerflow.runtime import ORPHAN_RECOVERY_STOP_REASON, RunManager, RunRecord, RunStatus
+from deerflow.runtime import GATEWAY_SHUTDOWN_STOP_REASON, ORPHAN_RECOVERY_STOP_REASON, RunManager, RunRecord, RunStatus
 from deerflow.runtime.runs.schemas import DisconnectMode
 from deerflow.runtime.stream_bridge.memory import MemoryStreamBridge
 
@@ -372,69 +373,79 @@ class TestWaitForRunCompletion:
 
         asyncio.run(run())
 
-    def test_sse_consumer_uses_explicit_orphan_recovery_liveness_boundary(
+    def test_sse_consumer_uses_explicit_server_interruption_liveness_boundary(
         self,
     ) -> None:
-        """A recovered orphan may synthesize END when its publisher is gone."""
+        """A server interruption may synthesize END when its publisher is gone."""
         from app.gateway.services import sse_consumer
         from deerflow.runtime.runs.store.memory import MemoryRunStore
 
         async def run() -> None:
-            store = MemoryRunStore()
-            await store.put(
-                "periodic-orphan",
-                thread_id=THREAD_ID,
-                status="running",
-            )
-            mgr = RunManager(store=store)
-            record = await mgr.get("periodic-orphan")
-            assert record is not None
-            bridge = _FastHeartbeatBridge()
-            await bridge.publish(record.run_id, "values", {"step": 1})
-            consumer = sse_consumer(bridge, record, _FakeRequest(), mgr)
-            assert (await anext(consumer)).startswith("event: values\n")
+            for index, (status, stop_reason) in enumerate(
+                (
+                    ("error", ORPHAN_RECOVERY_STOP_REASON),
+                    ("interrupted", GATEWAY_SHUTDOWN_STOP_REASON),
+                )
+            ):
+                run_id = f"server-interruption-{index}"
+                store = MemoryRunStore()
+                await store.put(run_id, thread_id=THREAD_ID, status="running")
+                mgr = RunManager(store=store)
+                record = await mgr.get(run_id)
+                assert record is not None
+                bridge = _FastHeartbeatBridge()
+                await bridge.publish(record.run_id, "values", {"step": 1})
+                consumer = sse_consumer(bridge, record, _FakeRequest(), mgr)
+                assert (await anext(consumer)).startswith("event: values\n")
 
-            await store.update_status(
-                record.run_id,
-                "error",
-                error="lease expired",
-                stop_reason=ORPHAN_RECOVERY_STOP_REASON,
-            )
+                await store.update_status(
+                    record.run_id,
+                    status,
+                    stop_reason=stop_reason,
+                )
 
-            end_frame = await asyncio.wait_for(anext(consumer), timeout=1.0)
-            assert end_frame == "event: end\ndata: null\n\n"
+                recovery_frame = await asyncio.wait_for(anext(consumer), timeout=1.0)
+                assert recovery_frame.startswith("event: custom\n")
+                assert '"type": "run_recovery_required"' in recovery_frame
+                assert f'"code": "{stop_reason}"' in recovery_frame
+                assert f'"run_id": "{run_id}"' in recovery_frame
+
+                end_frame = await asyncio.wait_for(anext(consumer), timeout=1.0)
+                assert end_frame == "event: end\ndata: null\n\n"
 
         asyncio.run(run())
 
-    def test_wait_uses_explicit_orphan_recovery_liveness_boundary(self) -> None:
-        """The non-streaming consumer shares the recovered-orphan boundary."""
+    def test_wait_uses_explicit_server_interruption_liveness_boundary(self) -> None:
+        """The non-streaming consumer shares the server-interruption boundary."""
         from app.gateway.services import wait_for_run_completion
         from deerflow.runtime.runs.store.memory import MemoryRunStore
 
         async def run() -> None:
-            store = MemoryRunStore()
-            await store.put(
-                "periodic-orphan",
-                thread_id=THREAD_ID,
-                status="running",
-            )
-            mgr = RunManager(store=store)
-            record = await mgr.get("periodic-orphan")
-            assert record is not None
-            bridge = _FastHeartbeatBridge()
-            await bridge.publish(record.run_id, "values", {"step": 1})
-            await store.update_status(
-                record.run_id,
-                "error",
-                error="lease expired",
-                stop_reason=ORPHAN_RECOVERY_STOP_REASON,
-            )
+            for index, (status, stop_reason) in enumerate(
+                (
+                    ("error", ORPHAN_RECOVERY_STOP_REASON),
+                    ("interrupted", GATEWAY_SHUTDOWN_STOP_REASON),
+                )
+            ):
+                run_id = f"server-interruption-{index}"
+                store = MemoryRunStore()
+                await store.put(run_id, thread_id=THREAD_ID, status="running")
+                mgr = RunManager(store=store)
+                record = await mgr.get(run_id)
+                assert record is not None
+                bridge = _FastHeartbeatBridge()
+                await bridge.publish(record.run_id, "values", {"step": 1})
+                await store.update_status(
+                    record.run_id,
+                    status,
+                    stop_reason=stop_reason,
+                )
 
-            completed = await asyncio.wait_for(
-                wait_for_run_completion(bridge, record, _FakeRequest(), mgr),
-                timeout=1.0,
-            )
+                completed = await asyncio.wait_for(
+                    wait_for_run_completion(bridge, record, _FakeRequest(), mgr),
+                    timeout=1.0,
+                )
 
-            assert completed is True
+                assert completed is True
 
         asyncio.run(run())

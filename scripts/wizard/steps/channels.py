@@ -8,13 +8,13 @@ from wizard.ui import ask_multi_choice, print_header, print_info, print_success
 
 
 CHANNEL_CONNECTION_OPTIONS: tuple[tuple[str, str, str], ...] = (
-    ("telegram", "Telegram", "direct messages through your DeerFlow bot"),
+    ("telegram", "Telegram", "direct messages through your Matrix-Law bot"),
     ("slack", "Slack", "workspace messages and mentions"),
-    ("discord", "Discord", "server messages through your DeerFlow bot"),
+    ("discord", "Discord", "server messages through your Matrix-Law bot"),
     ("feishu", "Feishu / Lark", "messages through your DeerFlow app"),
-    ("dingtalk", "DingTalk", "Stream Push messages through your DeerFlow bot"),
-    ("wechat", "WeChat", "iLink messages through your DeerFlow bot"),
-    ("wecom", "WeCom", "messages through your DeerFlow AI bot"),
+    ("dingtalk", "DingTalk", "Stream Push messages through your Matrix-Law bot"),
+    ("wechat", "WeChat", "iLink messages through your Matrix-Law bot"),
+    ("wecom", "WeCom", "messages through your Matrix-Law AI bot"),
 )
 
 
@@ -25,7 +25,7 @@ class ChannelConnectionsStepResult:
 
 def run_channels_step(step_label: str = "Step 4/5") -> ChannelConnectionsStepResult:
     print_header(f"{step_label} · IM Channels (optional)")
-    print_info("Choose which IM channels should appear in the DeerFlow sidebar and Settings.")
+    print_info("Choose which IM channels should appear in the Matrix-Law sidebar and Settings.")
     print_info("Credentials can be entered later from the browser with Connect or Modify.")
     print()
 

@@ -144,6 +144,13 @@ class DatabaseConfig(BaseModel):
         default="memory",
         description=("Storage backend for both checkpointer and application data. 'memory' for development (no persistence across restarts), 'sqlite' for single-node deployment, 'postgres' for production multi-node deployment."),
     )
+    auto_migrate: bool = Field(
+        default=True,
+        description=(
+            "Apply DeerFlow and LangGraph database schema migrations during process startup. "
+            "Disable for managed deployments that run the explicit operator migration command before release activation."
+        ),
+    )
     checkpoint_channel_mode: CheckpointChannelMode = Field(
         default="full",
         description=(
@@ -202,7 +209,7 @@ class DatabaseConfig(BaseModel):
             "PostgreSQL schema for both app ORM tables and LangGraph "
             "checkpointer/store tables (postgres only). Empty string keeps "
             "the server default search_path (usually 'public'). When set, "
-            "the schema is created automatically at startup and applied via "
+            "the schema is created automatically at startup if auto_migrate is enabled, and applied via "
             "connection-level search_path. Only plain identifiers are "
             f"allowed: {POSTGRES_SCHEMA_PATTERN}."
         ),

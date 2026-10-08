@@ -12,13 +12,14 @@ guide rather than expecting full detail here:
 - **[frontend/AGENTS.md](frontend/AGENTS.md)** — frontend depth: Next.js App Router layout,
   thread/streaming data flow, code style, commands.
 
-## What is DeerFlow
+## Product identity and upstream framework
 
-DeerFlow is a LangGraph-based AI super-agent system with a full-stack architecture. The
-backend runs a "super agent" with sandboxed execution, persistent memory, subagent
-delegation, and extensible tools (built-in, MCP, community), all per-thread isolated. The
-frontend is a Next.js chat UI. External IM platforms (Feishu, Slack, Telegram, Discord,
-DingTalk) bridge into the same agent through the Gateway.
+Matrix-Law is the user-facing legal workspace. User-visible UI, docs landing pages,
+setup/runtime messages, and generated demo signatures use the Matrix-Law name and assets.
+This repository retains DeerFlow as the technical upstream/framework identity: package and
+API names, persisted metadata, environment variables, migrations, and license attribution
+must remain accurate wherever they are part of a stable contract or provenance record.
+Do not present the generic upstream product as the Matrix-Law product.
 
 ## Service Topology
 
@@ -78,14 +79,19 @@ deer-flow/
 Third-party extensions are loaded from a top-level `plugins:` list in `config.yaml`
 (operator-controlled on purpose — that list causes code to be imported, so it is deliberately
 kept out of the API-writable `extensions_config.json`). Packaged extensions can contribute
-middleware, task lifecycle, system-model observers, Gateway services, and FastAPI HTTP
-routers; the [reference extension](examples/deerflow-extension-example/) demonstrates all
-five. Manage them with `deerflow extensions install/list/enable/disable/remove` or the root
+middleware, fail-closed task admission, task lifecycle, system-model observers, agent-assembly
+and context-compaction observers, Gateway services, invite-only account-claim handlers, and
+FastAPI HTTP routers. The [reference extension](examples/deerflow-extension-example/)
+demonstrates the general contribution contract.
+Manage them with `deerflow extensions install/list/enable/disable/remove` or the root
 `make extension-*` wrappers. Every mutation requires a Gateway restart, and both build
 hooks and extension code execute with Gateway privileges, so only trusted operator sources
 belong in this path. The manager transaction, accepted source forms, lock discipline, and
 contribution contract live in
 [the extensions guide](backend/packages/harness/deerflow/extensions/AGENTS.md).
+
+Historical 2035 deployment details are preserved as [audit notes](docs/matrix-law-historical-candidate-notes.md). Use the sibling Matrix Law deploy/two-server directory for current commands.
+
 
 Runtime config lives at the **repo root**: copy `config.example.yaml` → `config.yaml`
 (main app config) and `extensions_config.example.json` → `extensions_config.json` (MCP
@@ -94,6 +100,12 @@ Gateway API. Config schema and resolution order are documented in
 [backend/AGENTS.md](backend/AGENTS.md).
 
 Skill quality review note:
+- `matrix-law-templates` contains six read-only legal templates. Blank drafts use
+  `law_create_template_draft` and native output ports; factual dates remain unfilled.
+  Asset parity, authorization and replay rules live in `backend/packages/harness/deerflow/extensions/AGENTS.md`.
+- The operator-owned `matrix-law-graph` Skill preserves existing mapped-source IDs and
+  `legacy_origin` records during native file updates. Those records are unverified input,
+  never protected quote text or human-approval evidence; analysis reads the current citation.
 - `skills/public/skill-reviewer/` is the built-in read-only skill quality reviewer.
   It uses the harness-layer `review_skill_package` tool and contracts in
   `contracts/skill_review/`. Model-visible review data is compact and
@@ -113,11 +125,7 @@ Skill quality review note:
   request. After that skill change lands, promote its hash to `file_sha256` and
   remove the consumed preapproval in a follow-up manifest cleanup.
 
-Scheduled-task note:
-- The scheduled-task MVP adds a workspace page at `/workspace/scheduled-tasks` plus a background scheduler service gated by `config.yaml -> scheduler.enabled`.
-- Scheduled background runs are intentionally non-interactive: they execute through the normal run lifecycle, but the lead-agent toolset excludes `ask_clarification` when `context.non_interactive=true`. The key is honored only for internally-authenticated callers (the scheduler launch path); client-supplied `context.non_interactive` is dropped.
-- Busy scheduled occurrences are persisted as `queued`; `launching` is a short lease-fenced claim, `running` remains the normal Gateway run lifecycle, and `scheduler.queue_timeout_seconds` bounds the durable wait. Do not reintroduce skip-on-overlap or count waiting rows against `max_concurrent_runs`.
-- Scheduled launches use `scheduler.recursion_limit` (default 1000, matching the web UI's `recursion_limit: 1000`, clamped by `max_recursion_limit`). The value is read at dispatch, so a YAML edit applies to the next scheduled run without a Gateway restart.
+For scheduled tasks, read [the runtime invariants](docs/scheduled-task-guidance.md) before changing launch, queue, concurrency or recursion behavior.
 
 ## Commands: Root vs. Module
 

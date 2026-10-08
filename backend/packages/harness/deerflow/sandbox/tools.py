@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from langchain.tools import tool
 
@@ -25,6 +26,7 @@ from deerflow.config import get_app_config
 from deerflow.config.paths import VIRTUAL_PATH_PREFIX
 from deerflow.constants import DEFAULT_SKILLS_CONTAINER_PATH
 from deerflow.runtime.secret_context import read_active_secrets
+from deerflow.runtime.task_scope import task_write_gate_from_runtime
 from deerflow.runtime.user_context import resolve_runtime_user_id
 from deerflow.sandbox.exceptions import (
     SandboxError,
@@ -1663,6 +1665,7 @@ async def _run_sync_tool_after_async_sandbox_init(
     func: Callable[..., str] | None,
     runtime: Runtime,
     *args: object,
+    write_operation: Literal["workspace_tool_write"] | None = None,
 ) -> str:
     """Initialize lazily via async provider, then run sync tool body off-thread."""
     try:
@@ -1671,8 +1674,11 @@ async def _run_sync_tool_after_async_sandbox_init(
 
             if func is None:
                 return "Error: Tool implementation not available"
-
-            return await run_sync_lifecycle_operation(func, runtime, *args)
+            gate = task_write_gate_from_runtime(runtime) if write_operation is not None else None
+            if gate is None:
+                return await run_sync_lifecycle_operation(func, runtime, *args)
+            async with gate.hold(operation=write_operation):
+                return await run_sync_lifecycle_operation(func, runtime, *args)
     except SandboxError as e:
         return f"Error: {e}"
     except Exception as e:
@@ -2463,7 +2469,72 @@ async def _read_file_tool_async(
     start_line: int | None = None,
     end_line: int | None = None,
 ) -> str:
+    # Platform-managed Skill packages are task-scoped and intentionally are
+    # not mounted in the general sandbox skill tree. Preserve the standard
+    # read_file interface by resolving only catalog-authorized package paths
+    # through the verified task runtime before acquiring a sandbox.
+    try:
+        managed_content = await _read_managed_skill_virtual_file(path)
+    except FileNotFoundError:
+        return f"Error: File not found: {path}"
+    except PermissionError:
+        return f"Error: Permission denied reading file: {path}"
+    except UnicodeDecodeError:
+        return f"Error: cannot read '{path}' as text — it appears to be a binary file"
+    except Exception as e:
+        return f"Error: Unexpected error reading file: {_sanitize_error(e, runtime)}"
+    if managed_content is not None:
+        if start_line is not None and start_line < 1:
+            return "(start_line must be >= 1)"
+        if end_line is not None and end_line < 1:
+            return "(end_line must be >= 1)"
+        effective_start = start_line or 1
+        if end_line is not None and effective_start > end_line:
+            return "(start_line > end_line — no lines in range)"
+        if start_line is not None or end_line is not None:
+            lines = managed_content.splitlines(keepends=True)
+            managed_content = "".join(lines[effective_start - 1 : end_line])
+        if not managed_content:
+            if start_line is not None and start_line > 1:
+                return "(start_line exceeds file length)"
+            return "(empty)"
+        try:
+            from deerflow.config.app_config import get_app_config
+
+            sandbox_cfg = get_app_config().sandbox
+            max_chars = sandbox_cfg.read_file_output_max_chars if sandbox_cfg else 50000
+        except Exception:
+            max_chars = 50000
+        return _truncate_read_file_output(managed_content, max_chars)
     return await _run_sync_tool_after_async_sandbox_init(read_file_tool.func, runtime, path, description, start_line, end_line)
+
+
+async def _read_managed_skill_virtual_file(path: str) -> str | None:
+    """Resolve one managed Skill path when its signed package is task-visible."""
+    prefix = f"{_DEFAULT_SKILLS_CONTAINER_PATH}/public/"
+    if not path.startswith(prefix):
+        return None
+    parts = path[len(prefix) :].split("/", 2)
+    if len(parts) != 3:
+        return None
+    skill_name, version, relative_path = parts
+    if relative_path != "SKILL.md" and not relative_path.startswith("references/"):
+        return None
+
+    try:
+        from deerflow.skills.managed import (
+            get_managed_skill_runtime,
+            load_managed_skill_catalog,
+            read_managed_skill_file,
+        )
+    except ImportError:
+        return None
+    if get_managed_skill_runtime() is None:
+        return None
+    catalog = await load_managed_skill_catalog()
+    if not any(skill.name == skill_name for skill in catalog):
+        return None
+    return await read_managed_skill_file(skill_name, version, relative_path)
 
 
 read_file_tool.coroutine = _read_file_tool_async
@@ -2579,7 +2650,15 @@ async def _write_file_tool_async(
     description: str = "",
     append: bool = False,
 ) -> str:
-    return await _run_sync_tool_after_async_sandbox_init(write_file_tool.func, runtime, path, content, description, append)
+    return await _run_sync_tool_after_async_sandbox_init(
+        write_file_tool.func,
+        runtime,
+        path,
+        content,
+        description,
+        append,
+        write_operation="workspace_tool_write",
+    )
 
 
 write_file_tool.coroutine = _write_file_tool_async
@@ -2657,6 +2736,7 @@ async def _str_replace_tool_async(
         new_str,
         description,
         replace_all,
+        write_operation="workspace_tool_write",
     )
 
 

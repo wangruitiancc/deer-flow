@@ -11,15 +11,14 @@ import {
   type SetStateAction,
 } from "react";
 
-import { useSidebar } from "@/components/ui/sidebar";
 import type { ArtifactDraftState } from "@/core/artifacts/editing";
-import { env } from "@/env";
 
 export interface ArtifactsContextType {
   artifacts: string[];
   setArtifacts: (artifacts: string[]) => void;
 
   selectedArtifact: string | null;
+  selectionVersion: number;
   autoSelect: boolean;
   select: (artifact: string, autoSelect?: boolean) => void;
   deselect: () => void;
@@ -84,15 +83,13 @@ interface ArtifactsProviderProps {
 
 export function ArtifactsProvider({ children }: ArtifactsProviderProps) {
   const [artifacts, setArtifacts] = useState<string[]>([]);
+  const [selectionVersion, setSelectionVersion] = useState(0);
   const [selectedArtifact, setSelectedArtifact] = useState<string | null>(null);
   const [autoSelect, setAutoSelect] = useState(true);
-  const [open, setOpen] = useState(
-    env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true",
-  );
+  const [open, setOpen] = useState(true);
   const [autoOpen, setAutoOpen] = useState(true);
   const [drafts, setDrafts] = useState<Record<string, ArtifactDraftState>>({});
   const [editingPath, setEditingPath] = useState<string | null>(null);
-  const { setOpen: setSidebarOpen } = useSidebar();
   const pathname = usePathname();
   const hydratedPathRef = useRef<string | null>(null);
 
@@ -104,7 +101,7 @@ export function ArtifactsProvider({ children }: ArtifactsProviderProps) {
     const persisted = readPersistedState(pathname);
     setArtifacts(persisted?.artifacts ?? []);
     setSelectedArtifact(persisted?.selectedArtifact ?? null);
-    setOpen(persisted?.open ?? env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true");
+    setOpen(persisted?.open ?? true);
     setAutoOpen(true);
     setAutoSelect(!persisted?.selectedArtifact);
     setDrafts({});
@@ -143,14 +140,12 @@ export function ArtifactsProvider({ children }: ArtifactsProviderProps) {
   const select = useCallback(
     (artifact: string, autoSelect = false) => {
       setSelectedArtifact(artifact);
-      if (env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true") {
-        setSidebarOpen(false);
-      }
+      setSelectionVersion((value) => value + 1);
       if (!autoSelect) {
         setAutoSelect(false);
       }
     },
-    [setSidebarOpen, setSelectedArtifact, setAutoSelect],
+    [setSelectedArtifact, setAutoSelect],
   );
 
   const deselect = useCallback(() => {
@@ -175,6 +170,7 @@ export function ArtifactsProvider({ children }: ArtifactsProviderProps) {
     },
 
     selectedArtifact,
+    selectionVersion,
     select,
     deselect,
 

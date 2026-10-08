@@ -16,19 +16,11 @@ import { cn } from "@/lib/utils";
 const Galaxy = dynamic(() => import("@/components/ui/galaxy"), { ssr: false });
 
 const HERO_WORDS = [
-  "Deep Research",
-  "Collect Data",
-  "Analyze Data",
-  "Generate Webpages",
-  "Vibe Coding",
-  "Generate Slides",
-  "Generate Images",
-  "Generate Podcasts",
-  "Generate Videos",
-  "Generate Songs",
-  "Organize Emails",
-  "Do Anything",
-  "Learn Anything",
+  "Review Evidence",
+  "Analyze Contracts",
+  "Research Authorities",
+  "Draft Documents",
+  "Organize Matters",
 ];
 
 export function Hero({ className }: { className?: string }) {
@@ -58,7 +50,7 @@ export function Hero({ className }: { className?: string }) {
         )}
       </div>
       <FlickeringGrid
-        className="absolute inset-0 z-0 mask-[url(/images/deer.svg)] mask-size-[100vw] mask-center mask-no-repeat md:mask-size-[72vh]"
+        className="absolute inset-0 z-0 mask-[url(/images/matrix-law-symbol.svg)] mask-size-[100vw] mask-center mask-no-repeat md:mask-size-[72vh]"
         squareSize={4}
         gridGap={4}
         color={"white"}
@@ -67,11 +59,11 @@ export function Hero({ className }: { className?: string }) {
       />
       <div className="container-md relative z-10 mx-auto flex min-h-[92svh] flex-col items-center justify-center px-4 pt-20 pb-14">
         <h1 className="text-center text-5xl leading-tight font-bold break-words md:text-6xl">
-          DeerFlow
+          Matrix-Law
         </h1>
         <div className="mt-3 flex w-full max-w-full min-w-0 items-center justify-center gap-x-2 text-center text-2xl font-semibold md:text-4xl">
           <HeroWordRotate words={HERO_WORDS} />
-          <span className="whitespace-nowrap">SuperAgent</span>
+          <span className="whitespace-nowrap">Legal Workspace</span>
         </div>
         {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY && (
           <a
@@ -86,13 +78,13 @@ export function Hero({ className }: { className?: string }) {
           </a>
         )}
         <p className="text-muted-foreground mt-8 max-w-4xl text-center text-base leading-7 text-shadow-sm sm:text-xl md:text-2xl">
-          An open-source SuperAgent harness that researches, codes, and creates.
-          With the help of sandboxes, memories, tools, skills and subagents, it
-          handles different levels of tasks that could take minutes to hours.
+          A legal workspace for law firms and lawyers to organize matters, review
+          evidence, research legal authorities, and prepare documents within
+          authorized tenant workspaces.
         </p>
         <Link href="/workspace">
           <Button className="mt-8 h-11 px-5" size="lg">
-            <span className="text-md">Get Started with 2.0</span>
+            <span className="text-md">Open Matrix-Law</span>
             <ChevronRightIcon className="size-4" />
           </Button>
         </Link>

@@ -58,7 +58,7 @@ def test_production_gateway_has_a_real_readiness_probe() -> None:
     compose = _read("docker/docker-compose.yaml")
 
     assert "healthcheck:" in compose
-    assert "http://127.0.0.1:8001/health" in compose
+    assert "http://127.0.0.1:8001/ready" in compose
     assert "gateway:\n        condition: service_healthy" in compose
 
 
@@ -83,7 +83,7 @@ def test_deploy_waits_for_gateway_readiness_before_success(tmp_path: Path) -> No
     args = capture.read_text(encoding="utf-8").splitlines()
     assert "--wait" in args
     assert "--wait-timeout" in args
-    assert "DeerFlow is running!" in result.stdout
+    assert "Matrix-Law is running!" in result.stdout
 
 
 def test_deploy_failure_prints_gateway_diagnostics_and_never_claims_success(tmp_path: Path) -> None:
@@ -104,8 +104,8 @@ def test_deploy_failure_prints_gateway_diagnostics_and_never_claims_success(tmp_
     )
 
     assert result.returncode != 0
-    assert "DeerFlow is running!" not in result.stdout
-    assert "DeerFlow services failed to become ready" in result.stderr
+    assert "Matrix-Law is running!" not in result.stdout
+    assert "Matrix-Law services failed to become ready" in result.stderr
     assert "supports `docker compose up --wait`" in result.stderr
     calls = capture.read_text(encoding="utf-8")
     assert any(call.endswith(" ps") for call in calls.splitlines())

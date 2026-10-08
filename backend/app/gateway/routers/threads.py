@@ -1596,6 +1596,10 @@ async def get_thread_history(
                 values["title"] = title
             if thread_data := materialized_values.get("thread_data"):
                 values["thread_data"] = thread_data
+            # Reopened SDK conversations hydrate from history, not only streams.
+            # Preserve an explicit empty list too, so stale panel caches clear.
+            if "artifacts" in materialized_values:
+                values["artifacts"] = materialized_values["artifacts"]
 
             if is_latest_checkpoint:
                 messages = materialized_values.get("messages")

@@ -52,7 +52,12 @@ async def run_oneshot_llm(
     Returns:
         The extracted plain-text content of the model response (uncleaned).
     """
-    model = create_chat_model(name=model_name, thinking_enabled=False, app_config=app_config)
+    model = create_chat_model(
+        name=model_name,
+        thinking_enabled=False,
+        app_config=app_config,
+        purpose="oneshot",
+    )
     invoke_config: dict = {"run_name": run_name}
     inject_langfuse_metadata(
         invoke_config,

@@ -49,6 +49,15 @@ class RunIdempotencyConflict(RuntimeError):
         self.existing = existing
 
 
+class RunCapacityExceeded(RuntimeError):
+    """A configured active-run admission limit is exhausted."""
+
+    def __init__(self, *, scope: str, limit: int) -> None:
+        super().__init__(f"Active run capacity is exhausted for scope={scope} limit={limit}")
+        self.scope = scope
+        self.limit = limit
+
+
 class RunStore(abc.ABC):
     @abc.abstractmethod
     async def put(
@@ -58,6 +67,7 @@ class RunStore(abc.ABC):
         thread_id: str,
         assistant_id: str | None = None,
         user_id: str | None = None,
+        tenant_capacity_key: str | None = None,
         model_name: str | None = None,
         status: str = "pending",
         operation_kind: str = "run",
@@ -342,12 +352,16 @@ class RunStore(abc.ABC):
         multitask_strategy: str = "reject",
         assistant_id: str | None = None,
         user_id: str | None = None,
+        tenant_capacity_key: str | None = None,
         model_name: str | None = None,
         metadata: dict[str, Any] | None = None,
         kwargs: dict[str, Any] | None = None,
         created_at: str | None = None,
         grace_seconds: int = 10,
         idempotency_key: str | None = None,
+        max_active_global: int = 0,
+        max_active_per_tenant: int = 0,
+        max_active_per_user: int = 0,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """Atomically create an active thread operation with cross-process uniqueness.
 
@@ -366,6 +380,8 @@ class RunStore(abc.ABC):
             raise NotImplementedError("Legacy RunStore.create_run_atomic() cannot create non-run thread operations")
         if idempotency_key is not None:
             raise NotImplementedError("Legacy RunStore.create_run_atomic() cannot guarantee idempotent admission")
+        if max_active_global or max_active_per_tenant or max_active_per_user:
+            raise NotImplementedError("Legacy RunStore.create_run_atomic() cannot guarantee active-run capacity")
         return await self.create_run_atomic(
             run_id,
             thread_id=thread_id,
@@ -374,6 +390,7 @@ class RunStore(abc.ABC):
             multitask_strategy=multitask_strategy,
             assistant_id=assistant_id,
             user_id=user_id,
+            tenant_capacity_key=tenant_capacity_key,
             model_name=model_name,
             metadata=metadata,
             kwargs=kwargs,
@@ -391,11 +408,15 @@ class RunStore(abc.ABC):
         multitask_strategy: str = "reject",
         assistant_id: str | None = None,
         user_id: str | None = None,
+        tenant_capacity_key: str | None = None,
         model_name: str | None = None,
         metadata: dict[str, Any] | None = None,
         kwargs: dict[str, Any] | None = None,
         created_at: str | None = None,
         grace_seconds: int = 10,
+        max_active_global: int = 0,
+        max_active_per_tenant: int = 0,
+        max_active_per_user: int = 0,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """Deprecated compatibility alias for normal-run admission."""
         operation_impl = type(self).create_thread_operation_atomic
@@ -410,9 +431,13 @@ class RunStore(abc.ABC):
             multitask_strategy=multitask_strategy,
             assistant_id=assistant_id,
             user_id=user_id,
+            tenant_capacity_key=tenant_capacity_key,
             model_name=model_name,
             metadata=metadata,
             kwargs=kwargs,
             created_at=created_at,
             grace_seconds=grace_seconds,
+            max_active_global=max_active_global,
+            max_active_per_tenant=max_active_per_tenant,
+            max_active_per_user=max_active_per_user,
         )

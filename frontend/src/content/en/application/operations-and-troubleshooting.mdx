@@ -1,13 +1,13 @@
 ---
 title: Operations and Troubleshooting
-description: This page covers day-to-day operational tasks and solutions to common problems when running DeerFlow App.
+description: This page covers day-to-day operational tasks and solutions to common problems when running Matrix-Law App.
 ---
 
 import { Callout } from "nextra/components";
 
 # Operations and Troubleshooting
 
-This page covers day-to-day operational tasks and solutions to common problems when running DeerFlow App.
+This page covers day-to-day operational tasks and solutions to common problems when running Matrix-Law App.
 
 ## Log files
 
@@ -45,7 +45,7 @@ curl http://localhost:2026/api/models
 
 ## Config upgrade
 
-When you pull a new version of DeerFlow, the `config_version` in `config.example.yaml` may be higher than your `config.yaml`. To merge new fields without losing your customizations:
+When you pull a new version of Matrix-Law, the `config_version` in `config.example.yaml` may be higher than your `config.yaml`. To merge new fields without losing your customizations:
 
 ```bash
 make config-upgrade
@@ -100,14 +100,14 @@ Or set it in your `.env` file at the repo root.
 If file tools (`read_file`, `ls`, `bash`) fail with permission or path errors:
 
 1. For `LocalSandboxProvider`: check that `allow_host_bash` is set correctly and that the agent has read/write access to the thread data directory.
-2. For container sandboxes: verify Docker (or Apple Container) is running and the sandbox image is accessible.
+2. For a separately configured container sandbox used in local tests, verify its runtime and image. This sandbox option does not define the Matrix-Law server deployment architecture.
 3. For K8s Provisioner: check that the provisioner service is healthy (`curl http://localhost:8002/health`) and that the K8s cluster is reachable.
 
 ---
 
 ### SQLite reports `database is locked`
 
-This usually means SQLite is handling concurrent writes from multiple users or long-running agent runs. SQLite supports concurrent reads, but only one writer can hold the database lock at a time. In DeerFlow, checkpoint writes and application writes share the same SQLite database file.
+This usually means SQLite is handling concurrent writes from multiple users or long-running agent runs. SQLite supports concurrent reads, but only one writer can hold the database lock at a time. In Matrix-Law, checkpoint writes and application writes share the same SQLite database file.
 
 For production or multi-user deployments, switch to Postgres:
 
@@ -130,7 +130,7 @@ SQLite should be kept for local development, single-user deployments, or short-l
 Connection refused: http://provisioner:8002
 ```
 
-- Ensure the provisioner service is running: `docker compose ps`.
+- Check the optional sandbox provisioner through its own service manager. `docker compose ps` applies only to a local integration-test stack, not Matrix-Law server deployment.
 - Check that `K8S_API_SERVER` is set correctly (should point to the K8s API from inside the container, not `localhost`).
 - Verify `~/.kube/config` is mounted and the cluster is reachable from the container host.
 
@@ -163,18 +163,18 @@ Back up the storage backends you use:
 - Regular database dumps when using `database.backend: postgres`.
 - The legacy `checkpointer.connection_string` file if your deployment still configures a standalone `checkpointer`.
 
-In Docker deployments, back up the bind-mounted host paths rather than the container filesystem.
+The local candidate uses container data volumes; back up their host data directories. The cloud target uses persistent paths managed by the native host services.
 
 ## Restarting services
 
-To restart a single service (local deployment):
+To restart the local two-server candidate, run these commands from the Matrix-Law repository root:
 
 ```bash
-make stop
-make dev
+./deploy/two-server/stop.sh
+./deploy/two-server/start.sh
 ```
 
-Individual service restart scripts are in `scripts/`. For targeted restarts, you can kill and relaunch individual processes manually using the PIDs in the log files.
+These scripts control only the local simulation. Cloud services are managed as native systemd units on their respective Linux hosts.
 
 <Cards num={2}>
   <Cards.Card

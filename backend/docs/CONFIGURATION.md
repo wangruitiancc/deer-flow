@@ -843,6 +843,16 @@ models:
 - `DEER_FLOW_SKILLS_PATH` - Skills directory when `skills.path` is omitted
 - `GATEWAY_ENABLE_DOCS` - Set to `false` to disable Swagger UI (`/docs`), ReDoc (`/redoc`), and OpenAPI schema (`/openapi.json`) endpoints (default: `true`)
 
+### Password recovery mail (optional)
+
+See [Password recovery](PASSWORD_RESET.md) for the complete setup and API. The
+feature stays disabled unless `AUTH_PASSWORD_RESET_SMTP_HOST`,
+`AUTH_PASSWORD_RESET_FROM_EMAIL`, and `AUTH_PASSWORD_RESET_PUBLIC_BASE_URL` are
+set. The public URL must use HTTPS outside loopback development. Optional
+`AUTH_PASSWORD_RESET_SMTP_PORT`, `AUTH_PASSWORD_RESET_SMTP_USERNAME`,
+`AUTH_PASSWORD_RESET_SMTP_PASSWORD`, and `AUTH_PASSWORD_RESET_SMTP_SECURITY`
+select the transport; username and password must be supplied together.
+
 ## Configuration Location
 
 The configuration file should be placed in the **project root directory** (`deer-flow/config.yaml`). Set `DEER_FLOW_PROJECT_ROOT` when the process may start from another working directory, or set `DEER_FLOW_CONFIG_PATH` to point at a specific file.

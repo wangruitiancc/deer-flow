@@ -11,13 +11,14 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import case, or_, select, update
+from sqlalchemy import case, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from deerflow.persistence.run.model import RunRow
 from deerflow.runtime.runs.store.base import (
     LeaseRenewal,
+    RunCapacityExceeded,
     RunIdempotencyConflict,
     RunStore,
     StatusFinalization,
@@ -96,6 +97,7 @@ class RunRepository(RunStore):
         thread_id,
         assistant_id=None,
         user_id: str | None | _AutoSentinel = AUTO,
+        tenant_capacity_key: str | None = None,
         model_name: str | None = None,
         status="pending",
         operation_kind: str = "run",
@@ -124,6 +126,7 @@ class RunRepository(RunStore):
             "thread_id": thread_id,
             "assistant_id": assistant_id,
             "user_id": resolved_user_id,
+            "tenant_capacity_key": tenant_capacity_key,
             "model_name": self._normalize_model_name(model_name),
             "status": status,
             "operation_kind": operation_kind,
@@ -685,12 +688,16 @@ class RunRepository(RunStore):
         multitask_strategy: str = "reject",
         assistant_id: str | None = None,
         user_id: str | None = None,
+        tenant_capacity_key: str | None = None,
         model_name: str | None = None,
         metadata: dict[str, Any] | None = None,
         kwargs: dict[str, Any] | None = None,
         created_at: str | None = None,
         grace_seconds: int = 10,
         idempotency_key: str | None = None,
+        max_active_global: int = 0,
+        max_active_per_tenant: int = 0,
+        max_active_per_user: int = 0,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """Atomically create a run with cross-process thread-uniqueness.
 
@@ -717,6 +724,7 @@ class RunRepository(RunStore):
             "thread_id": thread_id,
             "assistant_id": assistant_id,
             "user_id": resolved_user_id,
+            "tenant_capacity_key": tenant_capacity_key,
             "model_name": self._normalize_model_name(model_name),
             "status": "pending",
             "operation_kind": operation_kind,
@@ -732,6 +740,19 @@ class RunRepository(RunStore):
 
         async with self._sf() as session:
             claimed: list[dict[str, Any]] = []
+
+            if max_active_global or max_active_per_tenant or max_active_per_user:
+                bind = session.get_bind()
+                if bind.dialect.name == "postgresql":
+                    # Serialize count+insert across Gateway processes and Pods.
+                    await session.execute(text("SELECT pg_advisory_xact_lock(1146245458)"))
+
+            if idempotency_key is not None:
+                existing = (
+                    await session.execute(select(RunRow).where(RunRow.idempotency_key == idempotency_key))
+                ).scalar_one_or_none()
+                if existing is not None:
+                    raise RunIdempotencyConflict(self._row_to_dict(existing))
 
             if multitask_strategy in ("interrupt", "rollback"):
                 stmt = (
@@ -772,6 +793,33 @@ class RunRepository(RunStore):
                     row.owner_worker_id = owner_worker_id
                     row.updated_at = now
                     claimed.append(self._row_to_dict(row))
+
+            if claimed:
+                await session.flush()
+
+            active_filters = (RunRow.status.in_(("pending", "running")), RunRow.operation_kind == "run")
+            if max_active_global:
+                active_global = await session.scalar(select(func.count()).select_from(RunRow).where(*active_filters)) or 0
+                if active_global >= max_active_global:
+                    raise RunCapacityExceeded(scope="global", limit=max_active_global)
+            if max_active_per_tenant and tenant_capacity_key is not None:
+                active_tenant = (
+                    await session.scalar(
+                        select(func.count()).select_from(RunRow).where(*active_filters, RunRow.tenant_capacity_key == tenant_capacity_key)
+                    )
+                    or 0
+                )
+                if active_tenant >= max_active_per_tenant:
+                    raise RunCapacityExceeded(scope="tenant", limit=max_active_per_tenant)
+            if max_active_per_user:
+                active_user = (
+                    await session.scalar(
+                        select(func.count()).select_from(RunRow).where(*active_filters, RunRow.user_id == resolved_user_id)
+                    )
+                    or 0
+                )
+                if active_user >= max_active_per_user:
+                    raise RunCapacityExceeded(scope="user", limit=max_active_per_user)
 
             session.add(RunRow(run_id=run_id, **values))
             try:

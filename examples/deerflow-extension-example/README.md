@@ -1,6 +1,6 @@
 # DeerFlow extension example
 
-This directory is a compact, standalone Python package showing all five DeerFlow
+This directory is a compact, standalone Python package showing six DeerFlow
 extension contribution kinds. It depends on the public
 `deerflow-extension-api` contract and never imports `deerflow.*` or `app.*`.
 
@@ -13,6 +13,7 @@ depends on FastAPI, LangChain, and LangGraph in `pyproject.toml`.
 | Contribution | Example behavior |
 | --- | --- |
 | Middleware | Counts tool calls through one `TOOL_VISIBLE` middleware for lead agents and subagents |
+| Task admission | Validates a task before execution; failures and timeouts abort the task |
 | Task lifecycle | Creates task-scoped stats on start and folds them into app scope on stop |
 | System-model observer | Counts DeerFlow-owned model calls, including failures |
 | Service | Binds `ExtensionRuntimeDeps` only while the Gateway is running |
@@ -142,7 +143,7 @@ name or the `module:install` value.
 ```text
 deerflow_extension_example/
 ├── __init__.py  # version-stamped install() entry point
-└── plugin.py    # state plus all five small contribution implementations
+└── plugin.py    # state plus all six small contribution implementations
 tests/
 ├── test_entry_point.py
 └── test_plugin.py

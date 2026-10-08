@@ -6,15 +6,15 @@ test.describe("Localized documentation links", () => {
   }) => {
     await page.goto("/en/docs/introduction/core-concepts");
 
-    const card = page.locator("a.nextra-card", { hasText: "Why DeerFlow" });
+    const card = page.locator("a.nextra-card", { hasText: "Why Matrix-Law" });
     await expect(card).toHaveAttribute(
       "href",
-      "/en/docs/introduction/why-deerflow",
+      "/en/docs/introduction/why-matrix-law",
     );
 
     await card.click();
-    await expect(page).toHaveURL(/\/en\/docs\/introduction\/why-deerflow$/);
-    await expect(page.locator("main h1")).toContainText("Why DeerFlow");
+    await expect(page).toHaveURL(/\/en\/docs\/introduction\/why-matrix-law$/);
+    await expect(page.locator("main h1")).toContainText("Why Matrix-Law");
   });
 
   test("keeps Chinese card navigation in the Chinese docs", async ({
@@ -65,19 +65,16 @@ test.describe("Localized documentation links", () => {
     await expect(invalidDocsLinks).toHaveCount(0);
   });
 
-  test("uses valid repository links for documentation feedback and edits", async ({
+  test("hides upstream documentation repository links", async ({
     page,
   }) => {
     await page.goto("/en/docs/application/quick-start");
 
     await expect(
       page.getByRole("link", { name: "Question? Give us feedback" }),
-    ).toHaveAttribute("href", /github\.com\/bytedance\/deer-flow\/issues\/new/);
-    await expect(
-      page.getByRole("link", { name: "Edit this page" }),
-    ).toHaveAttribute(
-      "href",
-      "https://github.com/bytedance/deer-flow/tree/main/frontend/src/content/en/application/quick-start.mdx",
+    ).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Edit this page" })).toHaveCount(
+      0,
     );
   });
 });

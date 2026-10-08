@@ -1,0 +1,100 @@
+name: matrix-law-phase10j-http
+
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_DB: matrix_law
+      POSTGRES_USER: matrix_law
+      POSTGRES_PASSWORD: synthetic-phase10j-http
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U matrix_law -d matrix_law"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    networks: [phase10j]
+
+  migrate:
+    image: matrix-law-gateway:phase10j-final
+    entrypoint: ["/app/backend/.venv/bin/python", "/verify/prepare_database.py"]
+    working_dir: /app/backend
+    user: "65532:65532"
+    environment:
+      PYTHONPATH: /app/backend
+      PYTHONIOENCODING: utf-8
+      DATABASE_URL: postgresql+asyncpg://matrix_law:synthetic-phase10j-http@postgres:5432/matrix_law
+      MATRIX_LAW_DATABASE_SCHEMA: deerflow
+    volumes:
+      - ./matrix-law-phase10j/prepare_database.py:/verify/prepare_database.py:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16777216,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [phase10j]
+
+  gateway:
+    image: matrix-law-gateway:phase10j-final
+    user: "65532:65532"
+    environment:
+      PYTHONPATH: /app/backend
+      PYTHONIOENCODING: utf-8
+      DATABASE_URL: postgresql+asyncpg://matrix_law:synthetic-phase10j-http@postgres:5432/matrix_law
+      DEER_FLOW_CONFIG_PATH: /etc/matrix-law/config.yaml
+      DEER_FLOW_PROJECT_ROOT: /app
+      DEER_FLOW_HOME: /tmp/deer-flow
+      UV_CACHE_DIR: /tmp/uv-cache
+      DEER_FLOW_METRICS_ENABLED: "true"
+      DEER_FLOW_AUTH_DISABLED: "0"
+      MATRIX_LAW_PRODUCT_REQUIRED: "1"
+      DEER_FLOW_INTERNAL_AUTH_TOKEN: synthetic-phase10j-internal-token
+      AUTH_JWT_SECRET: synthetic-phase10j-jwt-secret-not-for-production
+    volumes:
+      - ./matrix-law-phase10j/config.yaml:/etc/matrix-law/config.yaml:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=67108864,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    healthcheck:
+      test:
+        - CMD
+        - /app/backend/.venv/bin/python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8001/ready', timeout=3).read()
+      interval: 1s
+      timeout: 4s
+      retries: 60
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [phase10j]
+
+  probe:
+    image: matrix-law-gateway:phase10j-final
+    entrypoint: ["/app/backend/.venv/bin/python", "/verify/probe_gateway.py"]
+    working_dir: /app/backend
+    user: "65532:65532"
+    environment:
+      PYTHONIOENCODING: utf-8
+      GATEWAY_URL: http://gateway:8001
+      INTERNAL_AUTH_TOKEN: synthetic-phase10j-internal-token
+    volumes:
+      - ./matrix-law-phase10j/probe_gateway.py:/verify/probe_gateway.py:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16777216,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    networks: [phase10j]
+
+networks:
+  phase10j:

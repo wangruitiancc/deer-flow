@@ -450,7 +450,7 @@ class OpenVikingMemoryManager(MemoryManager):
     ) -> str:
         resolved_user = str(user_id or "default")
         if resolved_user != self._config.owner_user_id:
-            raise MemoryManagerError(f"OpenViking USER API key is bound to DeerFlow owner_user_id {self._config.owner_user_id!r}, but this request belongs to {resolved_user!r}. Refusing to share one credential across users.")
+            raise MemoryManagerError(f"OpenViking USER API key is bound to Matrix-Law owner_user_id {self._config.owner_user_id!r}, but this request belongs to {resolved_user!r}. Refusing to share one credential across users.")
         return _canonical_peer_id(agent_name, self._config.default_peer_id)
 
     def _actor_peer_scope(
@@ -552,7 +552,7 @@ def _load_official_integration() -> dict[str, Any]:
         )
         from langchain_openviking.actor_peer import use_actor_peer
     except ImportError as exc:
-        raise ImportError("The OpenViking memory backend requires langchain-openviking==0.1.0. Install DeerFlow backend dependencies and retry.") from exc
+        raise ImportError("The OpenViking memory backend requires langchain-openviking==0.1.0. Install Matrix-Law backend dependencies and retry.") from exc
     if not has_request_actor_peer_support():
         raise ImportError("The installed OpenViking SDK lacks request-scoped actor-peer support. Install openviking-sdk>=0.1.6,<0.2 and retry.")
     return {

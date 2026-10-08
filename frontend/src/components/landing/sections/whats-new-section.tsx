@@ -20,42 +20,42 @@ const COLOR = "#0a0a0a";
 const features: BentoCardProps[] = [
   {
     color: COLOR,
-    label: "Context Engineering",
-    title: "Long/Short-term Memory",
-    description: "Now the agent can better understand you",
+    label: "Legal Work",
+    title: "Matter-Aware Assistant",
+    description: "Supports research, drafting, review, and case-material organization",
   },
   {
     color: COLOR,
-    label: "Long Task Running",
-    title: "Planning and Sub-tasking",
+    label: "Governance",
+    title: "Authorized Capabilities",
     description:
-      "Plans ahead, reasons through complexity, then executes sequentially or in parallel",
+      "Models, tools, and skills follow law-firm policies and member permissions",
   },
   {
     color: COLOR,
-    label: "Extensible",
-    title: "Skills and Tools",
+    label: "Evidence",
+    title: "Verifiable Outputs",
     description:
-      "Plug, play, or even swap built-in tools. Build the agent you want.",
+      "Answers distinguish facts, inference, recommendations, and source basis",
   },
 
   {
     color: COLOR,
-    label: "Persistent",
-    title: "Sandbox with File System",
-    description: "Read, write, run — like a real computer",
+    label: "Documents",
+    title: "Legal File Workspace",
+    description: "Organize, read, and draft documents around matter workflows",
   },
   {
     color: COLOR,
-    label: "Flexible",
-    title: "Multi-Model Support",
-    description: "Doubao, DeepSeek, OpenAI, Gemini, etc.",
+    label: "Administration",
+    title: "Law-Firm Management",
+    description: "Manage members, packages, usage, and capability scope centrally",
   },
   {
     color: COLOR,
-    label: "Free",
-    title: "Open Source",
-    description: "MIT License, self-hosted, full control",
+    label: "Security",
+    title: "Controlled Execution",
+    description: "Keep upstream credentials and platform resources behind the gateway",
   },
 ];
 
@@ -68,8 +68,8 @@ export function WhatsNewSection({ className }: { className?: string }) {
   return (
     <Section
       className={cn("", className)}
-      title="What's New in DeerFlow 2.0"
-      subtitle="DeerFlow is now evolving from a Deep Research agent into a full-stack Super Agent"
+      title="Matrix-Law Legal Workspace"
+      subtitle="A professional AI workspace for lawyers and law-firm operations"
     >
       <div
         ref={bentoContainerRef}

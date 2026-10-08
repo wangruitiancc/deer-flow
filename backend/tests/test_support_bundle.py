@@ -516,7 +516,7 @@ def test_create_support_bundle_writes_ai_triage_entrypoints(tmp_path, monkeypatc
             "returncode": 1,
             "stdout": "\n".join(
                 [
-                    "DeerFlow Health Check",
+                    "Matrix-Law Health Check",
                     "  ✗ Node.js  (v20.19.5)",
                     "      → Node.js 22+ required. Install from https://nodejs.org/",
                     "  ✗ config.yaml found",
@@ -586,8 +586,8 @@ def test_create_support_bundle_writes_ai_triage_entrypoints(tmp_path, monkeypatc
     assert "### Expected behavior" in issue_draft
     assert "### Steps to reproduce" in issue_draft
     assert "### Relevant logs" in issue_draft
-    assert "DeerFlow Health Check" in issue_draft
-    assert "### How are you running DeerFlow?" in issue_draft
+    assert "Matrix-Law Health Check" in issue_draft
+    assert "### How are you running Matrix-Law?" in issue_draft
     assert "<REQUIRED: choose Local, Docker, CI, or Other>" in issue_draft
     assert "### Operating system" in issue_draft
     assert "macOS" in issue_draft

@@ -1,0 +1,35 @@
+{
+  "version": "ppocrv6-small-1.0",
+  "license": "Apache-2.0",
+  "models": [
+    {
+      "id": "det",
+      "file": "det/ppocrv6_det.onnx",
+      "url": "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_det_onnx/resolve/main/inference.onnx",
+      "sha256": "d73e0058b7a8086bbd57f3d10b8bcd4ff95363f67e06e2762b5e814fe9c9410e",
+      "sizeBytes": 9880512
+    },
+    {
+      "id": "cls",
+      "file": "cls/textline_ori_cls.onnx",
+      "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.8.0/onnx/PP-OCRv5/cls/ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx",
+      "sha256": "54379ae5174d026780215fc748a7f31910dee36818e63d49e17dc598ecc82df7",
+      "sizeBytes": 1018508
+    },
+    {
+      "id": "rec",
+      "file": "rec/ppocrv6_rec.onnx",
+      "url": "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/resolve/main/inference.onnx",
+      "sha256": "5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634",
+      "sizeBytes": 21159378
+    }
+  ],
+  "dict": {
+    "id": "dict",
+    "file": "rec/ppocrv6_dict.txt",
+    "url": "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/raw/main/inference.yml",
+    "extractCharacterDict": true,
+    "sha256": "b5f2bfe2bdd9448429e3e82b51c789775d9b42f2403d082b00662eb77e401c5d",
+    "sizeBytes": 74947
+  }
+}

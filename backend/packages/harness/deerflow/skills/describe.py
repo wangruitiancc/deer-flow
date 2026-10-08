@@ -13,6 +13,7 @@ from __future__ import annotations
 import html
 import logging
 from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Annotated
 
 from langchain_core.messages import ToolMessage
@@ -52,6 +53,7 @@ def build_describe_skill_tool(
     catalog: SkillCatalog,
     *,
     container_base_path: str = DEFAULT_SKILLS_CONTAINER_PATH,
+    hydrate_skill: Callable[[object], Awaitable[str]] | None = None,
 ) -> BaseTool:
     """Build the ``describe_skill`` tool as a closure over *catalog*.
 
@@ -59,6 +61,65 @@ def build_describe_skill_tool(
     catalog and returns a ``Command`` wrapping a ``ToolMessage``.  No graph state
     mutation is needed (unlike ``tool_search`` which promotes deferred tools).
     """
+
+    def _command(content: str, tool_call_id: str) -> Command:
+        return Command(
+            update={
+                "messages": [
+                    ToolMessage(
+                        content=content,
+                        tool_call_id=tool_call_id,
+                        name="describe_skill",
+                    )
+                ],
+            }
+        )
+
+    def _describe_sync(name: str, tool_call_id: str) -> Command:
+        matched = catalog.search(name)
+        if not matched:
+            content = f"No skills matched: {name}"
+        else:
+            content = _render_skill_metadata(matched, container_base_path)
+        return _command(content, tool_call_id)
+
+    async def _describe_hydrated(name: str, tool_call_id: str) -> Command:
+        matched = catalog.search(name)
+        if not matched:
+            return _command(f"No skills matched: {name}", tool_call_id)
+
+        blocks: list[str] = []
+        for skill in matched:
+            try:
+                assert hydrate_skill is not None
+                instructions = await hydrate_skill(skill)
+            except Exception as exc:
+                logger.exception("Failed to hydrate managed skill %s", getattr(skill, "name", "<unknown>"))
+                blocks.append(f"## Skill: {html.escape(getattr(skill, 'name', 'unknown'), quote=False)}\n- Error: {html.escape(str(exc), quote=False)}")
+                continue
+            blocks.append(
+                f"{_render_skill_metadata([skill], container_base_path)}\n\n"
+                "### Instructions\n"
+                f"{html.escape(instructions, quote=False)}"
+            )
+        return _command("\n\n".join(blocks), tool_call_id)
+
+    if hydrate_skill is not None:
+        @tool
+        async def describe_skill(
+            name: str,
+            tool_call_id: Annotated[str, InjectedToolCallId],
+        ) -> Command:
+            """Fetch managed Skill instructions on demand.
+
+            Skills appear by name in <skill_index> in the system prompt. Call
+            this only when the current task needs a Skill. For managed platform
+            Skills, this fetches the signed Skill package from the capability
+            server and returns the instructions.
+            """
+            return await _describe_hydrated(name, tool_call_id)
+
+        return describe_skill
 
     @tool
     def describe_skill(
@@ -78,23 +139,7 @@ def build_describe_skill_tool(
           - "chart visualization" -- keyword search, best matches (up to 5)
           - "+podcast gen" -- require "podcast" in the name, rank by remaining terms (up to 5)
         """
-        matched = catalog.search(name)
-        if not matched:
-            content = f"No skills matched: {name}"
-        else:
-            content = _render_skill_metadata(matched, container_base_path)
-
-        return Command(
-            update={
-                "messages": [
-                    ToolMessage(
-                        content=content,
-                        tool_call_id=tool_call_id,
-                        name="describe_skill",
-                    )
-                ],
-            }
-        )
+        return _describe_sync(name, tool_call_id)
 
     return describe_skill
 
@@ -115,11 +160,22 @@ def build_skill_search_setup(
         return SkillSearchSetup(None, frozenset())
 
     catalog = SkillCatalog(tuple(skills))
+    hydrate_skill = None
+    try:
+        from deerflow.skills.managed import get_managed_skill_runtime, hydrate_managed_skill_instructions
+
+        if get_managed_skill_runtime() is not None:
+            hydrate_skill = hydrate_managed_skill_instructions
+    except Exception:
+        hydrate_skill = None
+
+    describe_tool = build_describe_skill_tool(
+        catalog,
+        container_base_path=container_base_path,
+        hydrate_skill=hydrate_skill,
+    )
     return SkillSearchSetup(
-        describe_skill_tool=build_describe_skill_tool(
-            catalog,
-            container_base_path=container_base_path,
-        ),
+        describe_skill_tool=describe_tool,
         skill_names=catalog.names,
     )
 
@@ -172,7 +228,7 @@ You have access to skills that provide optimized workflows for specific tasks.
 **Skill Discovery:**
 1. Check <skill_index> for a skill name that matches your task
 2. Call describe_skill(name) to fetch its description and capabilities
-3. If the skill matches, call read_file on the returned location to load full instructions
+3. If the skill matches, follow the returned instructions. For local Skills, call read_file on the returned location to load full instructions when needed. For managed platform Skills, describe_skill fetches the signed package on demand and returns the instructions directly.
 4. Follow the skill's instructions precisely
 
 **Explicit Slash Skill Activation:**

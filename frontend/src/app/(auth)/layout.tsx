@@ -1,14 +1,17 @@
+import { type Metadata } from "next";
 import { redirect } from "next/navigation";
 import { type ReactNode } from "react";
 
 import { GatewayOfflineFallback } from "@/components/workspace/gateway-offline-fallback";
 import { AuthProvider } from "@/core/auth/AuthProvider";
+import { getAuthenticatedHomePath } from "@/core/auth/role-routing";
 import { getServerSideUser } from "@/core/auth/server";
 import { assertNever } from "@/core/auth/types";
 import { I18nProvider } from "@/core/i18n/context";
 import { detectLocaleServer } from "@/core/i18n/server";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { referrer: "no-referrer" };
 
 export default async function AuthLayout({
   children,
@@ -22,7 +25,7 @@ export default async function AuthLayout({
 
   switch (result.tag) {
     case "authenticated":
-      redirect("/workspace");
+      redirect(getAuthenticatedHomePath(result.user));
     case "needs_setup":
       // Allow access to setup page
       content = (

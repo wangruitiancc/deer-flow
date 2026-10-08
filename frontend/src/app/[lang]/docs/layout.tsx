@@ -13,6 +13,8 @@ const i18n = [
   { locale: "en", name: "English" },
   { locale: "zh", name: "中文" },
 ];
+const matrixLawRepository =
+  "https://github.com/wangruitiancc/matrix-law-deerflow";
 
 export default async function DocLayout({ children, params }) {
   const { lang } = await params;
@@ -30,9 +32,11 @@ export default async function DocLayout({ children, params }) {
         />
       }
       pageMap={pageMap}
-      docsRepositoryBase="https://github.com/bytedance/deer-flow/tree/main/frontend"
       footer={<Footer className="mt-0" />}
       i18n={i18n}
+      docsRepositoryBase={matrixLawRepository}
+      editLink={null}
+      feedback={{ content: null }}
       // ... Your additional layout options
     >
       {children}

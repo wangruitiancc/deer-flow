@@ -1,0 +1,101 @@
+{
+  "version": "matrix-structure-assets-v1",
+  "packages": {
+    "paddleocr": "3.2.0",
+    "paddlepaddle": "3.2.2",
+    "paddlex": "3.2.1"
+  },
+  "models": [
+    {
+      "name": "PP-DocBlockLayout",
+      "path": "official_models/PP-DocBlockLayout",
+      "file_count": 3,
+      "total_bytes": 129924055,
+      "tree_sha256": "97acf9897a5162427e2d4817950c665fb32af4922b5034ce67632651c4be1d20"
+    },
+    {
+      "name": "PP-DocLayout_plus-L",
+      "path": "official_models/PP-DocLayout_plus-L",
+      "file_count": 3,
+      "total_bytes": 130391437,
+      "tree_sha256": "9335d1ae60820c87a6786838f87ee57068284b76bee0eff09e6a55cade3b6fca"
+    },
+    {
+      "name": "PP-OCRv5_mobile_det",
+      "path": "official_models/PP-OCRv5_mobile_det",
+      "file_count": 3,
+      "total_bytes": 4923617,
+      "tree_sha256": "ea8b1d6775a03f96baef928c8cd3803c50e04697b0a47f48d848cd369ca1976b"
+    },
+    {
+      "name": "PP-OCRv5_mobile_rec",
+      "path": "official_models/PP-OCRv5_mobile_rec",
+      "file_count": 3,
+      "total_bytes": 16824734,
+      "tree_sha256": "c67d7383f3b4e4843405d9e3b382eec66bac5f5d0384d8102c7cf2c7a97784cd"
+    },
+    {
+      "name": "PP-LCNet_x1_0_table_cls",
+      "path": "official_models/PP-LCNet_x1_0_table_cls",
+      "file_count": 3,
+      "total_bytes": 6849121,
+      "tree_sha256": "21298661edd38d89ec0b3b1c1f8fa8831ef14ff08e173f18000159f9f332f826"
+    },
+    {
+      "name": "SLANeXt_wired",
+      "path": "official_models/SLANeXt_wired",
+      "file_count": 3,
+      "total_bytes": 365732881,
+      "tree_sha256": "1411afc30fdf57e577e4bfaa580b3b15bfba162a0dee70534baec145c0e5964b"
+    },
+    {
+      "name": "SLANet_plus",
+      "path": "official_models/SLANet_plus",
+      "file_count": 3,
+      "total_bytes": 7984210,
+      "tree_sha256": "8f7ba48bc6ce727d5a89720f631c2f248907faa193d03ae35a18bca8986d14a3"
+    },
+    {
+      "name": "RT-DETR-L_wired_table_cell_det",
+      "path": "official_models/RT-DETR-L_wired_table_cell_det",
+      "file_count": 3,
+      "total_bytes": 129924066,
+      "tree_sha256": "022a03dd8f86066e8b2d97e88546f4acfdf749653c05c783e847baea716869a6"
+    },
+    {
+      "name": "RT-DETR-L_wireless_table_cell_det",
+      "path": "official_models/RT-DETR-L_wireless_table_cell_det",
+      "file_count": 3,
+      "total_bytes": 129924069,
+      "tree_sha256": "d2080b1b152edc79ba3cc3243cbd34414d0060b310607b259e0b6ebc102c3c77"
+    },
+    {
+      "name": "PP-FormulaNet_plus-L",
+      "path": "official_models/PP-FormulaNet_plus-L",
+      "file_count": 3,
+      "total_bytes": 731493173,
+      "tree_sha256": "a7fc4b1e414848f7a1fec567a6253f5f8c0edebdfb980a9cf1cf19150604f46c"
+    },
+    {
+      "name": "PP-Chart2Table",
+      "path": "official_models/PP-Chart2Table",
+      "file_count": 8,
+      "total_bytes": 1434683685,
+      "tree_sha256": "81c6fea4cb30845b470957cb87770d021e6cd97f2fc9b4feb7d56fd13153accb"
+    },
+    {
+      "name": "PP-LCNet_x1_0_doc_ori",
+      "path": "official_models/PP-LCNet_x1_0_doc_ori",
+      "file_count": 7,
+      "total_bytes": 6869198,
+      "tree_sha256": "1e9fca8c54343a449c40ad7c0077e9309f8006a196689530b839c36ee1d13553"
+    },
+    {
+      "name": "PP-LCNet_x1_0_textline_ori",
+      "path": "official_models/PP-LCNet_x1_0_textline_ori",
+      "file_count": 5,
+      "total_bytes": 6856185,
+      "tree_sha256": "59341188ed2c5f57c823549cd65bd71301d3244c0f51378bf9f29f08883009dc"
+    }
+  ]
+}

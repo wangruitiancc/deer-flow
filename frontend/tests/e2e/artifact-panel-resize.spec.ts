@@ -2,7 +2,7 @@ import { type Locator, type Page, expect, test } from "@playwright/test";
 
 import { mockLangGraphAPI } from "./utils/mock-api";
 
-const ARTIFACT_PATH = "/artifact-fixtures/report.html";
+const ARTIFACT_PATH = "/mnt/user-data/outputs/report.html";
 const THREAD_ID = "00000000-0000-0000-0000-000000003125";
 
 function writeFileMessages() {
@@ -83,6 +83,24 @@ async function openArtifact(page: Page): Promise<void> {
 
 test.describe("Artifacts panel resize", () => {
   test.beforeEach(async ({ page }) => {
+    await page.route("**/api/law/**", (route) =>
+      route.fulfill({
+        json: {
+          data: route.request().url().includes("/context/by-thread/")
+            ? {
+                context: {
+                  user_id: "default",
+                  tenant_id: "resize-tenant",
+                  matter_id: "resize-matter",
+                  matter_role: "owner",
+                  thread_id: THREAD_ID,
+                },
+              }
+            : { items: [] },
+          meta: {},
+        },
+      }),
+    );
     mockLangGraphAPI(page, {
       threads: [
         {

@@ -257,9 +257,15 @@ class TestGetCheckpointer:
 
     def test_reset_clears_singleton(self):
         load_checkpointer_config_from_dict({"type": "memory"})
-        cp1 = get_checkpointer()
-        reset_checkpointer()
-        cp2 = get_checkpointer()
+        # This is an embedded-config test. Do not let an operator's local
+        # config.yaml replace the explicit in-memory test configuration.
+        with patch(
+            "deerflow.runtime.checkpointer.provider.get_app_config",
+            side_effect=FileNotFoundError,
+        ):
+            cp1 = get_checkpointer()
+            reset_checkpointer()
+            cp2 = get_checkpointer()
         assert cp1 is not cp2
 
     def test_sqlite_raises_when_package_missing(self):
@@ -702,7 +708,10 @@ class TestAsyncCheckpointer:
         assert "options=-c%20search_path%3Ddeerflow" in call_kwargs[0][0]
         assert call_kwargs[1]["check"] is mock_pool_cls.check_connection
         assert "options" not in call_kwargs[1]["kwargs"]
-        mock_conn.execute.assert_awaited_once_with('CREATE SCHEMA IF NOT EXISTS "deerflow"')
+        executed_sql = [call.args[0] for call in mock_conn.execute.await_args_list]
+        assert executed_sql[0] == 'CREATE SCHEMA IF NOT EXISTS "deerflow"'
+        assert "pg_try_advisory_lock" in executed_sql[1]
+        assert "pg_advisory_unlock" in executed_sql[-1]
 
         # Verify saver was constructed with the pool (not via from_conn_string)
         mock_saver_cls.assert_called_once_with(conn=mock_pool_instance)
@@ -756,7 +765,10 @@ class TestAsyncCheckpointer:
         assert "options=-c%20search_path%3Ddeerflow" in call_kwargs[0][0]
         assert call_kwargs[1]["check"] is mock_pool_cls.check_connection
         assert "options" not in call_kwargs[1]["kwargs"]
-        mock_conn.execute.assert_awaited_once_with('CREATE SCHEMA IF NOT EXISTS "deerflow"')
+        executed_sql = [call.args[0] for call in mock_conn.execute.await_args_list]
+        assert executed_sql[0] == 'CREATE SCHEMA IF NOT EXISTS "deerflow"'
+        assert "pg_try_advisory_lock" in executed_sql[1]
+        assert "pg_advisory_unlock" in executed_sql[-1]
 
         mock_saver_cls.assert_called_once_with(conn=mock_pool_instance)
         mock_saver.setup.assert_awaited_once()
@@ -810,6 +822,7 @@ class TestAsyncStore:
         from deerflow.runtime.store.async_provider import make_store
 
         mock_config = MagicMock()
+        mock_config.database.auto_migrate = True
         mock_config.checkpointer = CheckpointerConfig(type="postgres", connection_string="postgresql://localhost/db", postgres_schema="deerflow")
 
         mock_store = AsyncMock()
@@ -828,10 +841,12 @@ class TestAsyncStore:
         mock_async_connection.connect = AsyncMock(return_value=mock_conn)
         mock_psycopg = MagicMock()
         mock_psycopg.AsyncConnection = mock_async_connection
+        setup_store = AsyncMock()
 
         with (
             patch.dict(sys.modules, {"langgraph.store.postgres.aio": mock_pg_module}),
             patch.dict(sys.modules, {"psycopg": mock_psycopg}),
+            patch("deerflow.runtime.store.async_provider._setup_postgres_store", setup_store),
         ):
             async with make_store(mock_config) as store:
                 assert store is mock_store
@@ -841,7 +856,7 @@ class TestAsyncStore:
         mock_conn.close.assert_awaited_once()
         called_dsn = mock_store_cls.from_conn_string.call_args.args[0]
         assert "options=-c%20search_path%3Ddeerflow" in called_dsn
-        mock_store.setup.assert_awaited_once()
+        setup_store.assert_awaited_once_with(mock_store, called_dsn, auto_migrate=True)
 
     @pytest.mark.anyio
     async def test_database_postgres_schema_creates_schema_and_sets_search_path(self):
@@ -869,10 +884,12 @@ class TestAsyncStore:
         mock_async_connection.connect = AsyncMock(return_value=mock_conn)
         mock_psycopg = MagicMock()
         mock_psycopg.AsyncConnection = mock_async_connection
+        setup_store = AsyncMock()
 
         with (
             patch.dict(sys.modules, {"langgraph.store.postgres.aio": mock_pg_module}),
             patch.dict(sys.modules, {"psycopg": mock_psycopg}),
+            patch("deerflow.runtime.store.async_provider._setup_postgres_store", setup_store),
         ):
             async with make_store(mock_config) as store:
                 assert store is mock_store
@@ -882,7 +899,7 @@ class TestAsyncStore:
         mock_conn.close.assert_awaited_once()
         called_dsn = mock_store_cls.from_conn_string.call_args.args[0]
         assert "options=-c%20search_path%3Ddeerflow" in called_dsn
-        mock_store.setup.assert_awaited_once()
+        setup_store.assert_awaited_once_with(mock_store, called_dsn, auto_migrate=True)
 
 
 class TestCheckpointerDatabaseConfig:
@@ -1036,13 +1053,17 @@ class TestStoreDatabaseConfig:
         mock_store_cls = MagicMock()
         mock_store_cls.from_conn_string.return_value = mock_cm
         mock_module = MagicMock(AsyncPostgresStore=mock_store_cls)
+        setup_store = AsyncMock()
 
-        with patch.dict(sys.modules, {"langgraph.store.postgres.aio": mock_module}):
+        with (
+            patch.dict(sys.modules, {"langgraph.store.postgres.aio": mock_module}),
+            patch("deerflow.runtime.store.async_provider._setup_postgres_store", setup_store),
+        ):
             async with make_store(app_config) as store:
                 assert store is mock_store
 
         mock_store_cls.from_conn_string.assert_called_once_with("postgresql://localhost/db")
-        mock_store.setup.assert_awaited_once()
+        setup_store.assert_awaited_once_with(mock_store, "postgresql://localhost/db", auto_migrate=True)
         assert "No 'checkpointer' section" not in caplog.text
 
     @pytest.mark.anyio

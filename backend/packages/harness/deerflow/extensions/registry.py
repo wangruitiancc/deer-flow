@@ -13,12 +13,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from deerflow_extension_api import (
+    AccountInvitationClaimHandler,
     AgentAssemblyObserver,
     ContextCompactionObserver,
     ExtensionData,
     ExtensionService,
     MiddlewareContributor,
     SystemModelCallObserver,
+    TaskAdmissionContributor,
     TaskLifecycleContributor,
 )
 from deerflow_extension_api import ExtensionRegistry as ExtensionRegistryContract
@@ -36,6 +38,7 @@ class LoadedExtensions:
 
     app_store: ExtensionData
     middleware_contributors: tuple[tuple[str, MiddlewareContributor], ...] = ()
+    task_admission: tuple[tuple[str, TaskAdmissionContributor], ...] = ()
     task_lifecycle: tuple[tuple[str, TaskLifecycleContributor], ...] = ()
     system_model_observers: tuple[tuple[str, SystemModelCallObserver], ...] = ()
     agent_assembly_observers: tuple[tuple[str, AgentAssemblyObserver], ...] = ()
@@ -49,11 +52,13 @@ class LoadedExtensions:
     # earlier and has to make the same test itself.
     context_compaction_observers: tuple[tuple[str, ContextCompactionObserver], ...] = ()
     services: tuple[tuple[str, ExtensionService], ...] = ()
+    account_invitation_claim_handlers: tuple[tuple[str, AccountInvitationClaimHandler], ...] = ()
     routers: tuple[tuple[str, Any], ...] = ()
 
     # Precomputed attributes, not methods: hook sites read one attribute to
     # short-circuit, so the zero-extension path constructs nothing.
     has_middleware_contributors: bool = False
+    has_task_admission: bool = False
     has_task_lifecycle: bool = False
     has_system_model_observers: bool = False
     has_agent_assembly_observers: bool = False
@@ -71,11 +76,13 @@ class ExtensionRegistry(ExtensionRegistryContract):
 
     def __init__(self) -> None:
         self._middlewares: list[_Entry] = []
+        self._task_admission: list[_Entry] = []
         self._task_lifecycle: list[_Entry] = []
         self._system_model_observers: list[_Entry] = []
         self._agent_assembly_observers: list[_Entry] = []
         self._context_compaction_observers: list[_Entry] = []
         self._services: list[_Entry] = []
+        self._account_invitation_claim_handlers: list[_Entry] = []
         self._routers: list[_Entry] = []
         self._current_source: str | None = None
 
@@ -97,6 +104,9 @@ class ExtensionRegistry(ExtensionRegistryContract):
     def middlewares(self, contributor: MiddlewareContributor) -> None:
         self._middlewares.append((self._source(), contributor))
 
+    def task_admission(self, contributor: TaskAdmissionContributor) -> None:
+        self._task_admission.append((self._source(), contributor))
+
     def task_lifecycle(self, contributor: TaskLifecycleContributor) -> None:
         self._task_lifecycle.append((self._source(), contributor))
 
@@ -111,6 +121,9 @@ class ExtensionRegistry(ExtensionRegistryContract):
 
     def service(self, service: ExtensionService) -> None:
         self._services.append((self._source(), service))
+
+    def account_invitation_claim_handler(self, handler: AccountInvitationClaimHandler) -> None:
+        self._account_invitation_claim_handlers.append((self._source(), handler))
 
     def routers(self, routers: Sequence[Any]) -> None:
         source = self._source()
@@ -131,28 +144,32 @@ class ExtensionRegistry(ExtensionRegistryContract):
         """
         for bucket in (
             self._middlewares,
+            self._task_admission,
             self._task_lifecycle,
             self._system_model_observers,
             self._agent_assembly_observers,
             self._context_compaction_observers,
             self._services,
+            self._account_invitation_claim_handlers,
             self._routers,
         ):
             bucket[:] = [entry for entry in bucket if entry[0] != source]
 
-    def mark(self) -> tuple[int, int, int, int, int, int, int]:
+    def mark(self) -> tuple[int, int, int, int, int, int, int, int, int]:
         """Snapshot bucket lengths so one install() can be undone positionally."""
         return (
             len(self._middlewares),
+            len(self._task_admission),
             len(self._task_lifecycle),
             len(self._system_model_observers),
             len(self._agent_assembly_observers),
             len(self._context_compaction_observers),
             len(self._services),
+            len(self._account_invitation_claim_handlers),
             len(self._routers),
         )
 
-    def rollback_to(self, mark: tuple[int, int, int, int, int, int, int]) -> None:
+    def rollback_to(self, mark: tuple[int, int, int, int, int, int, int, int, int]) -> None:
         """Undo every registration made since ``mark``.
 
         Positional rather than source-keyed: two specs may legitimately share
@@ -162,11 +179,13 @@ class ExtensionRegistry(ExtensionRegistryContract):
         for bucket, size in zip(
             (
                 self._middlewares,
+                self._task_admission,
                 self._task_lifecycle,
                 self._system_model_observers,
                 self._agent_assembly_observers,
                 self._context_compaction_observers,
                 self._services,
+                self._account_invitation_claim_handlers,
                 self._routers,
             ),
             mark,
@@ -178,17 +197,20 @@ class ExtensionRegistry(ExtensionRegistryContract):
         return LoadedExtensions(
             app_store=ExtensionData("app"),
             middleware_contributors=tuple(self._middlewares),
+            task_admission=tuple(self._task_admission),
             task_lifecycle=tuple(self._task_lifecycle),
             system_model_observers=tuple(self._system_model_observers),
             agent_assembly_observers=tuple(self._agent_assembly_observers),
             context_compaction_observers=tuple(self._context_compaction_observers),
             services=tuple(self._services),
+            account_invitation_claim_handlers=tuple(self._account_invitation_claim_handlers),
             routers=tuple(self._routers),
             has_middleware_contributors=bool(self._middlewares),
+            has_task_admission=bool(self._task_admission),
             has_task_lifecycle=bool(self._task_lifecycle),
             has_system_model_observers=bool(self._system_model_observers),
             has_agent_assembly_observers=bool(self._agent_assembly_observers),
-            needs_task_store=bool(self._middlewares or self._task_lifecycle or self._system_model_observers or self._context_compaction_observers),
+            needs_task_store=bool(self._middlewares or self._task_admission or self._task_lifecycle or self._system_model_observers or self._context_compaction_observers),
         )
 
 

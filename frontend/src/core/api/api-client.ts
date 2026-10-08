@@ -80,6 +80,13 @@ export type StreamReplayGapData = {
   recovery: "reload_durable_state";
 };
 
+export type RunRecoveryRequiredData = {
+  type: "run_recovery_required";
+  code: "orphan_recovered" | "gateway_shutdown";
+  run_id: string;
+  recovery: "start_new_run";
+};
+
 type StreamPart = {
   id?: string;
   event: string;
@@ -194,16 +201,39 @@ export function isRunNotCancellableError(error: unknown): boolean {
  * back to the original join so a legitimately active reconnect is never
  * silently suppressed.
  */
-async function shouldSkipReconnect(
+type ReconnectPreflight = {
+  skip: boolean;
+  recoveryEvent?: RunRecoveryRequiredData;
+};
+
+async function inspectReconnect(
   client: LangGraphClient,
   threadId: string,
   runId: string,
-): Promise<boolean> {
+): Promise<ReconnectPreflight> {
   try {
     const run = await client.runs.get(threadId, runId);
-    return TERMINAL_RUN_STATUSES.has(run.status);
+    if (!TERMINAL_RUN_STATUSES.has(run.status)) {
+      return { skip: false };
+    }
+    const stopReason = (run as { stop_reason?: unknown }).stop_reason;
+    if (
+      (run.status === "error" && stopReason === "orphan_recovered") ||
+      (run.status === "interrupted" && stopReason === "gateway_shutdown")
+    ) {
+      return {
+        skip: true,
+        recoveryEvent: {
+          type: "run_recovery_required",
+          code: stopReason,
+          run_id: runId,
+          recovery: "start_new_run",
+        },
+      };
+    }
+    return { skip: true };
   } catch {
-    return false;
+    return { skip: false };
   }
 }
 
@@ -398,9 +428,15 @@ function createCompatibleClient(isMock?: boolean): LangGraphClient {
     // reload after the backend's stream bridge is reaped blocks forever on a
     // drained condition variable, pinning ``isLoading`` true so the first
     // post-reload message is routed to ``stop`` instead of ``submit``.
-    if (threadId && (await shouldSkipReconnect(client, threadId, runId))) {
-      clearReconnectRun(threadId, runId);
-      return;
+    if (threadId) {
+      const preflight = await inspectReconnect(client, threadId, runId);
+      if (preflight.skip) {
+        clearReconnectRun(threadId, runId);
+        if (preflight.recoveryEvent) {
+          yield { event: "custom", data: preflight.recoveryEvent };
+        }
+        return;
+      }
     }
     const sanitizedOptions = forceChatRunStreamOptions(options);
     yield* handleInactiveRunStream({

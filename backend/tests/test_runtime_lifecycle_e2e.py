@@ -15,9 +15,10 @@ import queue
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -185,6 +186,41 @@ def _build_fake_setup_agent_model(agent_name: str):
         )
 
     return fake_create_chat_model
+
+
+class _SyntheticW19ChatModel(FakeToolCallingModel):
+    """Local delayed model double for bounded Agent Gateway load measurement."""
+
+    _counter_lock: ClassVar[threading.Lock] = threading.Lock()
+    _active_calls: ClassVar[int] = 0
+    _peak_active_calls: ClassVar[int] = 0
+
+    @classmethod
+    def reset_counters(cls) -> None:
+        with cls._counter_lock:
+            cls._active_calls = 0
+            cls._peak_active_calls = 0
+
+    @classmethod
+    def peak_active_calls(cls) -> int:
+        with cls._counter_lock:
+            return cls._peak_active_calls
+
+    async def ainvoke(self, *args: Any, **kwargs: Any) -> AIMessage:
+        with self._counter_lock:
+            type(self)._active_calls += 1
+            type(self)._peak_active_calls = max(
+                type(self)._peak_active_calls,
+                type(self)._active_calls,
+            )
+        try:
+            # Model latency is synthetic and fixed; this benchmark isolates
+            # Agent graph/Gateway overhead from provider speed and cost.
+            await asyncio.sleep(0.05)
+            return await super().ainvoke(*args, **kwargs)
+        finally:
+            with self._counter_lock:
+                type(self)._active_calls -= 1
 
 
 @pytest.fixture
@@ -871,3 +907,93 @@ def test_cancel_rollback_restores_pre_run_checkpoint(isolated_app):
         assert after.status_code == 200, after.text
         assert after.json()["values"]["title"] == "Before rollback"
         assert after.json()["values"]["messages"] == [{"type": "human", "content": "before"}]
+
+
+def test_w19_synthetic_agent_gateway_concurrency(isolated_app, record_property):
+    """Measure bounded concurrent runs through the real lead-agent Gateway path.
+
+    The real FastAPI app, lead-agent graph assembly, run admission, persistence,
+    checkpointing, stream bridge, and SSE route execute. Only model generation
+    is replaced with a local fixed-latency response; this is not a provider or
+    production-capacity benchmark.
+    """
+    from concurrent.futures import as_completed
+
+    from starlette.testclient import TestClient
+
+    request_count = 8
+    concurrency = 4
+    _SyntheticW19ChatModel.reset_counters()
+
+    def create_synthetic_model(*args: Any, **kwargs: Any) -> _SyntheticW19ChatModel:
+        del args, kwargs
+        return _SyntheticW19ChatModel(responses=[AIMessage(content="Synthetic W19 Agent response.")])
+
+    with (
+        patch(
+            "deerflow.agents.lead_agent.agent.create_chat_model",
+            new=create_synthetic_model,
+        ),
+        TestClient(isolated_app) as client,
+    ):
+        csrf_token = _register_user(client, email="w19-agent-load@example.com")
+        thread_ids = [_create_thread(client, csrf_token) for _ in range(request_count)]
+
+        def run_one(index: int) -> dict[str, Any]:
+            started = time.perf_counter()
+            with client.stream(
+                "POST",
+                f"/api/threads/{thread_ids[index]}/runs/stream",
+                json=_run_body(input={"messages": [{"role": "user", "content": f"Synthetic W19 prompt {index}"}]}),
+                headers={"X-CSRF-Token": csrf_token},
+            ) as response:
+                assert response.status_code == 200, response.read().decode("utf-8", errors="replace")
+                run_id = _run_id_from_response(response)
+                events = _parse_sse(_drain_stream(response, timeout=30.0))
+            duration_ms = (time.perf_counter() - started) * 1000
+            assert [event["event"] for event in events][-1:] == ["end"]
+            assert any(event.get("data", {}).get("messages", [{}])[-1].get("content") == "Synthetic W19 Agent response." for event in events if event.get("event") == "values")
+            return {
+                "thread_id": thread_ids[index],
+                "run_id": run_id,
+                "duration_ms": round(duration_ms, 2),
+            }
+
+        started = time.perf_counter()
+        results: list[dict[str, Any]] = []
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            futures = [pool.submit(run_one, index) for index in range(request_count)]
+            for future in as_completed(futures):
+                results.append(future.result())
+        wall_ms = (time.perf_counter() - started) * 1000
+
+        run_statuses = []
+        for result in results:
+            run = client.get(f"/api/threads/{result['thread_id']}/runs/{result['run_id']}")
+            assert run.status_code == 200, run.text
+            run_statuses.append(run.json()["status"])
+
+    latencies = sorted(float(result["duration_ms"]) for result in results)
+
+    def percentile(fraction: float) -> float:
+        index = max(0, min(len(latencies) - 1, int((len(latencies) * fraction) + 0.999999) - 1))
+        return latencies[index]
+
+    summary = {
+        "requests": request_count,
+        "client_concurrency": concurrency,
+        "completed_runs": len(results),
+        "run_statuses": {status: run_statuses.count(status) for status in sorted(set(run_statuses))},
+        "wall_ms": round(wall_ms, 2),
+        "runs_per_second": round(request_count * 1000 / wall_ms, 4),
+        "p50_ms": percentile(0.50),
+        "p95_ms": percentile(0.95),
+        "peak_simultaneous_synthetic_model_calls": _SyntheticW19ChatModel.peak_active_calls(),
+        "synthetic_model_delay_ms": 50,
+        "scope": "real Gateway and lead-agent graph lifecycle; provider, OCR, speech, and legal extension tools excluded",
+    }
+    assert len(results) == request_count
+    assert set(run_statuses) == {"success"}
+    assert summary["peak_simultaneous_synthetic_model_calls"] >= 2
+    record_property("w19_synthetic_agent_gateway_load", json.dumps(summary, sort_keys=True))
+    print("W19_AGENT_LOAD_SUMMARY=" + json.dumps(summary, sort_keys=True))

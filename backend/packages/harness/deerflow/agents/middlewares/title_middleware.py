@@ -249,7 +249,11 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
             # the graph-level RunnableConfig (set in ``_make_lead_agent``) whose
             # callbacks already carry tracing handlers; binding them again at
             # the model level would emit duplicate spans.
-            model_kwargs = {"thinking_enabled": False, "attach_tracing": False}
+            model_kwargs = {
+                "thinking_enabled": False,
+                "attach_tracing": False,
+                "purpose": "title",
+            }
             if self._app_config is not None:
                 model_kwargs["app_config"] = self._app_config
             model = create_chat_model(name=config.model_name, **model_kwargs)

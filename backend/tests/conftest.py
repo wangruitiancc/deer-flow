@@ -94,6 +94,27 @@ def _reset_skill_storage_singleton():
 
 
 @pytest.fixture(autouse=True)
+def _reset_loaded_extensions_singleton():
+    """Keep the process-wide extension snapshot from leaking between tests.
+
+    Tests may load the operator's real plugin configuration or install a
+    synthetic snapshot.  Neither is allowed to change the admission and
+    lifecycle contributors seen by a later, unrelated test.
+    """
+    try:
+        from deerflow.extensions import reset_loaded_extensions
+    except ImportError:
+        yield
+        return
+
+    reset_loaded_extensions()
+    try:
+        yield
+    finally:
+        reset_loaded_extensions()
+
+
+@pytest.fixture(autouse=True)
 def _reset_frozen_checkpoint_channel_mode(monkeypatch):
     """Reset the process-global frozen checkpoint channel mode between tests.
 

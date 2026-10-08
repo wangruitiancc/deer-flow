@@ -136,7 +136,7 @@ def _format_invocation_error(agent: str, cmd: str, exc: Exception) -> str:
 
     if agent == "mcode":
         return (
-            f"{message} Install it with `npm install --global @minimax-ai/code`, run `mcode login`, and restart DeerFlow so it inherits the updated PATH. "
+            f"{message} Install it with `npm install --global @minimax-ai/code`, run `mcode login`, and restart Matrix-Law so it inherits the updated PATH. "
             "If the Gateway runs in Docker, ensure `mcode` is installed and authenticated inside the Gateway container/image."
         )
     return f"{message} Install the agent binary or update `acp_agents.{agent}.command` in config.yaml."
@@ -237,7 +237,7 @@ def build_invoke_acp_agent_tool(agents: dict) -> BaseTool:
                 await conn.initialize(
                     protocol_version=PROTOCOL_VERSION,
                     client_capabilities=ClientCapabilities(),
-                    client_info=Implementation(name="deerflow", title="DeerFlow", version="0.1.0"),
+                    client_info=Implementation(name="deerflow", title="Matrix-Law", version="0.1.0"),
                 )
                 session_kwargs: dict[str, Any] = {"cwd": physical_cwd, "mcp_servers": mcp_servers}
                 if agent_config.model:

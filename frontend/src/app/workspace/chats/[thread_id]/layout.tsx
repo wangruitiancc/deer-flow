@@ -9,10 +9,13 @@ export function generateStaticParams() {
   return DEMO_THREAD_IDS.map((thread_id) => ({ thread_id }));
 }
 
-export default function ChatLayout({
+export default async function ChatLayout({
   children,
+  params,
 }: {
   children: React.ReactNode;
+  params: Promise<{ thread_id: string }>;
 }) {
-  return <ChatProviders>{children}</ChatProviders>;
+  const { thread_id: threadId } = await params;
+  return <ChatProviders key={threadId}>{children}</ChatProviders>;
 }

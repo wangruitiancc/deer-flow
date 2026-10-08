@@ -72,6 +72,15 @@ describe("public demo threads", () => {
   it("recognizes only bundled demo thread IDs", () => {
     expect(isDemoThreadId(DEMO_THREAD_IDS[0])).toBe(true);
     expect(isDemoThreadId("not-a-demo-thread")).toBe(false);
+    expect(isDemoThreadId("fe3f7974-1bcb-4a01-a950-79673baafefd")).toBe(false);
+    expect(
+      resolveStaticDemoArtifact("fe3f7974-1bcb-4a01-a950-79673baafefd", [
+        "mnt",
+        "user-data",
+        "outputs",
+        "research_deerflow_20260201.md",
+      ]),
+    ).toBeNull();
   });
 
   it("builds an encoded public route in mock mode", () => {

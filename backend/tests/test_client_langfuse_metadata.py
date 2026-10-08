@@ -34,8 +34,15 @@ class _FakeAgent:
 
 @pytest.fixture(autouse=True)
 def _clear_langfuse_env(monkeypatch):
+    from langgraph.checkpoint.memory import InMemorySaver
+
     from deerflow.config.tracing_config import reset_tracing_config
 
+    checkpointer = InMemorySaver()
+    monkeypatch.setattr(
+        "deerflow.runtime.checkpointer.get_checkpointer",
+        lambda: checkpointer,
+    )
     for name in ("LANGFUSE_TRACING", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL"):
         monkeypatch.delenv(name, raising=False)
     reset_tracing_config()

@@ -1,5 +1,7 @@
 import { afterEach, expect, test, rs } from "@rstest/core";
 
+const warningToast = rs.fn();
+
 async function captureThreadStreamOptions() {
   let capturedOptions: Record<string, unknown> | undefined;
 
@@ -53,7 +55,17 @@ async function captureThreadStreamOptions() {
       t: {
         pages: { newChat: "New chat" },
         uploads: { uploadingFiles: "Uploading files" },
+        conversation: {
+          runRecoveryRequired:
+            "The previous run stopped after a server interruption. Send the request again to continue.",
+        },
       },
+    }),
+  }));
+  rs.doMock("sonner", () => ({
+    toast: Object.assign(rs.fn(), {
+      error: rs.fn(),
+      warning: warningToast,
     }),
   }));
   rs.doMock("@/core/tasks/context", () => ({
@@ -86,6 +98,8 @@ afterEach(() => {
   rs.doUnmock("@/core/api");
   rs.doUnmock("@/core/i18n/hooks");
   rs.doUnmock("@/core/tasks/context");
+  rs.doUnmock("sonner");
+  warningToast.mockReset();
   rs.resetModules();
 });
 
@@ -96,4 +110,23 @@ test("does not subscribe to unsupported LangGraph events mode", async () => {
   expect(options).not.toHaveProperty("onLangChainEvent");
   expect(options).toHaveProperty("onUpdateEvent");
   expect(options).toHaveProperty("onCustomEvent");
+});
+
+test("warns when the backend requires a new run after orphan recovery", async () => {
+  const options = await captureThreadStreamOptions();
+
+  const onCustomEvent = options?.onCustomEvent as
+    | ((event: unknown) => void)
+    | undefined;
+  expect(onCustomEvent).toBeDefined();
+  onCustomEvent?.({
+    type: "run_recovery_required",
+    code: "orphan_recovered",
+    run_id: "run-1",
+    recovery: "start_new_run",
+  });
+
+  expect(warningToast).toHaveBeenCalledWith(
+    "The previous run stopped after a server interruption. Send the request again to continue.",
+  );
 });

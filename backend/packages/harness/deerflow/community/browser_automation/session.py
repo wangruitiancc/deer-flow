@@ -901,7 +901,7 @@ class BrowserSessionManager:
     ) -> BrowserSession:
         ensure_browser_worker_compatibility()
         if cdp_url and not allow_unguarded_cdp:
-            raise RuntimeError("cdp_url uses a browser context where DeerFlow cannot enforce its SSRF request guard; set allow_unguarded_cdp: true only for an explicitly trusted local Chrome session")
+            raise RuntimeError("cdp_url uses a browser context where Matrix-Law cannot enforce its SSRF request guard; set allow_unguarded_cdp: true only for an explicitly trusted local Chrome session")
         key = thread_id or "default"
         now = time.monotonic()
         evicted: list[BrowserSession] = []

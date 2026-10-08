@@ -136,7 +136,7 @@ class BoxliteBox(Sandbox):
     ):
         return self._exec("sh", "-lc", script, env=env, timeout=timeout)
 
-    def close(self) -> None:
+    def close(self, *, raise_errors: bool = False) -> None:
         with self._lock:
             if self._closed:
                 return
@@ -144,6 +144,8 @@ class BoxliteBox(Sandbox):
         try:
             self._run(self._box.stop())
         except Exception as e:
+            if raise_errors:
+                raise RuntimeError(f"Could not stop BoxLite box {self.id}") from e
             logger.warning("Error stopping BoxLite box %s: %s", self.id, e)
 
     @property

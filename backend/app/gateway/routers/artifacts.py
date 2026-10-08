@@ -4,6 +4,7 @@ import hashlib
 import logging
 import mimetypes
 import os
+import re
 import stat
 import tempfile
 import zipfile
@@ -11,17 +12,19 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from app.gateway.authz import SandboxRequestLease, require_permission, try_acquire_sandbox_for_request
+from app.gateway.legal_run_admission import gate_matrix_law_thread_write
 from app.gateway.deps import get_run_manager
 from app.gateway.internal_auth import get_trusted_internal_owner_user_id
 from app.gateway.path_utils import resolve_thread_virtual_path
 from deerflow.authz.sandbox_authz import safe_app_config
-from deerflow.config.paths import make_safe_user_id
+from deerflow.config.paths import get_paths, make_safe_user_id
 from deerflow.runtime import ConflictError, ThreadOperationKind
 from deerflow.runtime.user_context import get_effective_user_id
 from deerflow.sandbox.sandbox_provider import get_sandbox_provider
@@ -53,6 +56,12 @@ class ArtifactUpdateResponse(BaseModel):
     path: str
     sha256: str
     size: int
+
+
+class ArtifactTextImportRequest(BaseModel):
+    content: str
+    filename: str = Field(min_length=1, max_length=180)
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 @asynccontextmanager
@@ -111,6 +120,33 @@ def _encode_artifact_update(content: str) -> bytes:
     if b"\x00" in encoded:
         raise HTTPException(status_code=415, detail="Binary content cannot be saved as an artifact")
     return encoded
+
+
+def _import_suffix(filename: str) -> str:
+    if Path(filename).name != filename or any(ord(char) < 32 for char in filename):
+        raise HTTPException(status_code=422, detail="Import filename must be a plain filename")
+    suffix = "".join(Path(filename).suffixes).lower()
+    if suffix not in {".md", ".txt", ".json"}:
+        raise HTTPException(status_code=415, detail="Only Markdown, plain text, and JSON can become editable copies")
+    if not re.fullmatch(r"(?:\.[a-z][a-z0-9_-]{0,31}){1,3}", suffix):
+        raise HTTPException(status_code=422, detail="Import filename has an invalid suffix")
+    return suffix
+
+
+def _create_artifact_exclusively(actual_path: Path, content: bytes) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(actual_path, flags, 0o660)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _replace_artifact_atomically(actual_path: Path, content: bytes, file_stat: os.stat_result) -> None:
@@ -493,6 +529,7 @@ async def get_artifact(thread_id: ThreadId, path: str, request: Request, downloa
     description="Replace an existing UTF-8 text artifact after verifying that its content has not changed.",
 )
 @require_permission("threads", "write", owner_check=True, require_existing=True)
+@gate_matrix_law_thread_write
 async def update_artifact(
     thread_id: ThreadId,
     path: str,
@@ -585,4 +622,68 @@ async def update_artifact(
         path=virtual_path,
         sha256=content_sha256,
         size=len(updated),
+    )
+
+
+@router.post(
+    "/threads/{thread_id}/artifacts/import-text",
+    response_model=ArtifactUpdateResponse,
+    status_code=201,
+    summary="Create Editable Artifact Copy",
+    description="Create a host-named editable text artifact after verifying the supplied immutable-source digest.",
+)
+@require_permission("threads", "write", owner_check=True, require_existing=True)
+@gate_matrix_law_thread_write
+async def import_text_artifact(
+    thread_id: ThreadId,
+    body: ArtifactTextImportRequest,
+    request: Request,
+) -> ArtifactUpdateResponse:
+    """Materialize verified source text as a new, never-overwritten output.
+
+    Source authorization remains with the service that returned the immutable
+    bytes. Non-mounted remote sandboxes fail closed because a one-sided create
+    cannot be rolled back safely.
+    """
+    content = _encode_artifact_update(body.content)
+    if hashlib.sha256(content).hexdigest() != body.source_sha256:
+        raise HTTPException(status_code=422, detail="Imported content does not match its source digest")
+    suffix = _import_suffix(body.filename)
+    provider = get_sandbox_provider()
+    if not bool(getattr(provider, "uses_thread_data_mounts", False)):
+        raise HTTPException(status_code=503, detail="Editable copy creation requires thread-mounted storage")
+
+    raw_owner_user_id = get_trusted_internal_owner_user_id(request)
+    effective_user_id = make_safe_user_id(raw_owner_user_id) if raw_owner_user_id else get_effective_user_id()
+    virtual_path = f"/mnt/user-data/outputs/project-copy-{uuid4().hex}{suffix}"
+    try:
+        async with reserve_artifact_write(request, thread_id, user_id=effective_user_id):
+            # A newly created thread may not have run yet, so ThreadDataMiddleware
+            # has not materialized its mounted user-data directories. Initialize
+            # the owner-scoped paths before resolving and creating the file.
+            await asyncio.to_thread(
+                get_paths().ensure_thread_dirs,
+                thread_id,
+                user_id=effective_user_id,
+            )
+            actual_path = await asyncio.to_thread(
+                resolve_thread_virtual_path,
+                thread_id,
+                virtual_path,
+                user_id=effective_user_id,
+            )
+            await asyncio.to_thread(_create_artifact_exclusively, actual_path, content)
+            _sha256_of_file_cached.cache_clear()
+    except ConflictError:
+        raise HTTPException(status_code=409, detail="Thread has a run in flight. Create a copy after the run finishes.") from None
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to import editable artifact for thread %s", thread_id)
+        raise HTTPException(status_code=500, detail="Failed to create editable artifact copy") from None
+
+    return ArtifactUpdateResponse(
+        path=virtual_path,
+        sha256=body.source_sha256,
+        size=len(content),
     )

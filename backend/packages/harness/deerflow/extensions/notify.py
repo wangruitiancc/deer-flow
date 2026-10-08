@@ -204,6 +204,11 @@ def reset_extension_notify_loop() -> None:
     _pending_dispatches.clear()
 
 
+def get_extension_notify_loop() -> asyncio.AbstractEventLoop | None:
+    """Return the loop that owns extension runtime resources."""
+    return _notify_loop
+
+
 def suspend_extension_system_observations() -> None:
     """Drop new fire-and-forget observations while awaited hooks still drain."""
     global _system_observations_enabled

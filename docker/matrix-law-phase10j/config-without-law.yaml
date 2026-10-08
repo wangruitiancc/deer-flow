@@ -1,0 +1,8 @@
+# Negative black-box fixture: the Matrix Law production lock must reject this.
+config_version: 42
+models: []
+sandbox:
+  use: deerflow.sandbox.local:LocalSandboxProvider
+database:
+  backend: memory
+plugins: []

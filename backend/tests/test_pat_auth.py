@@ -77,7 +77,7 @@ def _make_pat_app(with_pat_repo: bool = True):
     async def whoami(request: Request):
         return {"user_id": str(request.state.user.id), "auth_source": request.state.auth_source}
 
-    @app.get("/api/admin-check")
+    @app.get("/api/law/platform/admin-check")
     async def admin_check(request: Request):
         from app.gateway.deps import is_admin_user
 
@@ -457,17 +457,24 @@ def test_create_with_expiry_returns_expires_at(client):
 
 
 def test_pat_never_carries_admin_capability_even_for_admin_owner(client):
+    # A platform administrator cannot mint tenant PATs. Exercise a token that
+    # was issued before its owner was promoted, without relaxing that boundary.
+    from app.gateway.deps import get_local_provider
+
+    user = asyncio.run(get_local_provider().get_user("admin-1"))
+    user.system_role = "user"
     created = _create_pat(client, user_id="admin-1", scopes=["runs:read"])
+    user.system_role = "admin"
     client.cookies.clear()
     # The route-level default-deny policy blocks the PAT before the route
     # runs; the is_admin_user guard inside it remains as defense in depth
     # for compositions without the middleware.
-    response = client.get("/api/admin-check", headers={"Authorization": f"Bearer {created['token']}"})
+    response = client.get("/api/law/platform/admin-check", headers={"Authorization": f"Bearer {created['token']}"})
     assert response.status_code == 403
 
     # Control: the same admin over a session cookie keeps admin capability.
     _session_cookie(client, user_id="admin-1")
-    control = client.get("/api/admin-check")
+    control = client.get("/api/law/platform/admin-check")
     assert control.status_code == 200
     assert control.json() == {"is_admin": True}
 

@@ -11,7 +11,7 @@ Use this subagent when:
 - It owns an independent, non-overlapping shell workload that can run in parallel
 - Keeping a justified sequential command chain in one isolated context reduces coordination cost
 
-Routine git, build, test, or deploy operations are not sufficient reason to delegate.
+Routine commands are not sufficient reason to delegate.
 Use the direct bash tool when delegation and synthesis cost more than the bounded workflow.""",
     system_prompt="""You are a bash command execution specialist. Execute the requested commands carefully and report results clearly.
 

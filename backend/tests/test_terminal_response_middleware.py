@@ -176,6 +176,25 @@ def test_recovery_budget_is_once_per_run_even_when_retry_calls_another_tool():
     assert recovery_prompt_count == 1
 
 
+def test_visible_response_is_not_retried_or_rewritten():
+    middleware = TerminalResponseMiddleware()
+    message = AIMessage(
+        content=(
+            "你好！我是 Matrix Law 法律工作台中的律师助手。\n\n"
+            "我可以协助您处理以下工作：\n"
+            "- 法律检索：法规、案例、司法观点检索\n"
+            "- 案件材料整理：证据梳理、时间线整理、争议焦点归纳\n"
+            "- 文书起草：法律意见书、起诉状、答辩状等\n"
+            "- 合同审查：条款分析、风险识别、修改建议\n"
+            "- 合规分析：法规解读、合规风险评估\n"
+        )
+    )
+    state = {"messages": [HumanMessage(content="你好"), message]}
+    runtime = type("RuntimeStub", (), {"context": {"thread_id": "thread-intro", "run_id": "run-intro"}})()
+
+    assert middleware.after_model(state, runtime) is None
+
+
 def test_empty_response_without_tool_result_is_not_retried():
     middleware = TerminalResponseMiddleware()
     message = AIMessage(content="", response_metadata={"finish_reason": "stop"})

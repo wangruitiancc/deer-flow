@@ -429,6 +429,14 @@ def test_resolve_model_name_falls_back_to_default(monkeypatch, caplog):
     assert "fallback to default model 'default-model'" in caplog.text
 
 
+def test_resolve_model_name_preserves_a_platform_catalog_model(monkeypatch):
+    app_config = _make_app_config([_make_model("local-safety-profile", supports_thinking=False)])
+    runtime = SimpleNamespace(allows_model=lambda name: name == "MiniMax-M3")
+    monkeypatch.setattr(lead_agent_module, "get_controlled_model_runtime", lambda: runtime)
+
+    assert lead_agent_module._resolve_model_name("MiniMax-M3", app_config=app_config) == "MiniMax-M3"
+
+
 def test_resolve_model_name_uses_default_when_none(monkeypatch):
     app_config = _make_app_config(
         [
@@ -1106,11 +1114,14 @@ def test_create_summarization_middleware_uses_configured_model_alias(monkeypatch
     fake_model = MagicMock()
     fake_model.with_config.return_value = fake_model
 
-    def _fake_create_chat_model(*, name=None, thinking_enabled, reasoning_effort=None, app_config=None, attach_tracing=True, model_overrides=None):
+    def _fake_create_chat_model(
+        *, name=None, thinking_enabled, reasoning_effort=None, app_config=None, attach_tracing=True, model_overrides=None, purpose="agent"
+    ):
         captured["name"] = name
         captured["thinking_enabled"] = thinking_enabled
         captured["reasoning_effort"] = reasoning_effort
         captured["app_config"] = app_config
+        captured["purpose"] = purpose
         return fake_model
 
     def _raise_get_app_config():
@@ -1125,6 +1136,7 @@ def test_create_summarization_middleware_uses_configured_model_alias(monkeypatch
     assert captured["name"] == "model-masswork"
     assert captured["thinking_enabled"] is False
     assert captured["app_config"] is app_config
+    assert captured["purpose"] == "summarization"
     assert middleware["model"] is fake_model
     fake_model.with_config.assert_called_once_with(tags=["middleware:summarize"])
 
@@ -1210,8 +1222,11 @@ def test_create_summarization_middleware_threads_resolved_app_config_to_model(mo
     fake_model = MagicMock()
     fake_model.with_config.return_value = fake_model
 
-    def _fake_create_chat_model(*, name=None, thinking_enabled, reasoning_effort=None, app_config=None, attach_tracing=True, model_overrides=None):
+    def _fake_create_chat_model(
+        *, name=None, thinking_enabled, reasoning_effort=None, app_config=None, attach_tracing=True, model_overrides=None, purpose="agent"
+    ):
         captured["app_config"] = app_config
+        captured["purpose"] = purpose
         return fake_model
 
     monkeypatch.setattr(summarization_middleware_module, "get_app_config", lambda: fallback_app_config)
@@ -1221,6 +1236,7 @@ def test_create_summarization_middleware_threads_resolved_app_config_to_model(mo
     lead_agent_module._create_summarization_middleware()
 
     assert captured["app_config"] is fallback_app_config
+    assert captured["purpose"] == "summarization"
 
 
 def test_memory_middleware_uses_explicit_memory_config_without_global_read(monkeypatch):

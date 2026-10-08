@@ -84,6 +84,41 @@ class UserRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def set_password_if_token_version(self, user_id: str, expected_version: int, password_hash: str) -> bool:
+        """Replace a local password once, fenced by the current session version.
+
+        Returns ``True`` only when one local-password row matched and was
+        updated. Implementations must perform the version check and increment
+        atomically so two redemptions of one reset token cannot both succeed.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def set_mfa_challenge(self, user_id: str, expected_version: int, challenge_id: str) -> bool:
+        """Replace the user's single active password-verified MFA challenge."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def save_mfa_setup(self, user_id: str, expected_version: int, challenge_id: str, secret_ciphertext: str, recovery_hashes: list[str]) -> bool:
+        """Save pending MFA enrollment and its recovery-code digests atomically."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def confirm_mfa_setup(self, user_id: str, expected_version: int, challenge_id: str, counter: int) -> bool:
+        """Activate pending TOTP only for the matching challenge and fresh code."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def consume_mfa_totp(self, user_id: str, expected_version: int, challenge_id: str, counter: int) -> bool:
+        """Atomically consume the challenge and reject replayed TOTP steps."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def consume_mfa_recovery_code(self, user_id: str, expected_version: int, challenge_id: str, code_hash: str) -> bool:
+        """Atomically consume the challenge and one recovery-code digest."""
+        raise NotImplementedError
+
+    @abstractmethod
     async def count_users(self) -> int:
         """Return total number of registered users."""
         raise NotImplementedError

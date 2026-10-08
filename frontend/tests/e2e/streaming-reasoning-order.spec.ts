@@ -11,7 +11,7 @@ const RUN_ID = "00000000-0000-0000-0000-000000004578";
 
 const REASONING_TEXT =
   "The user asked who I am, so I will list the core capabilities.";
-const ANSWER_TEXT = "I am DeerFlow, an open-source super agent.";
+const ANSWER_TEXT = "I am Matrix-Law, your legal work assistant.";
 
 const INITIAL_MESSAGES = [
   {

@@ -31,7 +31,7 @@ from deerflow.persistence.scheduled_task_runs.model import ScheduledTaskRunRow
 from deerflow.persistence.scheduled_tasks.model import ScheduledTaskRow
 from deerflow.persistence.subagent_batches.model import SubagentBatchItemRow, SubagentBatchRow
 from deerflow.persistence.thread_meta.model import ThreadMetaRow
-from deerflow.persistence.user.model import UserRow
+from deerflow.persistence.user.model import UserMFARecoveryCodeRow, UserRow
 from deerflow.persistence.webhook_delivery.model import WebhookDeliveryRow
 
 __all__ = [
@@ -52,5 +52,6 @@ __all__ = [
     "SubagentBatchItemRow",
     "ThreadMetaRow",
     "UserRow",
+    "UserMFARecoveryCodeRow",
     "WebhookDeliveryRow",
 ]

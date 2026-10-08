@@ -368,6 +368,126 @@ def test_update_artifact_reports_active_run_conflict(tmp_path, monkeypatch) -> N
     assert artifact_path.read_text(encoding="utf-8") == "before"
 
 
+def _patch_artifact_import_dependencies(monkeypatch, root: Path, provider=None) -> None:
+    monkeypatch.setattr(
+        artifacts_router,
+        "resolve_thread_virtual_path",
+        lambda _thread_id, path, user_id=None: root / Path(path).name,
+    )
+    monkeypatch.setattr(artifacts_router, "reserve_artifact_write", _allow_artifact_write)
+    monkeypatch.setattr(artifacts_router, "get_sandbox_provider", lambda: provider or _MountedSandboxProvider())
+
+
+def test_import_text_artifact_creates_host_named_verified_copy(tmp_path, monkeypatch) -> None:
+    _patch_artifact_import_dependencies(monkeypatch, tmp_path)
+    content = "# 工作副本\n\n引用保持不变。"
+
+    response = asyncio.run(
+        call_unwrapped(
+            artifacts_router.import_text_artifact,
+            "thread-1",
+            artifacts_router.ArtifactTextImportRequest(
+                content=content,
+                filename="项目成果.md",
+                source_sha256=_artifact_sha256(content),
+            ),
+            _make_request(),
+        )
+    )
+
+    assert response.path.startswith("/mnt/user-data/outputs/project-copy-")
+    assert response.path.endswith(".md")
+    created = tmp_path / Path(response.path).name
+    assert created.read_text(encoding="utf-8") == content
+    assert response.sha256 == _artifact_sha256(content)
+    assert response.size == len(content.encode("utf-8"))
+
+
+def test_import_text_artifact_initializes_outputs_for_never_run_thread(tmp_path, monkeypatch) -> None:
+    outputs_dir = tmp_path / "users" / "owner-1" / "thread-1" / "user-data" / "outputs"
+    ensured: list[tuple[str, str | None]] = []
+    resolved: list[tuple[str, str | None]] = []
+
+    class Paths:
+        def ensure_thread_dirs(self, thread_id: str, *, user_id: str | None = None) -> None:
+            ensured.append((thread_id, user_id))
+            outputs_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(artifacts_router, "get_paths", lambda: Paths())
+
+    def resolve(thread_id: str, path: str, user_id: str | None = None) -> Path:
+        resolved.append((thread_id, user_id))
+        return outputs_dir / Path(path).name
+
+    monkeypatch.setattr(artifacts_router, "resolve_thread_virtual_path", resolve)
+    monkeypatch.setattr(artifacts_router, "reserve_artifact_write", _allow_artifact_write)
+    monkeypatch.setattr(artifacts_router, "get_sandbox_provider", lambda: _MountedSandboxProvider())
+    content = "W10 synthetic draft"
+
+    response = asyncio.run(
+        call_unwrapped(
+            artifacts_router.import_text_artifact,
+            "thread-1",
+            artifacts_router.ArtifactTextImportRequest(
+                content=content,
+                filename="draft.txt",
+                source_sha256=_artifact_sha256(content),
+            ),
+            _make_request(),
+        )
+    )
+
+    assert len(ensured) == 1
+    assert len(resolved) == 1
+    assert ensured == resolved
+    assert ensured[0][0] == "thread-1"
+    assert ensured[0][1]
+    assert (outputs_dir / Path(response.path).name).read_text(encoding="utf-8") == content
+
+
+def test_import_text_artifact_rejects_digest_mismatch_without_file(tmp_path, monkeypatch) -> None:
+    _patch_artifact_import_dependencies(monkeypatch, tmp_path)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            call_unwrapped(
+                artifacts_router.import_text_artifact,
+                "thread-1",
+                artifacts_router.ArtifactTextImportRequest(
+                    content="changed",
+                    filename="report.md",
+                    source_sha256=_artifact_sha256("original"),
+                ),
+                _make_request(),
+            )
+        )
+
+    assert exc_info.value.status_code == 422
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_import_text_artifact_fails_closed_for_remote_sandbox(tmp_path, monkeypatch) -> None:
+    _patch_artifact_import_dependencies(monkeypatch, tmp_path, _RemoteSandboxProvider())
+    content = "draft"
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            call_unwrapped(
+                artifacts_router.import_text_artifact,
+                "thread-1",
+                artifacts_router.ArtifactTextImportRequest(
+                    content=content,
+                    filename="report.txt",
+                    source_sha256=_artifact_sha256(content),
+                ),
+                _make_request(),
+            )
+        )
+
+    assert exc_info.value.status_code == 503
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_get_artifact_text_preview_supports_bounded_range_requests(tmp_path, monkeypatch) -> None:
     payload = ("0123456789abcdef" * 131_072).encode()
     artifact_path = tmp_path / "large.txt"

@@ -15,7 +15,7 @@
 # ============================================================================
 # Bump this number when the config schema changes.
 # Run `make config-upgrade` to merge new fields into your local config.yaml.
-config_version: 39
+config_version: 42
 
 # ============================================================================
 # Logging
@@ -717,6 +717,13 @@ tool_groups:
 # Configure available tools for the agent to use
 
 tools:
+  # Every configured tool has a checkpoint-replay contract. Undeclared tools
+  # default to side_effect=external_write + replay_policy=forbid. For a tool
+  # that changes an external system, use replay_policy=keyed and name the
+  # argument that the tool/provider persists as its idempotency key, e.g.:
+  #   side_effect: external_write
+  #   replay_policy: keyed
+  #   idempotency_key_arg: idempotency_key
   # RAGFlow knowledge retrieval (read-only). Uncomment this single entry.
   # `datasets` is optional. Omit it to list every tenant-visible dataset at
   # search time; an explicit `datasets: []` is invalid. Empty datasets are
@@ -745,6 +752,8 @@ tools:
   - name: web_search
     group: web
     use: deerflow.community.ddg_search.tools:web_search_tool
+    side_effect: read_only
+    replay_policy: safe
     max_results: 5
     # backend: auto          # DDGS backend(s): auto, duckduckgo, brave, wikipedia, etc.
     # region: wt-wt          # wt-wt is normalized for Wikipedia when backend includes auto/all/wikipedia.
@@ -988,6 +997,8 @@ tools:
   - name: web_fetch
     group: web
     use: deerflow.community.jina_ai.tools:web_fetch_tool
+    side_effect: read_only
+    replay_policy: safe
     timeout: 10
     # Optional proxy for restricted networks / Docker / WSL.
     # Use host.docker.internal instead of 127.0.0.1 when the proxy runs on the host.
@@ -1036,6 +1047,8 @@ tools:
   - name: image_search
     group: web
     use: deerflow.community.image_search.tools:image_search_tool
+    side_effect: read_only
+    replay_policy: safe
     max_results: 5
 
   # Image search tool (uses InfoQuest)
@@ -1075,28 +1088,40 @@ tools:
   - name: ls
     group: file:read
     use: deerflow.sandbox.tools:ls_tool
+    side_effect: read_only
+    replay_policy: safe
 
   - name: read_file
     group: file:read
     use: deerflow.sandbox.tools:read_file_tool
+    side_effect: read_only
+    replay_policy: safe
 
   - name: glob
     group: file:read
     use: deerflow.sandbox.tools:glob_tool
+    side_effect: read_only
+    replay_policy: safe
     max_results: 200
 
   - name: grep
     group: file:read
     use: deerflow.sandbox.tools:grep_tool
+    side_effect: read_only
+    replay_policy: safe
     max_results: 100
 
   - name: write_file
     group: file:write
     use: deerflow.sandbox.tools:write_file_tool
+    side_effect: local_write
+    replay_policy: forbid
 
   - name: str_replace
     group: file:write
     use: deerflow.sandbox.tools:str_replace_tool
+    side_effect: local_write
+    replay_policy: forbid
 
   # Bash execution tool
   # Active only when using an isolated shell sandbox or when
@@ -1104,6 +1129,8 @@ tools:
   - name: bash
     group: bash
     use: deerflow.sandbox.tools:bash_tool
+    side_effect: external_write
+    replay_policy: forbid
 
 # ============================================================================
 # Tool Search Configuration (Deferred Tool Loading)
@@ -2336,6 +2363,16 @@ run_ownership:
                               # Also the cross-worker clock-skew budget — see note above.
   heartbeat_enabled: false    # Set to true for GATEWAY_WORKERS > 1
 
+# Fail-fast top-level Agent run admission. Limits count pending + running runs
+# across threads; Postgres enforces them cluster-wide across Gateway Pods.
+# 0 disables a limit for backward compatibility. Exhaustion returns HTTP 429
+# with Retry-After and never queues or replays the user's request.
+run_capacity:
+  max_active_global: 0
+  max_active_per_tenant: 0
+  max_active_per_user: 0
+  retry_after_seconds: 5
+
 # ============================================================================
 # Stream Bridge Configuration
 # ============================================================================
@@ -2834,3 +2871,26 @@ authorization:
 #                                         # also match a host-owned table name.
 #     config:
 #       label: example                    # extension-private values, if any
+
+# Matrix Law is a required product module in this fork. Development shares
+# the host database; production-candidate deployments must enable the
+# dedicated RLS API/worker roles described in the Matrix Law runbook.
+plugins:
+  - name: matrix-law
+    package: matrix-law-extension
+    use: matrix_law_extension:install
+    enabled: true
+    required: true
+    table_prefix: law_
+    config:
+      api_prefix: /api/law
+      audit_payload_max_bytes: 8192
+      deployment_mode: shadow
+      database:
+        enabled: false
+        schema_name: deerflow
+#       database:                         # Matrix Law PostgreSQL RLS boundary
+#         enabled: false                  # production-candidate requires true
+#         schema_name: deerflow
+#         api_url_env: MATRIX_LAW_API_DATABASE_URL
+#         worker_url_env: MATRIX_LAW_WORKER_DATABASE_URL

@@ -15,15 +15,9 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+import { workspaceAttachments } from "@/core/law/workspace-attachments";
 import { env } from "@/env";
-import { useIsMobile } from "@/hooks/use-mobile";
+import { useRightPanelOverlay } from "@/hooks/use-right-panel-overlay";
 import { cn } from "@/lib/utils";
 
 import { useArtifacts } from "../artifacts/context";
@@ -35,7 +29,7 @@ function RightPanelLoading() {
   return (
     <div className="grid size-full place-items-center">
       <p role="status" className="text-muted-foreground text-sm">
-        Loading panel…
+        正在加载工作区…
       </p>
     </div>
   );
@@ -68,18 +62,38 @@ const SidecarPanel = dynamic(
   { loading: RightPanelLoading },
 );
 
+const ProjectArtifactsPanel = dynamic(
+  () =>
+    import("../law/project-artifacts-panel").then(
+      (module) => module.ProjectArtifactsPanel,
+    ),
+  { loading: RightPanelLoading },
+);
+
 const RIGHT_PANEL_ANIMATION_MS = 280;
 const RIGHT_PANEL_DEFAULT_SIZE = "40%";
 
 type RightPanelKind = "sidecar" | "artifacts" | "browser";
+
+function MountedSidePanel(props: React.ComponentProps<typeof ResizablePanel>) {
+  // The library treats changes to defaultSize as layout changes. Capture it once per
+  // desktop mount, including a return from the tablet sheet while already open.
+  const [initialSize] = useState(props.defaultSize);
+  return <ResizablePanel {...props} defaultSize={initialSize} />;
+}
 
 const ChatBox: React.FC<{
   children: React.ReactNode;
   threadId: string;
   browserEnabled?: boolean;
 }> = ({ children, threadId, browserEnabled = true }) => {
-  const { thread } = useThread();
-  const isMobile = useIsMobile();
+  const { thread, isMock } = useThread();
+  const [workspaceExpanded, setWorkspaceExpanded] = useState(false);
+  const attachments = useMemo(
+    () => workspaceAttachments(thread.values.messages ?? []),
+    [thread.values.messages],
+  );
+  const useOverlay = useRightPanelOverlay();
   const pathname = usePathname();
   const threadIdRef = useRef(threadId);
 
@@ -160,6 +174,17 @@ const ChatBox: React.FC<{
         ? "artifacts"
         : null;
   const rightPanelOpen = activeRightPanel !== null;
+  const modalPanel = rightPanelOpen && (workspaceExpanded || useOverlay);
+  const workspaceRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!modalPanel) return;
+    const previous = document.activeElement;
+    workspaceRef.current?.querySelector<HTMLElement>("button")?.focus();
+    return () => {
+      if (previous instanceof HTMLElement && previous.isConnected)
+        previous.focus({ preventScroll: true });
+    };
+  }, [modalPanel]);
   const [renderedRightPanel, setRenderedRightPanel] =
     useState<RightPanelKind | null>(activeRightPanel);
 
@@ -170,6 +195,20 @@ const ChatBox: React.FC<{
   const sidePanelRef = usePanelRef();
   // Width the panel reopens at: the last size the user dragged it to.
   const openSizeRef = useRef(RIGHT_PANEL_DEFAULT_SIZE);
+  const [layoutReady, setLayoutReady] = useState(false);
+  useEffect(() => {
+    try {
+      const size = Number(
+        window.localStorage.getItem("matrix-law:right-panel-width:v1"),
+      );
+      if (size >= 15 && size <= 85) {
+        openSizeRef.current = `${size}%`;
+      }
+    } catch {
+      /* Optional width preference. */
+    }
+    setLayoutReady(true);
+  }, []);
   // While the panel width animates, the content is held at its final width and
   // clipped instead of reflowing every frame — a reflowing message list keeps
   // re-running its scroll-to-bottom (pinned by the sidecar scroll regression
@@ -183,17 +222,21 @@ const ChatBox: React.FC<{
   // would interpolate every pointer frame and make the handle feel laggy.
   const [animatingRightPanel, setAnimatingRightPanel] = useState(false);
   const rightPanelOpenRef = useRef(rightPanelOpen);
-  // Read once: `defaultSize` only applies on mount, the effect below owns every
-  // later open/close.
-  const [initialRightPanelSize] = useState(() =>
-    rightPanelOpen ? RIGHT_PANEL_DEFAULT_SIZE : "0%",
-  );
+  const previousOverlayRef = useRef(useOverlay);
 
   const handleSidePanelResize = useCallback((size: PanelSize) => {
     if (!rightPanelOpenRef.current || size.asPercentage <= 0) {
       return;
     }
     openSizeRef.current = `${size.asPercentage}%`;
+    try {
+      window.localStorage.setItem(
+        "matrix-law:right-panel-width:v1",
+        String(size.asPercentage),
+      );
+    } catch {
+      /* Layout remains usable. */
+    }
   }, []);
 
   const handlePanelGroupLayoutChanged = useCallback(
@@ -220,7 +263,10 @@ const ChatBox: React.FC<{
   );
 
   useEffect(() => {
-    if (rightPanelOpenRef.current === rightPanelOpen) {
+    if (!layoutReady) return;
+    const remountedDesktop = previousOverlayRef.current && !useOverlay;
+    previousOverlayRef.current = useOverlay;
+    if (rightPanelOpenRef.current === rightPanelOpen && !remountedDesktop) {
       return;
     }
     rightPanelOpenRef.current = rightPanelOpen;
@@ -256,7 +302,7 @@ const ChatBox: React.FC<{
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [rightPanelOpen, sidePanelRef]);
+  }, [rightPanelOpen, sidePanelRef, useOverlay, layoutReady]);
 
   useEffect(() => {
     if (activeRightPanel) {
@@ -265,7 +311,7 @@ const ChatBox: React.FC<{
     }
 
     const timeout = window.setTimeout(() => {
-      setRenderedRightPanel(null);
+      setWorkspaceExpanded(false);
     }, RIGHT_PANEL_ANIMATION_MS);
 
     return () => {
@@ -285,7 +331,7 @@ const ChatBox: React.FC<{
     }
   }, [browserEnabled, browserView]);
 
-  const rightPanelContent = useMemo(() => {
+  const nativeRightPanelContent = useMemo(() => {
     if (renderedRightPanel === "browser") {
       return <BrowserViewPanel threadId={threadId} className="size-full" />;
     }
@@ -318,13 +364,13 @@ const ChatBox: React.FC<{
           {artifacts.length === 0 ? (
             <ConversationEmptyState
               icon={<FilesIcon />}
-              title="No artifact selected"
-              description="Select an artifact to view its details"
+              title="尚未选择文件"
+              description="从本会话文件或项目成果中选择一项查看详情"
             />
           ) : (
             <div className="flex size-full max-w-(--container-width-sm) flex-col justify-center p-4 pt-8">
               <header className="shrink-0">
-                <h2 className="text-lg font-medium">Artifacts</h2>
+                <h2 className="text-lg font-medium">本会话文件</h2>
               </header>
               <main className="min-h-0 grow">
                 <ArtifactFileList
@@ -347,49 +393,24 @@ const ChatBox: React.FC<{
     setArtifactsOpen,
   ]);
 
-  if (isMobile) {
-    return (
-      <>
-        <div className="relative size-full min-w-0">{children}</div>
-        <Sheet
-          open={rightPanelOpen}
-          onOpenChange={(open) => {
-            if (open) {
-              return;
-            }
-            if (sidecarOpen) {
-              sidecar?.close();
-            }
-            if (browserViewOpen) {
-              browserView?.close();
-            }
-            if (artifactsOpen) {
-              setArtifactsOpen(false);
-            }
-          }}
-        >
-          <SheetContent
-            className="w-[calc(100vw-1rem)] max-w-none gap-0 p-0 sm:max-w-md [&>button]:hidden"
-            side="right"
-          >
-            <SheetHeader className="sr-only">
-              <SheetTitle>
-                {renderedRightPanel === "sidecar"
-                  ? "Sidecar"
-                  : renderedRightPanel === "browser"
-                    ? "Browser"
-                    : "Artifacts"}
-              </SheetTitle>
-              <SheetDescription>
-                Browse the side panel for this conversation.
-              </SheetDescription>
-            </SheetHeader>
-            <div className="min-h-0 flex-1 p-3 pt-10">{rightPanelContent}</div>
-          </SheetContent>
-        </Sheet>
-      </>
+  const rightPanelContent =
+    renderedRightPanel === "artifacts" &&
+    !isMock &&
+    env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true" ? (
+      <ProjectArtifactsPanel
+        key={threadId}
+        threadId={threadId}
+        expanded={workspaceExpanded}
+        onExpandedChange={setWorkspaceExpanded}
+        attachments={attachments}
+      >
+        {nativeRightPanelContent}
+      </ProjectArtifactsPanel>
+    ) : (
+      nativeRightPanelContent
     );
-  }
+
+  if (!layoutReady) return <RightPanelLoading />;
 
   return (
     <ResizablePanelGroup
@@ -397,7 +418,8 @@ const ChatBox: React.FC<{
       orientation="horizontal"
       onLayoutChanged={handlePanelGroupLayoutChanged}
       className={cn(
-        "[container-type:inline-size] size-full min-h-0",
+        "size-full min-h-0",
+        modalPanel ? "[container-type:normal]" : "[container-type:inline-size]",
         // The sized flex item is the library's own `[data-panel]` element, not
         // the child `className` lands on, so the open/close transition has to be
         // addressed from here.
@@ -407,47 +429,79 @@ const ChatBox: React.FC<{
     >
       <ResizablePanel
         id={`${resizableIdBase}-chat`}
-        minSize="30%"
+        minSize="15%"
         className="relative min-h-0 min-w-0"
       >
-        <div className="relative size-full min-h-0 min-w-0" id="chat">
+        <div
+          inert={modalPanel}
+          className="relative size-full min-h-0 min-w-0"
+          id="chat"
+        >
           {children}
         </div>
       </ResizablePanel>
       <ResizableHandle
         id={`${resizableIdBase}-separator`}
         withHandle
-        disabled={!rightPanelOpen}
+        aria-label="调整中间与右侧工作区宽度"
+        disabled={!rightPanelOpen || useOverlay}
         className={cn(
           "opacity-33 transition-opacity duration-200 ease-out hover:opacity-100 motion-reduce:transition-none",
           !rightPanelOpen && "pointer-events-none opacity-0",
         )}
       />
-      <ResizablePanel
+      <MountedSidePanel
         id={`${resizableIdBase}-side`}
         panelRef={sidePanelRef}
         collapsible
         collapsedSize="0%"
-        defaultSize={initialRightPanelSize}
-        minSize="20%"
+        defaultSize={rightPanelOpen ? openSizeRef.current : "0%"}
+        minSize="15%"
         onResize={handleSidePanelResize}
         className="min-h-0 min-w-0"
       >
         <aside
+          ref={workspaceRef}
+          inert={!rightPanelOpen}
+          role={modalPanel ? "dialog" : undefined}
+          aria-modal={modalPanel ? true : undefined}
+          aria-label="法律工作区"
           aria-hidden={!rightPanelOpen}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && modalPanel) {
+              event.preventDefault();
+              if (workspaceExpanded && !useOverlay) setWorkspaceExpanded(false);
+              else setArtifactsOpen(false);
+              return;
+            }
+            if (event.key === "Tab" && modalPanel) {
+              const controls = [
+                ...(workspaceRef.current?.querySelectorAll<HTMLElement>(
+                  'button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex="0"], [contenteditable="true"]',
+                ) ?? []),
+              ].filter((element) => element.getClientRects().length > 0);
+              const first = controls[0];
+              const last = controls.at(-1);
+              if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last?.focus();
+              } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first?.focus();
+              }
+            }
+          }}
           className={cn(
             "size-full min-h-0 min-w-0 overflow-hidden transition-opacity duration-[280ms] ease-out motion-reduce:transition-none",
             rightPanelOpen ? "opacity-100" : "pointer-events-none opacity-0",
+            modalPanel && "bg-background fixed inset-0 z-40",
           )}
           id="artifacts"
         >
           <div
-            className={cn(
-              "ml-auto h-full",
-              renderedRightPanel === "artifacts" ? "p-4" : "p-0",
-            )}
+            className="ml-auto h-full"
             style={
-              pinnedContentWidth === null
+              modalPanel || pinnedContentWidth === null
                 ? undefined
                 : { width: pinnedContentWidth }
             }
@@ -455,7 +509,7 @@ const ChatBox: React.FC<{
             {rightPanelContent}
           </div>
         </aside>
-      </ResizablePanel>
+      </MountedSidePanel>
     </ResizablePanelGroup>
   );
 };

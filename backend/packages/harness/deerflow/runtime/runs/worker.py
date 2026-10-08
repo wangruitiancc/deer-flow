@@ -41,6 +41,7 @@ from deerflow.agents.middlewares.input_sanitization_middleware import neutralize
 from deerflow.config.app_config import AppConfig
 from deerflow.config.database_config import CheckpointChannelMode
 from deerflow.constants import TOOL_RESULTS_DIRNAME
+from deerflow.models import controlled_model_runtime_scope, iter_with_controlled_model_runtime
 from deerflow.runtime.checkpoint_mode import (
     aensure_checkpoint_mode_compatible,
     inject_checkpoint_mode,
@@ -75,7 +76,13 @@ from deerflow.runtime.goal import (
 )
 from deerflow.runtime.serialization import serialize
 from deerflow.runtime.stream_bridge import StreamBridge
+from deerflow.runtime.stream_bridge.write_gated import WriteGatedStreamBridge
 from deerflow.runtime.stream_modes import normalize_stream_modes, to_langgraph_stream_modes
+from deerflow.runtime.task_scope import (
+    matter_scope_from_task_store,
+    resolve_task_scoped_store,
+    task_write_gate_from_store,
+)
 from deerflow.runtime.user_context import get_current_user, get_effective_user_id, resolve_runtime_user_id
 from deerflow.sandbox.lease import SANDBOX_SERVER_OWNED_CONTEXT_KEYS
 from deerflow.trace_context import DEERFLOW_TRACE_METADATA_KEY, ensure_trace_id
@@ -84,7 +91,7 @@ from deerflow.utils.messages import message_to_text
 from deerflow.workspace_changes import capture_workspace_snapshot, get_changed_output_paths, record_workspace_changes
 from deerflow.workspace_changes.types import WorkspaceSnapshot
 
-from .manager import RunManager, RunRecord, RunStartOutcome
+from .manager import GATEWAY_SHUTDOWN_STOP_REASON, RunManager, RunRecord, RunStartOutcome
 from .naming import resolve_root_run_name
 from .schemas import RunStatus
 
@@ -642,6 +649,22 @@ def _agent_factory_supports_app_config(agent_factory: Any) -> bool:
         return _compute_agent_factory_supports_app_config(agent_factory)
 
 
+def _agent_stream_supports_context(agent: Any) -> bool:
+    """Return whether an agent stream accepts LangGraph's context channel.
+
+    Compiled LangGraph agents expose ``context=``. Lightweight embedded agents
+    and test doubles may still implement the older astream signature, so keep
+    their compatibility path while using the official channel whenever it is
+    available.
+    """
+
+    try:
+        parameters = inspect.signature(agent.astream).parameters.values()
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return any(parameter.name == "context" or parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters)
+
+
 def _agent_graph(agent_result: Any) -> Any:
     """Unwrap the lead assembly, leaving any other factory result untouched."""
     try:
@@ -771,6 +794,7 @@ async def run_agent(
     from deerflow_extension_api import ExtensionData, TaskInfo
 
     from deerflow.extensions import get_loaded_extensions
+    from deerflow.extensions.admission import admit_task
     from deerflow.extensions.notify import (
         lead_task_id,
         lead_task_outcome,
@@ -779,8 +803,10 @@ async def run_agent(
     )
 
     extensions = ctx.extensions if ctx.extensions is not None else get_loaded_extensions()
+    has_task_admission = getattr(extensions, "has_task_admission", False)
     task_store: ExtensionData | None = None
     task_info: TaskInfo | None = None
+    task_lifecycle_started = False
     deferred_stop_interrupt: BaseException | None = None
     pre_run_checkpoint_id: str | None = None
     pre_run_workspace_snapshot: WorkspaceSnapshot | None = None
@@ -861,6 +887,7 @@ async def run_agent(
             await run_manager.set_status(
                 run_id,
                 RunStatus.interrupted,
+                stop_reason=record.stop_reason,
                 **terminal_status_kwargs,
             )
             logger.info("Run %s was cancelled", run_id)
@@ -921,21 +948,38 @@ async def run_agent(
         if extensions.needs_task_store:
             task_store = ExtensionData(task_id)
 
-        if extensions.has_task_lifecycle:
+        if has_task_admission or extensions.has_task_lifecycle:
             task_info = TaskInfo(
                 task_id=task_id,
                 run_id=run_id,
                 thread_id=thread_id,
                 kind="lead",
                 agent_name=record.assistant_id,
+                user_id=record.user_id,
             )
             assert task_store is not None
+        if has_task_admission:
+            assert task_info is not None and task_store is not None
+            await admit_task(
+                extensions,
+                task_store,
+                task_info,
+                timeout=_EXTENSION_TASK_NOTIFY_TIMEOUT_SECONDS,
+            )
+        task_write_gate = task_write_gate_from_store(task_store)
+        if matter_scope_from_task_store(task_store) is not None and task_write_gate is None:
+            raise RuntimeError("Matter-scoped task is missing its persistent write gate")
+        if task_write_gate is not None:
+            bridge = WriteGatedStreamBridge(bridge, task_write_gate)
+        if extensions.has_task_lifecycle:
+            assert task_info is not None and task_store is not None
             await notify_task_start(
                 extensions,
                 task_store,
                 task_info,
                 timeout=_EXTENSION_TASK_NOTIFY_TIMEOUT_SECONDS,
             )
+            task_lifecycle_started = True
 
         if not record.ownership_lost and thread_store is not None:
             try:
@@ -1006,9 +1050,9 @@ async def run_agent(
         from langgraph.runtime import Runtime
 
         # Inject runtime context so middlewares and tools (via ToolRuntime.context) can
-        # access thread-level data. langgraph-cli does this automatically; we must do it
-        # manually here because we drive the graph through ``agent.astream(config=...)``
-        # without passing the official ``context=`` parameter.
+        # access thread-level data. Keep the parent-runtime config for older embedded
+        # callers, and also pass this through LangGraph's official ``context=`` channel
+        # when streaming below.
         runtime_ctx = _build_runtime_context(
             thread_id,
             run_id,
@@ -1025,7 +1069,11 @@ async def run_agent(
         if journal is not None:
             runtime_ctx["__run_journal"] = journal
         _install_runtime_context(config, runtime_ctx)
-        runtime = Runtime(context=cast(Any, runtime_ctx), store=store)
+        matter_scope = matter_scope_from_task_store(task_store)
+        run_store = resolve_task_scoped_store(store, task_store)
+        if matter_scope is not None and store is not None:
+            logger.info("Run %s: disabled generic LangGraph Store for matter-scoped task", run_id)
+        runtime = Runtime(context=cast(Any, runtime_ctx), store=run_store)
         config.setdefault("configurable", {})["__pregel_runtime"] = runtime
 
         # Inject RunJournal as a LangChain callback handler.
@@ -1069,13 +1117,27 @@ async def run_agent(
             agent_factory_kwargs["app_config"] = ctx.app_config
         from deerflow.extensions import bind_agent_build_extensions
 
-        with bind_agent_build_extensions(extensions):
-            agent = _agent_graph(agent_factory(**agent_factory_kwargs))
+        # Admission has completed before this point. Bind an extension-owned
+        # signer only while assembling the graph; it is not copied into the
+        # runtime context or persisted checkpoint.
+        with controlled_model_runtime_scope(task_store):
+            from deerflow.mcp.controlled import get_controlled_mcp_tools
+            from deerflow.skills.managed import load_managed_skill_catalog
+
+            await load_managed_skill_catalog()
+            await get_controlled_mcp_tools()
+            with bind_agent_build_extensions(extensions):
+                agent = _agent_graph(agent_factory(**agent_factory_kwargs))
+
+        # Explicitly clear any factory-provided/cached Store binding for legal
+        # runs; omitting assignment here could retain an unscoped backend.
+        if matter_scope is not None or run_store is not None:
+            agent.store = run_store
 
         accessor = CheckpointStateAccessor.bind(
             agent,
             checkpointer,
-            store=store,
+            store=run_store,
             mode=mode,
         )
 
@@ -1138,8 +1200,8 @@ async def run_agent(
         # 4. Attach checkpointer and store
         if checkpointer is not None:
             agent.checkpointer = checkpointer
-        if store is not None:
-            agent.store = store
+        if matter_scope is not None or run_store is not None:
+            agent.store = run_store
 
         # 5. Set interrupt nodes
         if interrupt_before:
@@ -1157,10 +1219,11 @@ async def run_agent(
         def _get_goal_evaluator_model() -> Any:
             nonlocal goal_evaluator_model
             if goal_evaluator_model is None:
-                goal_evaluator_model = create_goal_evaluator_model(
-                    model_name=record.model_name,
-                    app_config=ctx.app_config,
-                )
+                with controlled_model_runtime_scope(task_store):
+                    goal_evaluator_model = create_goal_evaluator_model(
+                        model_name=record.model_name,
+                        app_config=ctx.app_config,
+                    )
             return goal_evaluator_model
 
         # Built once per run, not per _stream_once call: goal continuations
@@ -1170,12 +1233,22 @@ async def run_agent(
         async def _stream_once(input_payload: Any, stream_config: RunnableConfig) -> None:
             nonlocal llm_error_fallback_message
             file_tool_chunk_batcher = _LargeFileToolChunkBatcher() if "messages-tuple" in requested_modes else None
+            stream_kwargs: dict[str, Any] = {"config": stream_config}
+            if _agent_stream_supports_context(agent):
+                stream_kwargs["context"] = runtime_ctx
             try:
                 async with _checkpoint_thread_lock(thread_id):
                     if len(lg_modes) == 1 and not stream_subgraphs:
                         # Single mode, no subgraphs: astream yields raw chunks
                         single_mode = lg_modes[0]
-                        stream = agent.astream(input_payload, config=stream_config, stream_mode=single_mode)
+                        stream = iter_with_controlled_model_runtime(
+                            task_store,
+                            agent.astream(
+                                input_payload,
+                                stream_mode=single_mode,
+                                **stream_kwargs,
+                            ),
+                        )
                         broke_on_abort = False
                         try:
                             async for chunk in stream:
@@ -1205,11 +1278,14 @@ async def run_agent(
                                     logger.debug("Could not close agent stream for run %s", run_id, exc_info=True)
                         return
                     # Multiple modes or subgraphs: astream yields tuples
-                    stream = agent.astream(
-                        input_payload,
-                        config=stream_config,
-                        stream_mode=lg_modes,
-                        subgraphs=stream_subgraphs,
+                    stream = iter_with_controlled_model_runtime(
+                        task_store,
+                        agent.astream(
+                            input_payload,
+                            stream_mode=lg_modes,
+                            subgraphs=stream_subgraphs,
+                            **stream_kwargs,
+                        ),
                     )
                     broke_on_abort = False
                     try:
@@ -1548,7 +1624,7 @@ async def run_agent(
                 except Exception:
                     logger.warning("Run completion hook failed for %s (non-fatal)", run_id, exc_info=True)
 
-            if task_info is not None and task_store is not None:
+            if task_lifecycle_started and task_info is not None and task_store is not None:
                 # Keep the finalizing barrier held until stop observers finish, so
                 # a same-thread replacement cannot overlap this task's lifecycle.
                 try:
@@ -1578,6 +1654,27 @@ async def run_agent(
                     )
             if record.finalizing:
                 await run_manager.set_finalizing(run_id, False)
+
+            if record.status == RunStatus.interrupted and record.stop_reason == GATEWAY_SHUTDOWN_STOP_REASON:
+                try:
+                    await bridge.publish(
+                        run_id,
+                        "custom",
+                        {
+                            "type": "run_recovery_required",
+                            "code": GATEWAY_SHUTDOWN_STOP_REASON,
+                            "run_id": run_id,
+                            "recovery": "start_new_run",
+                        },
+                    )
+                except Exception:
+                    # The recovery notice is additive. The END marker below is
+                    # still required to release every stream consumer.
+                    logger.warning(
+                        "Failed to publish Gateway shutdown recovery notice for run %s",
+                        run_id,
+                        exc_info=True,
+                    )
 
             await bridge.publish_end(run_id)
 

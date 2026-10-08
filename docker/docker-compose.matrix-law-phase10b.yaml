@@ -1,0 +1,96 @@
+# Phase 10B overlay: add a second Gateway and a private test load balancer to
+# the disposable Phase 9 stack. All state remains in the shared PostgreSQL,
+# Redis, MinIO and law_* stores; only the load balancer is published on 8018.
+
+services:
+  gateway:
+    environment:
+      AUTH_JWT_SECRET: phase10b-shared-jwt-secret-at-least-32-characters
+      GATEWAY_WORKERS: "2"
+    volumes: !override
+      - ./matrix-law-phase10b/config.yaml:/app/backend/config.yaml:ro
+      - ./matrix-law-phase10b/extensions_config.json:/app/backend/extensions_config.json:ro
+      - phase9-home:/app/backend/.deer-flow
+      - ../skills:/app/skills:ro
+
+  gateway-b:
+    image: ${MATRIX_LAW_GATEWAY_IMAGE:-matrix-law-phase9c3-gateway:verify}
+    command: ["sh", "-c", "cd backend && exec env PYTHONPATH=. uv run --no-sync uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --workers 1"]
+    working_dir: /app
+    environment:
+      CI: "true"
+      DATABASE_URL: postgresql://deerflow:phase9-test-password@postgres:5432/deerflow
+      MATRIX_LAW_API_DATABASE_URL: postgresql://matrix_law_api:phase9-api-database-password@postgres:5432/deerflow
+      MATRIX_LAW_WORKER_DATABASE_URL: postgresql://matrix_law_worker:phase9-worker-database-password@postgres:5432/deerflow
+      DEER_FLOW_PROJECT_ROOT: /app
+      DEER_FLOW_HOME: /app/backend/.deer-flow
+      DEER_FLOW_CONFIG_PATH: /app/backend/config.yaml
+      DEER_FLOW_EXTENSIONS_CONFIG_PATH: /app/backend/extensions_config.json
+      DEER_FLOW_STREAM_BRIDGE_REDIS_URL: redis://redis:6379/0
+      DEER_FLOW_INTERNAL_AUTH_TOKEN: phase9-internal-auth-token-32-chars
+      DEER_FLOW_GATEWAY_DRAIN_MARKER: /tmp/deer-flow-gateway-draining
+      DEER_FLOW_AUTH_DISABLED: "0"
+      LANGSMITH_TRACING: "false"
+      AUTH_JWT_SECRET: phase10b-shared-jwt-secret-at-least-32-characters
+      GATEWAY_WORKERS: "2"
+      MATRIX_LAW_S3_ACCESS_KEY: phase9-access-key
+      MATRIX_LAW_S3_SECRET_KEY: phase9-secret-key
+      MATRIX_LAW_OCR_HTTP_TOKEN: phase9-integration-ocr-token-32-chars
+      NO_PROXY: localhost,127.0.0.1,::1,postgres,redis,minio,clamav,matrix-ocr
+      no_proxy: localhost,127.0.0.1,::1,postgres,redis,minio,clamav,matrix-ocr
+    volumes:
+      - ./matrix-law-phase10b/config.yaml:/app/backend/config.yaml:ro
+      - ./matrix-law-phase10b/extensions_config.json:/app/backend/extensions_config.json:ro
+      - phase9-home:/app/backend/.deer-flow
+      - ../skills:/app/skills:ro
+    ports:
+      - 127.0.0.1:8020:8001
+    depends_on:
+      law-migrate:
+        condition: service_completed_successfully
+      law-provision-roles:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      clamav:
+        condition: service_healthy
+      matrix-ocr:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8001/ready', timeout=3); raise SystemExit(0 if r.status == 200 else 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    networks: [phase9]
+
+  gateway-lb:
+    image: nginx:1.29-alpine
+    user: "101:101"
+    volumes:
+      - ./matrix-law-phase10b/nginx.conf:/etc/nginx/nginx.conf:ro
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:rw,noexec,nosuid,nodev,size=16777216,mode=0755,uid=101,gid=101
+      - /var/run:rw,noexec,nosuid,nodev,size=1048576,mode=0755,uid=101,gid=101
+      - /tmp:rw,noexec,nosuid,nodev,size=1048576,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    ports:
+      - 127.0.0.1:8018:8080
+    depends_on:
+      gateway:
+        condition: service_healthy
+      gateway-b:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+    networks: [phase9]

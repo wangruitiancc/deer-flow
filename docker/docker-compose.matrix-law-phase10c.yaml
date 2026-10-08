@@ -1,0 +1,56 @@
+# Phase 10C overlay: add a deterministic in-stack model to the isolated Phase
+# 10B two-Gateway topology. It is intentionally non-production and binds no
+# additional host port.
+
+services:
+  # Reuse the image already verified in Phase 10B. The Phase 10C test changes
+  # only the Agent/model path, so rebuilding the OCR structure sidecar would
+  # add network drift without increasing coverage.
+  matrix-structure:
+    image: matrix-law-phase10b-matrix-structure:latest
+    build: !reset null
+
+  llm-mock:
+    image: python:3.12-alpine
+    command: ["python", "/mock.py"]
+    user: "10001:10001"
+    volumes:
+      - ./matrix-law-phase10c/mock.py:/mock.py:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16777216,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2); raise SystemExit(0 if r.status == 200 else 1)"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    networks: [phase9]
+
+  gateway:
+    environment:
+      NO_PROXY: localhost,127.0.0.1,::1,postgres,redis,minio,clamav,matrix-ocr,llm-mock
+      no_proxy: localhost,127.0.0.1,::1,postgres,redis,minio,clamav,matrix-ocr,llm-mock
+    volumes: !override
+      - ./matrix-law-phase10c/config.yaml:/app/backend/config.yaml:ro
+      - ./matrix-law-phase10c/extensions_config.json:/app/backend/extensions_config.json:ro
+      - phase9-home:/app/backend/.deer-flow
+      - ../skills:/app/skills:ro
+    depends_on:
+      llm-mock:
+        condition: service_healthy
+
+  gateway-b:
+    environment:
+      NO_PROXY: localhost,127.0.0.1,::1,postgres,redis,minio,clamav,matrix-ocr,llm-mock
+      no_proxy: localhost,127.0.0.1,::1,postgres,redis,minio,clamav,matrix-ocr,llm-mock
+    volumes: !override
+      - ./matrix-law-phase10c/config.yaml:/app/backend/config.yaml:ro
+      - ./matrix-law-phase10c/extensions_config.json:/app/backend/extensions_config.json:ro
+      - phase9-home:/app/backend/.deer-flow
+      - ../skills:/app/skills:ro
+    depends_on:
+      llm-mock:
+        condition: service_healthy

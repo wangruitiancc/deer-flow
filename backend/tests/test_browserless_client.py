@@ -310,6 +310,15 @@ class TestBrowserlessClient:
 class TestBrowserlessTools:
     """Tests for the Browserless tool functions."""
 
+    @pytest.fixture(autouse=True)
+    def _stable_public_dns(self, monkeypatch):
+        """Keep public-URL tests independent from local proxy fake-IP DNS."""
+        monkeypatch.setattr(
+            tools,
+            "_resolve_host_addresses",
+            lambda _host: [ipaddress.ip_address("93.184.216.34")],
+        )
+
     async def test_get_browserless_client_uses_env_token_fallback(self):
         """Browserless tools use BROWSERLESS_TOKEN when config omits token."""
         with patch("deerflow.community.browserless.tools._get_tool_config") as mock_cfg:

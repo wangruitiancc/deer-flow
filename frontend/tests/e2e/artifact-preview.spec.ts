@@ -89,6 +89,32 @@ function presentFilesMessages(path = PRESENTED_ARTIFACT_PATH) {
 }
 
 test.describe("Artifact preview stability", () => {
+  test.beforeEach(async ({ page }) => {
+    // Native preview fixtures still need an authorized legal thread context.
+    await page.route("**/api/law/**", async (route) => {
+      const url = new URL(route.request().url());
+      let data: unknown = { items: [] };
+      if (url.pathname.includes("/context/by-thread/")) {
+        data = {
+          context: {
+            user_id: "default",
+            tenant_id: "00000000-0000-4000-8000-000000000092",
+            matter_id: "preview-fixture",
+            matter_role: "lawyer",
+            thread_id: url.pathname.split("/").at(-1),
+          },
+        };
+      } else if (url.pathname.endsWith("/matters/preview-fixture")) {
+        data = {
+          matter: { title: "Synthetic artifact preview", status: "active" },
+        };
+      }
+      await route.fulfill({
+        json: { data, meta: { request_id: "preview-fixture" } },
+      });
+    });
+  });
+
   test("renders preview iframe for an in-progress write artifact", async ({
     page,
   }) => {

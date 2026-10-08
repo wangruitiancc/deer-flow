@@ -87,12 +87,16 @@ class _FakeThreadStore:
 
 class _FakeStreamBridge:
     def __init__(self, *, existing_streams: set[str] | None = None) -> None:
+        self.publish_calls: list[tuple[str, str, object]] = []
         self.publish_end_calls: list[str] = []
         self.cleanup_calls: list[tuple[str, float]] = []
         self._existing_streams: set[str] = existing_streams if existing_streams is not None else set()
 
     async def stream_exists(self, run_id: str) -> bool:
         return run_id in self._existing_streams
+
+    async def publish(self, run_id: str, event: str, data: object) -> None:
+        self.publish_calls.append((run_id, event, data))
 
     async def publish_end(self, run_id: str) -> None:
         self.publish_end_calls.append(run_id)
@@ -130,6 +134,11 @@ class _DelayedCleanupStreamBridge(_FakeStreamBridge):
             raise
 
 
+class _ControlPublishFailureStreamBridge(_FakeStreamBridge):
+    async def publish(self, run_id: str, event: str, data: object) -> None:
+        raise RuntimeError("synthetic control publish failure")
+
+
 @pytest.mark.anyio
 async def test_recovered_run_stream_end_skips_expired_stream():
     """Startup recovery should not recreate an already-expired retained stream."""
@@ -141,7 +150,24 @@ async def test_recovered_run_stream_end_skips_expired_stream():
     )
 
     assert stream_bridge.publish_end_calls == []
+    assert stream_bridge.publish_calls == []
     assert stream_bridge.cleanup_calls == []
+
+
+@pytest.mark.anyio
+async def test_recovered_run_control_failure_still_publishes_end():
+    """The additive UI notice must never suppress the liveness marker."""
+    stream_bridge = _ControlPublishFailureStreamBridge(existing_streams={"run-1"})
+
+    cleanups = await gateway_deps._publish_recovered_run_stream_end(
+        stream_bridge,
+        [SimpleNamespace(run_id="run-1", thread_id="thread-1")],
+        cleanup_delay=0,
+    )
+    await asyncio.gather(*(task for _run_id, task in cleanups))
+
+    assert stream_bridge.publish_end_calls == ["run-1"]
+    assert stream_bridge.cleanup_calls == [("run-1", 0)]
 
 
 @pytest.mark.anyio
@@ -211,6 +237,13 @@ async def test_periodic_recovery_terminalizes_stream_without_thread_projection()
     ]
     await anyio.sleep(0)
 
+    assert received[-2].event == "custom"
+    assert received[-2].data == {
+        "type": "run_recovery_required",
+        "code": "orphan_recovered",
+        "run_id": "periodic-orphan",
+        "recovery": "start_new_run",
+    }
     assert received[-1] is END_SENTINEL
     assert stream_bridge.cleanup_calls == [("periodic-orphan", 60.0)]
     assert thread_store.status_updates == []
@@ -257,6 +290,18 @@ async def test_sqlite_runtime_reconciles_orphaned_runs_on_startup(monkeypatch):
     assert _FakeRunManager.instances[0].reconcile_calls[0]["stop_reason"] == runtime_module.ORPHAN_RECOVERY_STOP_REASON
     assert _FakeRunManager.instances[0].list_by_thread_calls == [{"thread_id": "thread-1", "user_id": None, "limit": 1}]
     assert thread_store.status_updates == [("thread-1", "error", None)]
+    assert stream_bridge.publish_calls == [
+        (
+            "run-1",
+            "custom",
+            {
+                "type": "run_recovery_required",
+                "code": "orphan_recovered",
+                "run_id": "run-1",
+                "recovery": "start_new_run",
+            },
+        )
+    ]
     assert stream_bridge.publish_end_calls == ["run-1"]
     assert stream_bridge.cleanup_calls == [("run-1", 60.0)]
 

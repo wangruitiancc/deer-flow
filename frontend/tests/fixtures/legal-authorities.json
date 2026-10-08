@@ -1,0 +1,55 @@
+{
+  "format": "matrix-law.legal-authorities",
+  "schema_version": 1,
+  "title": "合成合同咨询 · 法律依据",
+  "question": "合成咨询：如何区分引用条文与适用性分析？",
+  "review_status": "unreviewed",
+  "entries": [
+    {
+      "id": "entry-1", "law_name": "合成示例法", "article_label": "第一条",
+      "law_version": "示例版本，未核验", "jurisdiction": "合成法域",
+      "text": "合成条文摘录，不作为实际法律依据。", "text_kind": "quotation",
+      "source_ids": ["web-1", "citation-1", "manual-1", "legacy-1"],
+      "published_date": { "value": "2024", "basis": "材料只提供年份" },
+      "effective_date": { "value": "2024-02", "basis": "材料只提供年月" },
+      "relevant_date": { "value": "2024-02-29", "basis": "合成咨询明确给出的日期" },
+      "validity_statement": "尚未核对修订与废止情况。",
+      "applicability_analysis": "合成分析，不能当作条文原文。",
+      "uncertainty": "仍需人工核实权威来源与适用时点。",
+      "current_validity": "unverified", "review_status": "unreviewed",
+      "origin": "research", "inclusion_reason": "与合成咨询主题相关", "state": "active"
+    },
+    {
+      "id": "entry-2", "law_name": "已移除示例法", "article_label": "第二条",
+      "text": "旧条目仍保留。", "text_kind": "legacy_excerpt", "source_ids": ["legacy-1"],
+      "current_validity": "unverified", "review_status": "unreviewed", "origin": "legacy_import",
+      "state": "removed", "removal_reason": "合成复核认为与问题无关；不删除旧版本。",
+      "legacy_origin": {
+        "source_file_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_index": 0,
+        "original": { "code": "已移除示例法", "article": "第二条", "text": "旧条目仍保留。", "origin": "favorite", "addedAt": "旧系统未规范化时间", "articleId": null, "source": null }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "id": "web-1", "kind": "web_capture", "url": "https://example.com/synthetic-authority",
+      "title": "合成网页标题（非官方网站）", "publisher": "合成发布机构", "retrieved_at": "2026-09-06T10:20:30+08:00",
+      "text": "合成来源文字，不构成法律意见。\n", "text_sha256": "d3ecd1166e2560e8c9158295d6806c12fde77eb2e719e3b9d651d5f39b5cd589",
+      "completeness": "claimed_complete"
+    },
+    {
+      "id": "citation-1", "kind": "project_citation", "citation_id": "00000000-0000-0000-0000-000000000001",
+      "evidence_item_id": "00000000-0000-0000-0000-000000000002", "evidence_version_id": "00000000-0000-0000-0000-000000000003"
+    },
+    {
+      "id": "manual-1", "kind": "manual", "reference": "人工录入，仅作回归夹具",
+      "text": "合成来源文字，不构成法律意见。\n", "text_sha256": "d3ecd1166e2560e8c9158295d6806c12fde77eb2e719e3b9d651d5f39b5cd589"
+    },
+    {
+      "id": "legacy-1", "kind": "legacy_excerpt", "legacy_id": "synthetic-legacy-1", "reference": "旧目录（合成）",
+      "catalog_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "text": "合成来源文字，不构成法律意见。\n", "text_sha256": "d3ecd1166e2560e8c9158295d6806c12fde77eb2e719e3b9d651d5f39b5cd589"
+    }
+  ]
+}

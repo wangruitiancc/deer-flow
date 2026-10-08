@@ -31,11 +31,18 @@ from app.gateway.internal_auth import (
     get_internal_user,
     get_trusted_internal_owner_user_id,
 )
+from app.gateway.legal_run_admission import (
+    matrix_law_manages_model_selection,
+    matrix_law_product_required,
+    resolve_tenant_capacity_key,
+    validate_matrix_law_run_request,
+)
 from app.gateway.run_models import RunCreateRequest
 from app.gateway.utils import sanitize_log_param
 from app.mcp_tasks.errors import PermanentNotificationError
 from deerflow.agents.middlewares.dynamic_context_middleware import _DYNAMIC_CONTEXT_REMINDER_KEY, _REMINDER_DATE_KEY
 from deerflow.agents.middlewares.input_sanitization_middleware import frame_untrusted_text
+from deerflow.agents.middlewares.tool_execution_policy_middleware import TOOL_EXECUTION_POLICY_KEY
 from deerflow.agents.middlewares.tool_receipt import TOOL_RECEIPT_KEY, TOOL_RECEIPT_LEDGER_KEY
 from deerflow.agents.middlewares.tool_transform_meta import TOOL_TRANSFORMS_KEY
 from deerflow.agents.middlewares.view_image_middleware import _IMAGE_CONTEXT_MESSAGE_MARKER_KEY
@@ -43,11 +50,13 @@ from deerflow.config.app_config import get_app_config
 from deerflow.config.database_config import resolve_checkpoint_graph_cache_max
 from deerflow.runtime import (
     END_SENTINEL,
+    GATEWAY_SHUTDOWN_STOP_REASON,
     HEARTBEAT_SENTINEL,
     ORPHAN_RECOVERY_STOP_REASON,
     CheckpointStateAccessor,
     ConflictError,
     DisconnectMode,
+    RunCapacityExceeded,
     RunContext,
     RunManager,
     RunRecord,
@@ -112,6 +121,7 @@ _TERMINAL_RUN_STATUSES = {
 }
 
 _THREAD_METADATA_SETUP_TIMEOUT_SECONDS = 5.0
+_RUN_ADMISSION_TIMEOUT_SECONDS = 3.0
 
 _SERVER_OWNED_MESSAGE_METADATA_KEYS = (
     frozenset(
@@ -121,6 +131,7 @@ _SERVER_OWNED_MESSAGE_METADATA_KEYS = (
             _IMAGE_CONTEXT_MESSAGE_MARKER_KEY,
             TOOL_RECEIPT_KEY,
             TOOL_RECEIPT_LEDGER_KEY,
+            TOOL_EXECUTION_POLICY_KEY,
             TOOL_TRANSFORMS_KEY,
             # Attached when a values frame is serialized, for display ordering only.
             # A replayed message carrying it back would write a thread-scoped seq
@@ -229,22 +240,29 @@ async def _terminal_record_stream_missing(bridge: StreamBridge, record: RunRecor
         return False
 
 
-async def _orphan_recovery_observed_after_heartbeat(
+async def _server_interruption_observed_after_heartbeat(
     record: RunRecord,
     run_mgr: RunManager,
-) -> bool:
-    """Return whether durable orphan recovery is the consumer's liveness edge.
+) -> str | None:
+    """Return the durable server-interruption reason at the liveness edge.
 
     A normal terminal status is not sufficient: the producer persists status
-    before publishing its final error/data frames and END. Orphan recovery is
-    different because the producer is known to be gone and the durable
-    ``stop_reason`` is written atomically with the terminal status. Only that
-    explicit signal may synthesize END after a heartbeat.
+    before publishing its final error/data frames and END. Orphan recovery and
+    graceful Gateway shutdown are different because the producer is known to
+    be gone or exiting and the durable ``stop_reason`` is written atomically
+    with the terminal status. Only those exact status/reason pairs may
+    synthesize END after a heartbeat.
     """
     if not record.store_only:
-        return False
+        return None
     refreshed = await run_mgr.get(record.run_id, user_id=record.user_id)
-    return refreshed is not None and _run_is_terminal(refreshed) and refreshed.stop_reason == ORPHAN_RECOVERY_STOP_REASON
+    if refreshed is None:
+        return None
+    if refreshed.status == RunStatus.error and refreshed.stop_reason == ORPHAN_RECOVERY_STOP_REASON:
+        return ORPHAN_RECOVERY_STOP_REASON
+    if refreshed.status == RunStatus.interrupted and refreshed.stop_reason == GATEWAY_SHUTDOWN_STOP_REASON:
+        return GATEWAY_SHUTDOWN_STOP_REASON
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1259,6 +1277,11 @@ async def start_run(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    try:
+        validate_matrix_law_run_request(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     body_config = getattr(body, "config", None)
     config_metadata = body_config.get("metadata") if isinstance(body_config, dict) else None
     try:
@@ -1284,7 +1307,8 @@ async def start_run(
     if model_name:
         app_config = get_app_config()
         resolved = app_config.get_model_config(model_name)
-        if resolved is None:
+        extensions = getattr(request.app.state, "extensions", None)
+        if resolved is None and not matrix_law_manages_model_selection(extensions):
             raise HTTPException(
                 status_code=400,
                 detail=f"Model {model_name!r} is not in the configured model allowlist",
@@ -1304,6 +1328,16 @@ async def start_run(
     # bypassing the check -- a leaked internal token must not grant cross-user
     # thread access.
     user = getattr(request.state, "user", None)
+    # Browser sessions, PATs, and auth-disabled requests already carry their
+    # authoritative user on request.state. Persist that identity on the run so
+    # background task admission and every store-only peer observe the same
+    # owner after the request ContextVar is gone. Trusted internal callers keep
+    # using only their separately validated owner header; an internal service
+    # request without one remains deliberately unowned.
+    if owner_user_id is None and user is not None and getattr(user, "system_role", None) != INTERNAL_SYSTEM_ROLE:
+        authenticated_user_id = getattr(user, "id", None)
+        if authenticated_user_id is not None:
+            owner_user_id = str(authenticated_user_id)
 
     async def thread_access_allowed() -> bool:
         if user is None:
@@ -1449,6 +1483,24 @@ async def start_run(
 
         try:
             async with goal_thread_lock(thread_id):
+                tenant_capacity_key: str | None = None
+                if matrix_law_product_required() or run_ctx.extensions is not None:
+                    try:
+                        tenant_capacity_key = await asyncio.wait_for(
+                            resolve_tenant_capacity_key(
+                                run_ctx.extensions,
+                                thread_id=thread_id,
+                                user_id=owner_user_id,
+                            ),
+                            timeout=_RUN_ADMISSION_TIMEOUT_SECONDS,
+                        )
+                    except PermissionError as exc:
+                        raise HTTPException(status_code=404, detail=f"Thread {thread_id} not found") from exc
+                    except TimeoutError as exc:
+                        raise HTTPException(status_code=503, detail="Legal tenant admission is temporarily unavailable") from exc
+                    except Exception as exc:
+                        logger.exception("Legal tenant admission failed for thread %s", sanitize_log_param(thread_id))
+                        raise HTTPException(status_code=503, detail="Legal tenant admission is temporarily unavailable") from exc
                 await ensure_checkpoint_history_seeded(
                     request,
                     thread_id=thread_id,
@@ -1462,6 +1514,9 @@ async def start_run(
                 # cannot both succeed across Gateway workers.
                 if require_existing_thread and not await thread_access_allowed():
                     raise HTTPException(status_code=404, detail=f"Thread {thread_id} not found")
+                tenant_admission_kwargs = {}
+                if tenant_capacity_key is not None:
+                    tenant_admission_kwargs["tenant_capacity_key"] = tenant_capacity_key
                 record = await run_mgr.create_or_reject(
                     thread_id,
                     body.assistant_id,
@@ -1476,6 +1531,7 @@ async def start_run(
                     model_name=model_name,
                     user_id=owner_user_id,
                     idempotency_key=idempotency_key,
+                    **tenant_admission_kwargs,
                 )
 
                 if record.idempotency_reused:
@@ -1498,6 +1554,18 @@ async def start_run(
                     raise
         except ConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except RunCapacityExceeded as exc:
+            metrics_registry = getattr(request.app.state, "gateway_metrics_registry", None)
+            if metrics_registry is not None:
+                metrics_registry.record_run_capacity_rejection(exc.scope)
+            raise HTTPException(
+                status_code=429,
+                detail="Agent run capacity is temporarily exhausted",
+                headers={
+                    "Retry-After": str(run_mgr.capacity_retry_after_seconds),
+                    "X-DeerFlow-Overload": "run-capacity",
+                },
+            ) from exc
         except UnsupportedStrategyError as exc:
             raise HTTPException(status_code=501, detail=str(exc)) from exc
 
@@ -1585,7 +1653,7 @@ def _mcp_task_notification_prompt(event: dict[str, Any]) -> str:
         "Explain the update clearly and concisely. Do not expose or ask for a remote task ID. "
         "When status is input_required, show the question but explain that this MCP integration "
         "cannot resume the remote task with user input yet. When tracking_degraded is true, explain "
-        "that DeerFlow will continue retrying at a lower frequency."
+        "that Matrix-Law will continue retrying at a lower frequency."
     )
     return f"{instruction}\n\n{payload}"
 
@@ -1715,7 +1783,20 @@ async def sse_consumer(
                 return
 
             if entry is HEARTBEAT_SENTINEL:
-                if await _orphan_recovery_observed_after_heartbeat(record, run_mgr):
+                recovery_reason = await _server_interruption_observed_after_heartbeat(
+                    record,
+                    run_mgr,
+                )
+                if recovery_reason is not None:
+                    yield format_sse(
+                        "custom",
+                        {
+                            "type": "run_recovery_required",
+                            "code": recovery_reason,
+                            "run_id": record.run_id,
+                            "recovery": "start_new_run",
+                        },
+                    )
                     yield format_sse("end", None)
                     return
                 yield ": heartbeat\n\n"
@@ -1795,9 +1876,14 @@ async def wait_for_run_completion(
                     resume_from_event_id = entry.latest_available_event_id
                     gap_seen = True
                     break
-                if entry is HEARTBEAT_SENTINEL and await _orphan_recovery_observed_after_heartbeat(record, run_mgr):
-                    completed = True
-                    return True
+                if entry is HEARTBEAT_SENTINEL:
+                    recovery_reason = await _server_interruption_observed_after_heartbeat(
+                        record,
+                        run_mgr,
+                    )
+                    if recovery_reason is not None:
+                        completed = True
+                        return True
                 if await request.is_disconnected():
                     return False
                 # Heartbeats and regular events: keep waiting for END_SENTINEL.

@@ -15,9 +15,9 @@ ARG APT_MIRROR
 ARG UV_INDEX_URL
 ARG NPM_REGISTRY
 ARG LARK_CLI_NPM_VERSION=1.0.65
-# Optional extras to install (e.g. "postgres" for PostgreSQL support)
-# Usage: docker build --build-arg UV_EXTRAS=postgres,discord ...
-ARG UV_EXTRAS
+# Matrix Law is a multi-tenant server product and always needs PostgreSQL.
+# Additional extras may still be supplied as a comma-separated override.
+ARG UV_EXTRAS=postgres
 
 # Optionally override apt mirror for restricted networks (e.g. APT_MIRROR=mirrors.aliyun.com)
 RUN if [ -n "${APT_MIRROR}" ]; then \
@@ -53,6 +53,11 @@ WORKDIR /app
 # Copy backend source code
 COPY backend ./backend
 
+# Reviewed legal Skill, discovered/projected by the existing DeerFlow loader.
+# Do not package user-authored skills or unrelated public skill collections.
+COPY skills/public/matrix-law-graph ./skills/public/matrix-law-graph
+COPY skills/public/matrix-law-templates ./skills/public/matrix-law-templates
+
 # Install dependencies with cache mount
 # `redis` is always installed because Docker Compose defaults the stream bridge
 # to Redis (DEER_FLOW_STREAM_BRIDGE_REDIS_URL); it is an optional extra elsewhere
@@ -78,6 +83,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV PYTHONIOENCODING=utf-8
+ENV MATRIX_LAW_PRODUCT_REQUIRED=1
 
 # ── Stage 2: Dev ──────────────────────────────────────────────────────────────
 # Retains compiler toolchain from builder so startup-time `uv sync` can build
@@ -89,7 +95,7 @@ COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
 
 EXPOSE 8001
 
-CMD ["sh", "-c", "cd backend && PYTHONPATH=. uv run --no-sync uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001"]
+CMD ["sh", "-c", "cd backend && exec env PYTHONPATH=. uv run --no-sync uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001"]
 
 # ── Stage 3: Runtime ──────────────────────────────────────────────────────────
 # Clean image without build-essential — reduces size (~200 MB) and attack surface.
@@ -98,6 +104,7 @@ FROM python:3.12-slim-bookworm
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV PYTHONIOENCODING=utf-8
+ENV MATRIX_LAW_PRODUCT_REQUIRED=1
 
 # Copy Node.js runtime from builder (provides npx for MCP servers)
 COPY --from=builder /usr/bin/node /usr/bin/node
@@ -119,9 +126,10 @@ WORKDIR /app
 
 # Copy backend with pre-built virtualenv from builder
 COPY --from=builder /app/backend ./backend
+COPY --from=builder /app/skills ./skills
 
 # Expose Gateway API port.
 EXPOSE 8001
 
 # Default command (can be overridden in docker-compose)
-CMD ["sh", "-c", "cd backend && PYTHONPATH=. uv run --no-sync uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001"]
+CMD ["sh", "-c", "cd backend && exec env PYTHONPATH=. uv run --no-sync uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001"]

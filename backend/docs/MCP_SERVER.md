@@ -45,7 +45,7 @@ If `OPENVIKING_API_KEY` is missing or empty during initialization, OpenViking
 authentication fails and DeerFlow skips that MCP server, so no OpenViking tools
 appear. Changing only the environment variable does not invalidate DeerFlow's
 already-populated, file-signature-based MCP tool cache; after setting or fixing
-the key, restart DeerFlow, modify and re-save the extensions config, or call the
+the key, restart Matrix-Law, modify and re-save the extensions config, or call the
 MCP cache-reset endpoint at `POST /api/mcp/cache/reset`.
 
 OpenViking owns the tool schemas and behavior. DeerFlow performs the standard

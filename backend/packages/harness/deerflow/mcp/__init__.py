@@ -6,7 +6,15 @@ from .cache import (
     reset_mcp_tools_cache,
 )
 from .client import build_server_params, build_servers_config
-from .tools import get_mcp_tools
+
+
+async def get_mcp_tools():
+    """Load MCP tools lazily to keep the managed-runtime bridge acyclic."""
+
+    from .tools import get_mcp_tools as load
+
+    return await load()
+
 
 __all__ = [
     "build_server_params",

@@ -21,9 +21,10 @@ from deerflow.utils.time import is_lease_expired
 from deerflow.utils.time import now_iso as _now_iso
 
 from .schemas import DisconnectMode, RunStatus, ThreadOperationKind
-from .store.base import EditReplayVisibility, RunIdempotencyConflict
+from .store.base import EditReplayVisibility, RunCapacityExceeded, RunIdempotencyConflict
 
 if TYPE_CHECKING:
+    from deerflow.config.run_capacity_config import RunCapacityConfig
     from deerflow.config.run_ownership_config import RunOwnershipConfig
     from deerflow.runtime.events.store.base import RunEventStore
     from deerflow.runtime.runs.store.base import RunStore
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 ORPHAN_RECOVERY_STOP_REASON = "orphan_recovered"
+GATEWAY_SHUTDOWN_STOP_REASON = "gateway_shutdown"
 STARTUP_ORPHAN_RECOVERY_ERROR = "Gateway restarted before this run reached a durable final state."
 LEASE_ORPHAN_RECOVERY_ERROR = "Run lease expired — owning worker is unreachable."
 
@@ -166,6 +168,7 @@ class RunRecord:
     metadata: dict = field(default_factory=dict)
     kwargs: dict = field(default_factory=dict)
     user_id: str | None = None
+    tenant_capacity_key: str | None = None
     created_at: str = ""
     updated_at: str = ""
     task: asyncio.Task | None = field(default=None, repr=False)
@@ -231,6 +234,7 @@ class RunManager:
         persistence_retry_policy: PersistenceRetryPolicy | None = None,
         worker_id: str | None = None,
         run_ownership_config: RunOwnershipConfig | None = None,
+        run_capacity_config: RunCapacityConfig | None = None,
         event_store: RunEventStore | None = None,
         on_orphans_recovered: OrphanRecoveryCallback | None = None,
     ) -> None:
@@ -245,6 +249,7 @@ class RunManager:
         self._persistence_retry_policy = persistence_retry_policy or PersistenceRetryPolicy()
         self._worker_id = worker_id or _generate_worker_id()
         self._run_ownership_config = run_ownership_config
+        self._run_capacity_config = run_capacity_config
         self._event_store = event_store
         self._on_orphans_recovered = on_orphans_recovered
         self._heartbeat_task: asyncio.Task | None = None
@@ -254,6 +259,11 @@ class RunManager:
     def _index_run_locked(self, record: RunRecord) -> None:
         """Register *record* in the thread index. Caller must hold ``self._lock``."""
         self._runs_by_thread.setdefault(record.thread_id, {})[record.run_id] = None
+
+    @property
+    def capacity_retry_after_seconds(self) -> int:
+        """Return the startup-captured overload retry hint."""
+        return self._run_capacity_config.retry_after_seconds if self._run_capacity_config is not None else 5
 
     def _unindex_run_locked(self, run_id: str, thread_id: str) -> None:
         """Drop *run_id* from the thread index. Caller must hold ``self._lock``."""
@@ -300,6 +310,8 @@ class RunManager:
         }
         if record.user_id is not None:
             payload["user_id"] = record.user_id
+        if record.tenant_capacity_key is not None:
+            payload["tenant_capacity_key"] = record.tenant_capacity_key
         if record.stop_reason is not None:
             payload["stop_reason"] = record.stop_reason
         return payload
@@ -454,6 +466,7 @@ class RunManager:
             created_at=row.get("created_at") or "",
             updated_at=row.get("updated_at") or "",
             user_id=row.get("user_id"),
+            tenant_capacity_key=row.get("tenant_capacity_key"),
             error=row.get("error"),
             model_name=row.get("model_name"),
             store_only=True,
@@ -1432,6 +1445,7 @@ class RunManager:
         multitask_strategy: str = "reject",
         model_name: str | None = None,
         user_id: str | None = None,
+        tenant_capacity_key: str | None = None,
         idempotency_key: str | None = None,
     ) -> RunRecord:
         """Atomically admit a normal agent run for a thread."""
@@ -1445,6 +1459,7 @@ class RunManager:
             multitask_strategy=multitask_strategy,
             model_name=model_name,
             user_id=user_id,
+            tenant_capacity_key=tenant_capacity_key,
             idempotency_key=idempotency_key,
         )
 
@@ -1505,6 +1520,7 @@ class RunManager:
         multitask_strategy: str = "reject",
         model_name: str | None = None,
         user_id: str | None = None,
+        tenant_capacity_key: str | None = None,
         idempotency_key: str | None = None,
     ) -> RunRecord:
         """Atomically check for inflight runs and create a new one.
@@ -1543,6 +1559,7 @@ class RunManager:
             metadata=metadata or {},
             kwargs=kwargs or {},
             user_id=user_id,
+            tenant_capacity_key=tenant_capacity_key,
             created_at=now,
             updated_at=now,
             model_name=model_name,
@@ -1556,15 +1573,15 @@ class RunManager:
                 for existing in self._runs.values():
                     if existing.idempotency_key != idempotency_key:
                         continue
-                    if existing.thread_id != thread_id or existing.user_id != user_id:
-                        raise RuntimeError("Run idempotency key resolved to a different thread or user")
+                    if existing.thread_id != thread_id or existing.user_id != user_id or existing.tenant_capacity_key != tenant_capacity_key:
+                        raise RuntimeError("Run idempotency key resolved to a different thread, user, or tenant")
                     existing.idempotency_reused = True
                     return existing
 
             def reuse_idempotent_run(conflict: RunIdempotencyConflict) -> RunRecord:
                 existing = self._record_from_store(conflict.existing)
-                if existing.thread_id != thread_id or existing.user_id != user_id:
-                    raise RuntimeError("Run idempotency key resolved to a different thread or user") from conflict
+                if existing.thread_id != thread_id or existing.user_id != user_id or existing.tenant_capacity_key != tenant_capacity_key:
+                    raise RuntimeError("Run idempotency key resolved to a different thread, user, or tenant") from conflict
                 current = self._runs.get(existing.run_id)
                 if current is None:
                     self._runs[existing.run_id] = existing
@@ -1591,6 +1608,34 @@ class RunManager:
                     multitask_strategy,
                 )
 
+            capacity = self._run_capacity_config
+            max_active_global = capacity.max_active_global if capacity is not None and operation_kind == ThreadOperationKind.run else 0
+            max_active_per_tenant = capacity.max_active_per_tenant if capacity is not None and operation_kind == ThreadOperationKind.run else 0
+            max_active_per_user = capacity.max_active_per_user if capacity is not None and operation_kind == ThreadOperationKind.run else 0
+            if self._store is None and (max_active_global or max_active_per_tenant or max_active_per_user):
+                excluded_ids = {
+                    item.run_id
+                    for item in local_inflight
+                    if multitask_strategy in ("interrupt", "rollback")
+                    and item.operation_kind == ThreadOperationKind.run
+                    and not item.finalizing
+                }
+                active_runs = [
+                    item
+                    for item in self._runs.values()
+                    if item.status in (RunStatus.pending, RunStatus.running)
+                    and item.operation_kind == ThreadOperationKind.run
+                    and item.run_id not in excluded_ids
+                ]
+                if max_active_global and len(active_runs) >= max_active_global:
+                    raise RunCapacityExceeded(scope="global", limit=max_active_global)
+                active_tenant = sum(item.tenant_capacity_key == tenant_capacity_key for item in active_runs)
+                if tenant_capacity_key is not None and max_active_per_tenant and active_tenant >= max_active_per_tenant:
+                    raise RunCapacityExceeded(scope="tenant", limit=max_active_per_tenant)
+                active_user = sum(item.user_id == user_id for item in active_runs)
+                if max_active_per_user and active_user >= max_active_per_user:
+                    raise RunCapacityExceeded(scope="user", limit=max_active_per_user)
+
             # 2) Persist to store while still holding the local lock. The
             #    store is the source of truth for cross-process atomicity.
             if self._store is not None:
@@ -1612,6 +1657,12 @@ class RunManager:
                     }
                     if idempotency_key is not None:
                         create_kwargs["idempotency_key"] = idempotency_key
+                    if tenant_capacity_key is not None:
+                        create_kwargs["tenant_capacity_key"] = tenant_capacity_key
+                    if max_active_global or max_active_per_tenant or max_active_per_user:
+                        create_kwargs["max_active_global"] = max_active_global
+                        create_kwargs["max_active_per_tenant"] = max_active_per_tenant
+                        create_kwargs["max_active_per_user"] = max_active_per_user
                     try:
                         await self._call_store_with_retry(
                             "create_thread_operation_atomic",
@@ -1644,6 +1695,12 @@ class RunManager:
                     }
                     if idempotency_key is not None:
                         create_kwargs["idempotency_key"] = idempotency_key
+                    if tenant_capacity_key is not None:
+                        create_kwargs["tenant_capacity_key"] = tenant_capacity_key
+                    if max_active_global or max_active_per_tenant or max_active_per_user:
+                        create_kwargs["max_active_global"] = max_active_global
+                        create_kwargs["max_active_per_tenant"] = max_active_per_tenant
+                        create_kwargs["max_active_per_user"] = max_active_per_user
                     # Interrupt / rollback: store-side claim + insert in one
                     # transaction. Retry on IntegrityError in case another
                     # worker races us between our SELECT FOR UPDATE and INSERT.
@@ -2254,6 +2311,7 @@ class RunManager:
             inflight = [record for record in self._runs.values() if record.status in (RunStatus.pending, RunStatus.running) and record.task is not None and not record.task.done()]
             for record in inflight:
                 record.abort_action = "interrupt"
+                record.stop_reason = GATEWAY_SHUTDOWN_STOP_REASON
                 record.abort_event.set()
                 record.task.cancel()  # type: ignore[union-attr]  # filtered above
                 # Status is decided AFTER the drain (below), not here: a run that
@@ -2279,6 +2337,8 @@ class RunManager:
                     # Completed on its own — retrieve any surfaced exception so it
                     # is not reported as "never retrieved", and keep its status.
                     task.exception()  # type: ignore[union-attr]  # done & not cancelled
+                    if record.status != RunStatus.interrupted and record.stop_reason == GATEWAY_SHUTDOWN_STOP_REASON:
+                        record.stop_reason = None
                     continue
                 if record.status in (RunStatus.pending, RunStatus.running):
                     record.status = RunStatus.interrupted
@@ -2295,7 +2355,17 @@ class RunManager:
             else:
                 try:
                     results = await asyncio.wait_for(
-                        asyncio.gather(*(self._persist_status(record, RunStatus.interrupted) for record in to_persist), return_exceptions=True),
+                        asyncio.gather(
+                            *(
+                                self._persist_status(
+                                    record,
+                                    RunStatus.interrupted,
+                                    stop_reason=record.stop_reason,
+                                )
+                                for record in to_persist
+                            ),
+                            return_exceptions=True,
+                        ),
                         timeout=remaining,
                     )
                 except TimeoutError:

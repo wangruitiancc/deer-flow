@@ -19,11 +19,11 @@ describe("interaction-only bundle boundaries", () => {
     );
   });
 
-  it("loads each settings page from its active section", () => {
+  it("loads only the five Matrix-Law product settings pages on demand", () => {
     const dialog = read(
       "src/components/workspace/settings/settings-dialog.tsx",
     );
-    expect(dialog.match(/dynamic\(/g)).toHaveLength(10);
+    expect(dialog.match(/dynamic\(/g)).toHaveLength(5);
     expect(dialog).not.toMatch(
       /import \{ \w+SettingsPage \} from "@\/components\/workspace\/settings\//,
     );

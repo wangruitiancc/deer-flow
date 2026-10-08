@@ -48,7 +48,7 @@ def _positive_int(value: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="deerflow",
-        description="DeerFlow terminal workbench — a TUI over the embedded DeerFlow harness.",
+        description="Matrix-Law terminal workbench — a TUI over the embedded legal runtime.",
         epilog="Extension management: deerflow extensions --help",
         add_help=True,
     )

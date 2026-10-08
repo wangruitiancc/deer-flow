@@ -21,7 +21,7 @@ from deerflow.agents.middlewares.dynamic_context_middleware import is_dynamic_co
 from deerflow.config.app_config import get_app_config
 from deerflow.config.summarization_config import DEFAULT_KEEP
 from deerflow.extensions.notify import notify_context_compacted
-from deerflow.models import create_chat_model
+from deerflow.models import create_chat_model, get_controlled_model_runtime
 from deerflow.utils.messages import is_real_user_message
 
 logger = logging.getLogger(__name__)
@@ -218,6 +218,10 @@ class DeerFlowSummarizationMiddleware(SummarizationMiddleware):
                 continue
             seen.add(name)
             deduped.append(name)
+        if get_controlled_model_runtime() is not None:
+            # A Gateway-controlled task may degrade to its local no-summary
+            # behavior, but may not try a second configured provider model.
+            return deduped[:1]
         return deduped
 
     def _model_for(self, name: str | None) -> Any | None:
@@ -238,6 +242,7 @@ class DeerFlowSummarizationMiddleware(SummarizationMiddleware):
                 thinking_enabled=False,
                 app_config=self._app_config,
                 attach_tracing=False,
+                purpose="summarization",
             )
             built = self._tag_nostream(model.with_config(tags=["middleware:summarize"]))
         except Exception:
@@ -787,13 +792,21 @@ def _build_summary_anchor(candidate_names: list[str | None], app_config: Any) ->
     trailing ``None`` name asks ``create_chat_model`` for its own default. Returns
     ``(None, None)`` when nothing can be constructed.
     """
+    if get_controlled_model_runtime() is not None:
+        candidate_names = candidate_names[:1]
     tried: set[str | None] = set()
     for name in candidate_names:
         if name in tried:
             continue
         tried.add(name)
         try:
-            model = create_chat_model(name=name, thinking_enabled=False, app_config=app_config, attach_tracing=False)
+            model = create_chat_model(
+                name=name,
+                thinking_enabled=False,
+                app_config=app_config,
+                attach_tracing=False,
+                purpose="summarization",
+            )
         except Exception:
             logger.exception("Failed to build summary anchor model %r; trying the next candidate", name)
             continue

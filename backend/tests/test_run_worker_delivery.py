@@ -736,3 +736,56 @@ async def test_delivery_event_emitted_when_cancelled_waiting_for_prior_finalizat
     fetched = await run_manager.get(record.run_id)
     assert fetched.status == RunStatus.interrupted
     run_manager.update_run_completion.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_gateway_shutdown_interruption_publishes_recovery_notice_before_end():
+    run_manager = RunManager()
+    record = await run_manager.create("thread-1")
+    record.stop_reason = "gateway_shutdown"
+    record.abort_event.set()
+    bridge = _make_bridge()
+
+    await run_agent(
+        bridge,
+        run_manager,
+        record,
+        ctx=RunContext(checkpointer=None),
+        agent_factory=lambda **_kwargs: MagicMock(),
+        graph_input={},
+        config={},
+    )
+
+    bridge.publish.assert_any_await(
+        record.run_id,
+        "custom",
+        {
+            "type": "run_recovery_required",
+            "code": "gateway_shutdown",
+            "run_id": record.run_id,
+            "recovery": "start_new_run",
+        },
+    )
+    bridge.publish_end.assert_awaited_once_with(record.run_id)
+
+
+@pytest.mark.anyio
+async def test_gateway_shutdown_notice_failure_still_publishes_end():
+    run_manager = RunManager()
+    record = await run_manager.create("thread-1")
+    record.stop_reason = "gateway_shutdown"
+    record.abort_event.set()
+    bridge = _make_bridge()
+    bridge.publish.side_effect = RuntimeError("synthetic recovery notice failure")
+
+    await run_agent(
+        bridge,
+        run_manager,
+        record,
+        ctx=RunContext(checkpointer=None),
+        agent_factory=lambda **_kwargs: MagicMock(),
+        graph_input={},
+        config={},
+    )
+
+    bridge.publish_end.assert_awaited_once_with(record.run_id)

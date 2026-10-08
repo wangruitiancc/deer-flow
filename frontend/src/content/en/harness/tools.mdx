@@ -8,14 +8,14 @@ import { Callout, Tabs } from "nextra/components";
 # Tools
 
 <Callout type="info" emoji="🔧">
-  Tools are the actions the Lead Agent can take. DeerFlow provides built-in
+  Tools are the actions the Lead Agent can take. Matrix-Law provides built-in
   tools, community integrations, MCP tools, and skill tools — all controlled
   through <code>config.yaml</code>.
 </Callout>
 
 The Lead Agent is a tool-calling agent. Tools are how it interacts with the world: searching the web, reading and writing files, running commands, delegating tasks, and presenting outputs to the user.
 
-DeerFlow organizes tools into four categories:
+Matrix-Law organizes tools into four categories:
 
 1. **Built-in tools** — core runtime capabilities always available to the agent
 2. **Community tools** — integrations with external search, fetch, and image services
@@ -92,7 +92,7 @@ The following tools interact with the sandbox filesystem. They require a sandbox
 | `grep`        | Search file contents                                                              |
 | `write_file`  | Write content to a file                                                           |
 | `str_replace` | Replace a string in a file                                                        |
-| `bash`        | Execute a shell command (requires `allow_host_bash: true` or a container sandbox) |
+| `bash`        | Execute a shell command (generic Harness only; Matrix-Law production keeps host Bash disabled) |
 
 These are configured in `config.yaml` under `tools:`:
 
@@ -270,7 +270,7 @@ tools:
 ```
 
 Captures rendered web pages with Browserless `/screenshot` and presents the image
-through DeerFlow's artifact system. This is useful for visual evidence, UI checks,
+through Matrix-Law's artifact system. This is useful for visual evidence, UI checks,
 and JavaScript-heavy pages where Markdown extraction is not enough. By default it
 refuses URLs that resolve to private, loopback, or cloud-metadata addresses;
 set `allow_private_addresses: true` only when you intentionally target an internal host.

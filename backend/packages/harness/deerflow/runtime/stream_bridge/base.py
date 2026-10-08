@@ -67,6 +67,14 @@ class StreamBridge(abc.ABC):
         """Default number of idle seconds between subscriber heartbeats."""
         return self._heartbeat_interval
 
+    async def readiness_probe(self) -> bool:
+        """Return whether the configured bridge can accept/read stream events.
+
+        In-memory bridges have no external dependency. Persistent bridges should
+        override this with a bounded check of their backing service.
+        """
+        return True
+
     def _resolve_heartbeat_interval(self, heartbeat_interval: float | None) -> float:
         if heartbeat_interval is None:
             return self._heartbeat_interval

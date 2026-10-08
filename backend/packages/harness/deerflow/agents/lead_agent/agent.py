@@ -61,7 +61,7 @@ from deerflow.config.subagents_config import (
     DEFAULT_MAX_TOTAL_SUBAGENTS_PER_RUN,
     effective_subagent_concurrency,
 )
-from deerflow.models import create_chat_model
+from deerflow.models import create_chat_model, get_controlled_model_runtime
 from deerflow.runtime.checkpoint_mode import (
     INTERNAL_CHECKPOINT_MODE_KEY,
     freeze_checkpoint_channel_mode,
@@ -201,7 +201,7 @@ def _get_runtime_config(config: RunnableConfig) -> dict:
 
 
 def _resolve_model_name(requested_model_name: str | None = None, *, app_config: AppConfig | None = None) -> str:
-    """Resolve a runtime model name safely, falling back to default if invalid. Returns None if no models are configured."""
+    """Resolve a runtime model name, preserving fail-closed controlled runs."""
     app_config = app_config or get_app_config()
     default_model_name = app_config.models[0].name if app_config.models else None
     if default_model_name is None:
@@ -210,6 +210,13 @@ def _resolve_model_name(requested_model_name: str | None = None, *, app_config: 
     if requested_model_name and app_config.get_model_config(requested_model_name):
         return requested_model_name
 
+    controlled_runtime = get_controlled_model_runtime()
+    if requested_model_name and controlled_runtime is not None:
+        # The capability-server directory, not the host's static profile list,
+        # owns model selection for an admitted controlled task.
+        if controlled_runtime.allows_model(requested_model_name):
+            return requested_model_name
+        raise ValueError(f"Controlled model runtime rejected model {requested_model_name!r}; no fallback is permitted.")
     if requested_model_name and requested_model_name != default_model_name:
         logger.warning(f"Model '{requested_model_name}' not found in config; fallback to default model '{default_model_name}'.")
     return default_model_name
@@ -238,6 +245,10 @@ def _authorize_model_name(
     Mirrors the Principal/provider pattern of ``apply_tool_authorization`` so
     the tool path and the model path share one identity source.
     """
+    controlled_runtime = get_controlled_model_runtime()
+    if controlled_runtime is not None and not controlled_runtime.allows_model(model_name):
+        raise ValueError(f"Controlled model runtime rejected model {model_name!r}; no fallback is permitted.")
+
     authz_config = app_config.authorization
     if authz_config.enabled is not True:
         return model_name
@@ -267,6 +278,12 @@ def _authorize_model_name(
         if authz_config.fail_closed:
             raise ValueError("No models are authorized for the current role (authorization provider error).")
         return model_name
+
+    if controlled_runtime is not None:
+        # The Gateway is the authoritative controlled-route decision point.
+        # The host's legacy provider remains an additional local guard, but a
+        # deny cannot trigger its historical "first allowed" fallback.
+        raise ValueError(f"Controlled model {model_name!r} is not authorized; no fallback is permitted.")
 
     # Denied — graceful fallback: pick the first model that ``filter_resources``
     # says is visible AND that also passes ``authorize("model", "use")``. For the
@@ -461,6 +478,7 @@ def build_middlewares(
     custom_middlewares: list[AgentMiddleware] | None = None,
     *,
     available_skills: set[str] | None = None,
+    enabled_skills: list[Skill] | None = None,
     owns_agent_skill_projection: bool = True,
     app_config: AppConfig | None = None,
     deferred_setup=None,
@@ -524,7 +542,14 @@ def build_middlewares(
     # first HumanMessage to keep the system prompt fully static for prefix-cache reuse.
     from deerflow.agents.middlewares.dynamic_context_middleware import DynamicContextMiddleware
 
-    middlewares.append(DynamicContextMiddleware(agent_name=agent_name, app_config=resolved_app_config))
+    middlewares.append(
+        DynamicContextMiddleware(
+            agent_name=agent_name,
+            app_config=resolved_app_config,
+            available_skills=available_skills,
+            enabled_skills=enabled_skills,
+        )
+    )
 
     # Deterministically load a full SKILL.md when the user starts the turn with
     # /skill-name. This keeps the base system prompt metadata-only while giving
@@ -935,6 +960,12 @@ def _assemble_lead_agent(config: RunnableConfig, *, app_config: AppConfig) -> Le
     model_name = _authorize_model_name(model_name, context=cfg, app_config=resolved_app_config)
 
     model_config = resolved_app_config.get_model_config(model_name)
+    if model_config is None:
+        controlled_runtime = get_controlled_model_runtime()
+        if controlled_runtime is not None and controlled_runtime.allows_model(model_name) and resolved_app_config.models:
+            # This profile supplies only host-side safety and UI metadata. The
+            # controlled factory keeps ``model_name`` as the concrete target.
+            model_config = resolved_app_config.models[0]
 
     if model_config is None:
         raise ValueError("No chat model could be resolved. Please configure at least one model in config.yaml or provide a valid 'model_name'/'model' in the request.")
@@ -990,8 +1021,9 @@ def _assemble_lead_agent(config: RunnableConfig, *, app_config: AppConfig) -> Le
     # Build skill search setup (deferred skill discovery).
     # Controlled by skills.deferred_discovery — independent from tool_search.enabled.
     from deerflow.skills.describe import build_skill_search_setup
+    from deerflow.skills.managed import get_managed_skill_runtime
 
-    skill_search_enabled = resolved_app_config.skills.deferred_discovery
+    skill_search_enabled = resolved_app_config.skills.deferred_discovery or get_managed_skill_runtime() is not None
     container_base_path = resolved_app_config.skills.container_path
 
     if is_bootstrap:
@@ -1033,6 +1065,7 @@ def _assemble_lead_agent(config: RunnableConfig, *, app_config: AppConfig) -> Le
             model_name=model_name,
             agent_name=agent_name,
             available_skills=set(_BOOTSTRAP_SKILL_NAMES),
+            enabled_skills=bootstrap_skills,
             owns_agent_skill_projection=False,
             app_config=resolved_app_config,
             deferred_setup=setup,
@@ -1054,11 +1087,21 @@ def _assemble_lead_agent(config: RunnableConfig, *, app_config: AppConfig) -> Le
             subagent_execution_capacity=subagent_execution_capacity,
         )
         graph = create_agent(
-            model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, app_config=resolved_app_config, attach_tracing=False),
+            # Factory default purpose is the host-owned ``agent`` value.  Keep
+            # the long-standing call shape so third-party factory wrappers
+            # remain source-compatible; a task-scoped controlled runtime still
+            # selects the Gateway transport inside the factory.
+            model=create_chat_model(
+                name=model_name,
+                thinking_enabled=thinking_enabled,
+                app_config=resolved_app_config,
+                attach_tracing=False,
+            ),
             tools=final_tools,
             middleware=normalize_middleware_state_schemas(middlewares, mode),
             system_prompt=system_prompt,
             state_schema=get_thread_state_schema(mode),
+            context_schema=dict,
         )
         return _complete_assembly(
             config=config,
@@ -1150,6 +1193,7 @@ def _assemble_lead_agent(config: RunnableConfig, *, app_config: AppConfig) -> Le
         model_name=model_name,
         agent_name=agent_name,
         available_skills=available_skills,
+        enabled_skills=enabled_skills,
         app_config=resolved_app_config,
         deferred_setup=setup,
         mcp_routing_middleware=mcp_routing_middleware,
@@ -1172,11 +1216,19 @@ def _assemble_lead_agent(config: RunnableConfig, *, app_config: AppConfig) -> Le
         subagent_execution_capacity=subagent_execution_capacity,
     )
     graph = create_agent(
-        model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, reasoning_effort=reasoning_effort, app_config=resolved_app_config, attach_tracing=False, model_overrides=agent_model_overrides),
+        model=create_chat_model(
+            name=model_name,
+            thinking_enabled=thinking_enabled,
+            reasoning_effort=reasoning_effort,
+            app_config=resolved_app_config,
+            attach_tracing=False,
+            model_overrides=agent_model_overrides,
+        ),
         tools=final_tools,
         middleware=normalize_middleware_state_schemas(middlewares, mode),
         system_prompt=system_prompt,
         state_schema=get_thread_state_schema(mode),
+        context_schema=dict,
     )
     return _complete_assembly(
         config=config,

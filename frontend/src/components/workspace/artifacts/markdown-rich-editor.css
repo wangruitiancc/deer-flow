@@ -1,0 +1,68 @@
+.matrix-markdown-editor > * + * {
+  margin-top: 0.75rem;
+}
+
+.matrix-markdown-editor h1 {
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.matrix-markdown-editor h2 {
+  font-size: 1.25rem;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.matrix-markdown-editor ul,
+.matrix-markdown-editor ol {
+  padding-left: 1.5rem;
+}
+
+.matrix-markdown-editor ul {
+  list-style: disc;
+}
+
+.matrix-markdown-editor ol {
+  list-style: decimal;
+}
+
+.matrix-markdown-editor blockquote {
+  border-left: 3px solid var(--border);
+  color: var(--muted-foreground);
+  padding-left: 0.9rem;
+}
+
+.matrix-markdown-editor a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.matrix-markdown-editor .matrix-markdown-table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.matrix-markdown-editor .matrix-markdown-table td,
+.matrix-markdown-editor .matrix-markdown-table th {
+  border: 1px solid var(--border);
+  min-width: 5rem;
+  padding: 0.45rem 0.55rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.matrix-markdown-editor .matrix-markdown-table th {
+  background: color-mix(in srgb, var(--muted) 55%, transparent);
+  font-weight: 600;
+}
+
+.matrix-markdown-editor p.is-editor-empty:first-child::before {
+  color: var(--muted-foreground);
+  content: "在此编辑文书…";
+  float: left;
+  height: 0;
+  pointer-events: none;
+}

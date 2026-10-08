@@ -44,8 +44,8 @@ def main() -> int:
         env_path = project_root / ".env"
 
         print()
-        print(bold("Welcome to DeerFlow Setup!"))
-        print("This wizard will help you configure DeerFlow in a few minutes.")
+        print(bold("Welcome to Matrix-Law Setup!"))
+        print("This wizard will help you configure Matrix-Law in a few minutes.")
         print()
 
         if config_path.exists():
@@ -160,7 +160,7 @@ def main() -> int:
         print()
         print("Next steps:")
         print(f"  {cyan('make install')}    # Install dependencies (first time only)")
-        print(f"  {cyan('make dev')}        # Start DeerFlow")
+        print(f"  {cyan('make dev')}        # Start Matrix-Law")
         print()
         print(f"Run {cyan('make doctor')} to verify your setup at any time.")
         print()

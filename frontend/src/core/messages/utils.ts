@@ -1,5 +1,7 @@
 import type { AIMessage, Message } from "@langchain/langgraph-sdk";
 
+import { getMessageRunId } from "./run-duration";
+
 interface GenericMessageGroup<T = string> {
   type: T;
   id: string | undefined;
@@ -42,6 +44,10 @@ export function getMessageGroups(
   }
 
   const groups: MessageGroup[] = [];
+  const toolCallGroups = new Map<
+    string,
+    { group: MessageGroup; runId: string | undefined }
+  >();
   let currentTurnStartIndex = -1;
   if (isCurrentTurnLoading) {
     for (let index = messages.length - 1; index >= 0; index--) {
@@ -79,17 +85,25 @@ export function getMessageGroups(
     }
 
     if (message.type === "tool") {
+      // Persisted short-circuit results can arrive after the final answer.
+      // Associate them with their invocation, not the newest answer bubble.
+      const owner = toolCallGroups.get(message.tool_call_id);
+      const runId = getMessageRunId(message);
+      const matchingGroup =
+        owner && (!runId || !owner.runId || runId === owner.runId)
+          ? owner.group
+          : undefined;
       if (isClarificationToolMessage(message)) {
         // Add to the preceding processing group to preserve tool-call association,
         // then also open a standalone clarification group for prominent display.
-        lastOpenGroup()?.messages.push(message);
+        (matchingGroup ?? lastOpenGroup())?.messages.push(message);
         groups.push({
           id: message.id,
           type: "assistant:clarification",
           messages: [message],
         });
       } else {
-        const open = lastOpenGroup();
+        const open = matchingGroup ?? lastOpenGroup();
         if (open) {
           open.messages.push(message);
         } else {
@@ -188,6 +202,18 @@ export function getMessageGroups(
 
       if (becomesAssistantBubble) {
         groups.push({ id: message.id, type: "assistant", messages: [message] });
+      }
+
+      const group = groups[groups.length - 1];
+      if (group && hasToolCalls(message)) {
+        for (const call of message.tool_calls ?? []) {
+          if (call.id) {
+            toolCallGroups.set(call.id, {
+              group,
+              runId: getMessageRunId(message),
+            });
+          }
+        }
       }
     }
   }

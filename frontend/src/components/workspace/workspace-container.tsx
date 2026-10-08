@@ -16,9 +16,6 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { useI18n } from "@/core/i18n/hooks";
 import { cn } from "@/lib/utils";
 
-import { GithubIcon } from "./github-icon";
-import { Tooltip } from "./tooltip";
-
 export function WorkspaceContainer({
   className,
   children,
@@ -30,7 +27,6 @@ export function WorkspaceContainer({
     </div>
   );
 }
-
 export function WorkspaceHeader({
   className,
   children,
@@ -92,17 +88,8 @@ export function WorkspaceHeader({
           </BreadcrumbList>
         </Breadcrumb>
       </div>
-      <div className="pr-4">
-        <Tooltip content={t.workspace.githubTooltip}>
-          <a
-            href="https://github.com/bytedance/deer-flow"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="opacity-75 transition hover:opacity-100"
-          >
-            <GithubIcon className="size-6" />
-          </a>
-        </Tooltip>
+      <div className="text-muted-foreground pr-4 text-xs font-medium tracking-wide">
+        Matrix-Law
       </div>
     </header>
   );
@@ -133,5 +120,7 @@ function nameOfSegment(
   if (!segment) return t.common.home;
   if (segment === "workspace") return t.breadcrumb.workspace;
   if (segment === "chats") return t.breadcrumb.chats;
+  if (segment === "law") return t.breadcrumb.lawMatters;
+  if (segment === "admin") return "平台管理";
   return segment[0]?.toUpperCase() + segment.slice(1);
 }

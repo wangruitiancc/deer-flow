@@ -1,130 +1,55 @@
 ---
 title: Quick Start
-description: This guide walks you through starting DeerFlow App on your local machine using the `make dev` workflow. Gateway, Frontend, and nginx start together and are accessible through a single URL.
+description: Start the supported Matrix-Law two-server local candidate.
 ---
-
-import { Callout, Steps } from "nextra/components";
 
 # Quick Start
 
-<Callout type="info" emoji="⚡">
-  Get DeerFlow App running locally in about 10 minutes. You need a machine with
-  Python 3.12+, Node.js 22+, and at least one LLM API key.
-</Callout>
-
-This guide walks you through starting DeerFlow App on your local machine using the `make dev` workflow. Gateway, Frontend, and nginx start together and are accessible through a single URL.
+The authoritative Matrix-Law deployment sources are in `deploy/two-server/`.
+Local-candidate mode uses two isolated containers to simulate the capability and
+law-firm tenant servers for development and acceptance only. The cloud target is
+native processes managed by systemd on two independent Linux hosts; Docker/Compose
+is not the production deployment architecture.
 
 ## Prerequisites
 
-Check that all required tools are installed:
+- Docker Engine and the Docker Compose plugin
+- The Matrix-Law repository checked out on the host
+
+## Start the local candidate
+
+Run these commands from the Matrix-Law repository root:
 
 ```bash
-make check
+./scripts/bootstrap.sh
+./scripts/doctor.sh
+./deploy/two-server/start.sh
 ```
 
-Required:
+The first initialization creates local administrator credentials in the
+permission-restricted runtime directory. Read them locally and keep them private.
+Do not place secrets in shell history, source files, tickets, chat, or logs.
 
-| Tool    | Minimum version    |
-| ------- | ------------------ |
-| Python  | 3.12               |
-| uv      | latest             |
-| Node.js | 22                 |
-| pnpm    | 10                 |
-| nginx   | any recent version |
+Open one of these local URLs:
 
-On macOS, install with `brew install python uv node pnpm nginx`. On Linux, use your distribution's package manager.
+- Capability operations: [http://127.0.0.1:4110/console/](http://127.0.0.1:4110/console/)
+- Law-firm administration: [http://127.0.0.1:4111/law-admin/](http://127.0.0.1:4111/law-admin/)
+- Lawyer sign-in: [http://127.0.0.1:4111/login](http://127.0.0.1:4111/login)
 
-## Steps
-
-<Steps>
-
-### Clone the repository
+Stop the containers and retain local data:
 
 ```bash
-git clone https://github.com/bytedance/deer-flow.git
-cd deer-flow
+./deploy/two-server/stop.sh
 ```
 
-### Install dependencies
-
-```bash
-make install
-```
-
-This installs both backend Python dependencies (via `uv`) and frontend Node.js dependencies (via `pnpm`).
-
-### Create your config file
-
-```bash
-cp config.example.yaml config.yaml
-```
-
-Then edit `config.yaml` to add at least one model. The minimum change is adding a model under the `models:` section:
-
-```yaml
-models:
-  - name: gpt-4o
-    use: langchain_openai:ChatOpenAI
-    model: gpt-4o
-    api_key: $OPENAI_API_KEY
-    request_timeout: 600.0
-    max_retries: 2
-    supports_vision: true
-```
-
-Set the corresponding environment variable before starting:
-
-```bash
-export OPENAI_API_KEY=sk-...
-```
-
-See the [Application Configuration](/docs/application/configuration) page for examples with other model providers.
-
-### Start all services
-
-```bash
-make dev
-```
-
-This starts:
-
-- Gateway API and embedded agent runtime on port `8001`
-- Frontend on port `3000`
-- nginx reverse proxy on port `2026`
-
-Open [http://localhost:2026](http://localhost:2026) in your browser.
-
-### Stop all services
-
-```bash
-make stop
-```
-
-</Steps>
-
-## What happens when you run `make dev`
-
-- Existing service processes are stopped first (safe to run after an interrupted start).
-- Each service is started in the background and writes logs to the `logs/` directory.
-- nginx proxies all traffic through port `2026`, so you only need one URL.
-
-Log files:
-
-| Service   | Log file             |
-| --------- | -------------------- |
-| Gateway   | `logs/gateway.log`   |
-| Frontend  | `logs/frontend.log`  |
-| nginx     | `logs/nginx.log`     |
-
-<Callout type="tip">
-  If something is not working, check the log files first. Most startup errors
-  (missing API keys, config parsing failures) appear in `logs/gateway.log`.
-</Callout>
+This is a local candidate environment. It does not establish production security,
+real-provider quality, real-material legal quality, billing, or disaster-recovery
+readiness.
 
 <Cards num={2}>
   <Cards.Card
-    title="Deployment Guide"
-    href="/docs/application/deployment-guide"
+    title="Two-Server Candidate Deployment"
+    href="/docs/tutorials/deploy-your-own-matrix-law"
   />
-  <Cards.Card title="Configuration" href="/docs/application/configuration" />
+  <Cards.Card title="Legal Workspace Usage" href="/docs/application/workspace-usage" />
 </Cards>

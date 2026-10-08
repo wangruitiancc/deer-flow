@@ -15,18 +15,22 @@ from __future__ import annotations
 from datetime import UTC
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.gateway.auth.models import User
 from app.gateway.auth.repositories.base import UserNotFoundError, UserRepository
-from deerflow.persistence.user.model import OAUTH_IDENTITY_INDEX_NAME, UserRow
+from deerflow.persistence.user.model import OAUTH_IDENTITY_INDEX_NAME, UserMFARecoveryCodeRow, UserRow
 
 # ``email`` is ``mapped_column(unique=True, index=True)``, which SQLAlchemy
 # (and 0001_baseline) realise as a single UNIQUE INDEX -- not a named UNIQUE
 # constraint -- so a Postgres duplicate reports the index name here.
 _EMAIL_UNIQUE_INDEX_NAME = "ix_users_email"
+
+
+class _MFAChallengeChanged(RuntimeError):
+    """Internal sentinel used to roll back a recovery-code consume race."""
 
 
 def _driver_constraint_name(exc: IntegrityError) -> str | None:
@@ -154,6 +158,10 @@ class SQLiteUserRepository(UserRepository):
             oauth_id=row.oauth_id,
             needs_setup=row.needs_setup,
             token_version=row.token_version,
+            mfa_enabled=row.mfa_enabled,
+            mfa_secret_ciphertext=row.mfa_secret_ciphertext,
+            mfa_last_counter=row.mfa_last_counter,
+            mfa_challenge_id=row.mfa_challenge_id,
         )
 
     @staticmethod
@@ -168,6 +176,10 @@ class SQLiteUserRepository(UserRepository):
             oauth_id=user.oauth_id,
             needs_setup=user.needs_setup,
             token_version=user.token_version,
+            mfa_enabled=user.mfa_enabled,
+            mfa_secret_ciphertext=user.mfa_secret_ciphertext,
+            mfa_last_counter=user.mfa_last_counter,
+            mfa_challenge_id=user.mfa_challenge_id,
         )
 
     # ── CRUD ──────────────────────────────────────────────────────────
@@ -276,8 +288,154 @@ class SQLiteUserRepository(UserRepository):
             row.oauth_id = user.oauth_id
             row.needs_setup = user.needs_setup
             row.token_version = user.token_version
+            row.mfa_enabled = user.mfa_enabled
+            row.mfa_secret_ciphertext = user.mfa_secret_ciphertext
+            row.mfa_last_counter = user.mfa_last_counter
+            row.mfa_challenge_id = user.mfa_challenge_id
             await session.commit()
         return user
+
+    async def set_password_if_token_version(self, user_id: str, expected_version: int, password_hash: str) -> bool:
+        """Atomically consume a reset token by advancing the session version."""
+        stmt = (
+            update(UserRow)
+            .where(
+                UserRow.id == user_id,
+                UserRow.token_version == expected_version,
+                UserRow.password_hash.is_not(None),
+            )
+            .values(password_hash=password_hash, token_version=UserRow.token_version + 1)
+            .execution_options(synchronize_session=False)
+        )
+        async with self._sf() as session:
+            result = await session.execute(stmt)
+            await session.commit()
+            return result.rowcount == 1
+
+    async def set_mfa_challenge(self, user_id: str, expected_version: int, challenge_id: str) -> bool:
+        stmt = (
+            update(UserRow)
+            .where(UserRow.id == user_id, UserRow.token_version == expected_version, UserRow.system_role == "admin")
+            .values(mfa_challenge_id=challenge_id)
+            .execution_options(synchronize_session=False)
+        )
+        async with self._sf() as session:
+            result = await session.execute(stmt)
+            await session.commit()
+            return result.rowcount == 1
+
+    async def save_mfa_setup(
+        self,
+        user_id: str,
+        expected_version: int,
+        challenge_id: str,
+        secret_ciphertext: str,
+        recovery_hashes: list[str],
+    ) -> bool:
+        stmt = (
+            update(UserRow)
+            .where(
+                UserRow.id == user_id,
+                UserRow.token_version == expected_version,
+                UserRow.system_role == "admin",
+                UserRow.mfa_challenge_id == challenge_id,
+                UserRow.mfa_enabled.is_(False),
+            )
+            .values(mfa_secret_ciphertext=secret_ciphertext, mfa_last_counter=-1)
+            .execution_options(synchronize_session=False)
+        )
+        async with self._sf() as session:
+            async with session.begin():
+                result = await session.execute(stmt)
+                if result.rowcount != 1:
+                    return False
+                await session.execute(delete(UserMFARecoveryCodeRow).where(UserMFARecoveryCodeRow.user_id == user_id))
+                session.add_all(UserMFARecoveryCodeRow(user_id=user_id, code_hash=value) for value in recovery_hashes)
+            return True
+
+    async def confirm_mfa_setup(self, user_id: str, expected_version: int, challenge_id: str, counter: int) -> bool:
+        stmt = (
+            update(UserRow)
+            .where(
+                UserRow.id == user_id,
+                UserRow.token_version == expected_version,
+                UserRow.system_role == "admin",
+                UserRow.mfa_challenge_id == challenge_id,
+                UserRow.mfa_enabled.is_(False),
+                UserRow.mfa_secret_ciphertext.is_not(None),
+            )
+            .values(mfa_enabled=True, mfa_last_counter=counter, mfa_challenge_id=None)
+            .execution_options(synchronize_session=False)
+        )
+        async with self._sf() as session:
+            async with session.begin():
+                code_count = await session.scalar(
+                    select(func.count())
+                    .select_from(UserMFARecoveryCodeRow)
+                    .where(UserMFARecoveryCodeRow.user_id == user_id)
+                )
+                if not code_count or code_count < 5:
+                    return False
+                result = await session.execute(stmt)
+                return result.rowcount == 1
+
+    async def consume_mfa_totp(self, user_id: str, expected_version: int, challenge_id: str, counter: int) -> bool:
+        stmt = (
+            update(UserRow)
+            .where(
+                UserRow.id == user_id,
+                UserRow.token_version == expected_version,
+                UserRow.system_role == "admin",
+                UserRow.mfa_enabled.is_(True),
+                UserRow.mfa_challenge_id == challenge_id,
+                UserRow.mfa_last_counter < counter,
+            )
+            .values(mfa_last_counter=counter, mfa_challenge_id=None)
+            .execution_options(synchronize_session=False)
+        )
+        async with self._sf() as session:
+            result = await session.execute(stmt)
+            await session.commit()
+            return result.rowcount == 1
+
+    async def consume_mfa_recovery_code(self, user_id: str, expected_version: int, challenge_id: str, code_hash: str) -> bool:
+        try:
+            async with self._sf() as session:
+                async with session.begin():
+                    user_stmt = (
+                        select(UserRow.id)
+                        .where(
+                            UserRow.id == user_id,
+                            UserRow.token_version == expected_version,
+                            UserRow.system_role == "admin",
+                            UserRow.mfa_enabled.is_(True),
+                            UserRow.mfa_challenge_id == challenge_id,
+                        )
+                        .with_for_update()
+                    )
+                    if await session.scalar(user_stmt) is None:
+                        return False
+                    consumed = await session.execute(
+                        delete(UserMFARecoveryCodeRow)
+                        .where(UserMFARecoveryCodeRow.user_id == user_id, UserMFARecoveryCodeRow.code_hash == code_hash)
+                    )
+                    if consumed.rowcount != 1:
+                        return False
+                    updated = await session.execute(
+                        update(UserRow)
+                        .where(
+                            UserRow.id == user_id,
+                            UserRow.token_version == expected_version,
+                            UserRow.mfa_challenge_id == challenge_id,
+                        )
+                        .values(mfa_challenge_id=None)
+                        .execution_options(synchronize_session=False)
+                    )
+                    if updated.rowcount != 1:
+                        raise _MFAChallengeChanged
+            return True
+        except _MFAChallengeChanged:
+            return False
 
     async def count_users(self) -> int:
         stmt = select(func.count()).select_from(UserRow)

@@ -280,6 +280,13 @@ def _build_runtime_middlewares(
         provider = provider_cls(**provider_kwargs)
         tail.append(GuardrailMiddleware(provider, fail_closed=guardrails_config.fail_closed, passport=guardrails_config.passport))
 
+    from deerflow.agents.middlewares.tool_execution_policy_middleware import ToolExecutionPolicyMiddleware
+
+    # Side-effect policy runs before command/file-specific gates. It blocks an
+    # unsafe checkpoint replay before another audit/guard can accidentally
+    # treat it as an ordinary fresh call, and enforces keyed writes on first use.
+    tail.append(ToolExecutionPolicyMiddleware(app_config=app_config))
+
     from deerflow.agents.middlewares.sandbox_audit_middleware import SandboxAuditMiddleware
 
     tail.append(SandboxAuditMiddleware())

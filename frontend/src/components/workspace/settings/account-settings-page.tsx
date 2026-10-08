@@ -22,6 +22,8 @@ export function AccountSettingsPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [revokingSessions, setRevokingSessions] = useState(false);
+  const [sessionError, setSessionError] = useState("");
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -66,6 +68,28 @@ export function AccountSettingsPage() {
       setError(t.settings.account.networkError);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleRevokeAllSessions = async () => {
+    if (!window.confirm(t.settings.account.confirmRevokeAllSessions)) return;
+    setSessionError("");
+    setRevokingSessions(true);
+    try {
+      const res = await fetch("/api/v1/auth/sessions/revoke-all", {
+        method: "POST",
+        headers: getCsrfHeaders(),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        setSessionError(parseAuthError(data).message);
+        return;
+      }
+      window.location.assign("/login");
+    } catch {
+      setSessionError(t.settings.account.networkError);
+    } finally {
+      setRevokingSessions(false);
     }
   };
 
@@ -154,6 +178,28 @@ export function AccountSettingsPage() {
           </p>
         </SettingsSection>
       )}
+
+      <SettingsSection
+        title={t.settings.account.sessionSecurityTitle}
+        description={t.settings.account.sessionSecurityDescription}
+      >
+        {sessionError && (
+          <p role="alert" className="mb-3 text-sm text-red-500">
+            {sessionError}
+          </p>
+        )}
+        <Button
+          type="button"
+          variant="destructive"
+          size="sm"
+          onClick={handleRevokeAllSessions}
+          disabled={revokingSessions}
+        >
+          {revokingSessions
+            ? t.settings.account.revokingAllSessions
+            : t.settings.account.revokeAllSessions}
+        </Button>
+      </SettingsSection>
 
       <SettingsSection title="" description="">
         <Button

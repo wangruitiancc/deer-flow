@@ -222,16 +222,17 @@ async def test_sandbox_tool_sync_async_signatures_and_forwarding_stay_aligned(
     run_sync_tool = AsyncMock(return_value="forwarded")
     monkeypatch.setattr("deerflow.sandbox.tools._run_sync_tool_after_async_sandbox_init", run_sync_tool)
     runtime = object()
+    write_kwargs = {"write_operation": "workspace_tool_write"} if tool_obj.name in {"write_file", "str_replace"} else {}
 
     assert await tool_obj.coroutine(runtime=runtime, **call_args) == "forwarded"
-    run_sync_tool.assert_awaited_once_with(tool_obj.func, runtime, *forwarded_args)
+    run_sync_tool.assert_awaited_once_with(tool_obj.func, runtime, *forwarded_args, **write_kwargs)
 
     run_sync_tool.reset_mock()
     call_args_without_description = {key: value for key, value in call_args.items() if key != "description"}
     forwarded_without_description = tuple("" if value == "description" else value for value in forwarded_args)
 
     assert await tool_obj.coroutine(runtime=runtime, **call_args_without_description) == "forwarded"
-    run_sync_tool.assert_awaited_once_with(tool_obj.func, runtime, *forwarded_without_description)
+    run_sync_tool.assert_awaited_once_with(tool_obj.func, runtime, *forwarded_without_description, **write_kwargs)
 
 
 def test_task_tool_description_is_optional_but_discoverable() -> None:

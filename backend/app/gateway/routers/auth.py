@@ -9,10 +9,10 @@ import time
 import urllib.parse
 from ipaddress import ip_address, ip_network
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field, field_validator
-from starlette.responses import RedirectResponse
+from starlette.responses import JSONResponse, RedirectResponse
 
 from app.gateway.auth import (
     UserResponse,
@@ -20,6 +20,25 @@ from app.gateway.auth import (
 )
 from app.gateway.auth.config import get_auth_config
 from app.gateway.auth.errors import AuthErrorCode, AuthErrorResponse
+from app.gateway.auth.jwt import create_password_reset_token, decode_password_reset_token
+from app.gateway.auth.mfa import (
+    MFA_CHALLENGE_COOKIE_NAME,
+    MFA_CHALLENGE_COOKIE_PATH,
+    MFA_CHALLENGE_TTL_SECONDS,
+    MFAChallenge,
+    MFAConfigurationError,
+    create_mfa_challenge,
+    decode_mfa_challenge,
+    decrypt_totp_secret,
+    encrypt_totp_secret,
+    generate_recovery_codes,
+    generate_totp_secret,
+    hash_recovery_code,
+    matching_totp_counter,
+    otpauth_uri,
+    validate_mfa_encryption_key,
+)
+from app.gateway.auth.models import User
 from app.gateway.auth.oidc import OIDCError, OIDCService
 from app.gateway.auth.oidc_state import (
     OIDCStatePayload,
@@ -31,6 +50,7 @@ from app.gateway.auth.oidc_state import (
     get_state_cookie,
     set_state_cookie,
 )
+from app.gateway.auth.password_reset import allow_password_reset_request, send_password_reset_email
 from app.gateway.auth.pat import PAT_MAX_NAME_LENGTH
 from app.gateway.auth.session_cookie import ACCESS_TOKEN_COOKIE_NAME, SESSION_PERSISTENCE_COOKIE_NAME, set_session_cookie
 from app.gateway.auth.session_cookie_state import SKIP_AUTH_CSRF_COOKIE_STATE_ATTR
@@ -52,6 +72,22 @@ class LoginResponse(BaseModel):
 
     expires_in: int  # seconds
     needs_setup: bool = False
+    mfa_required: bool = False
+    mfa_setup_required: bool = False
+
+
+class MFAInput(BaseModel):
+    """One authenticator or recovery code."""
+
+    code: str = Field(..., min_length=6, max_length=64, pattern=r"^[A-Za-z0-9-]+$")
+
+
+class MFASetupResponse(BaseModel):
+    """One-time enrollment material returned only to the password challenge."""
+
+    secret: str
+    otpauth_uri: str
+    recovery_codes: list[str]
 
 
 # Top common-password blocklist. Drawn from the public SecLists "10k worst
@@ -130,6 +166,7 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8)
     remember_me: bool = True
+    invitation_token: str | None = Field(default=None, pattern=r"^lmi_[A-Za-z0-9_-]{43}$", max_length=48)
 
     _strong_password = field_validator("password")(classmethod(lambda cls, v: _validate_strong_password(v)))
 
@@ -145,6 +182,25 @@ class ChangePasswordRequest(BaseModel):
     _strong_password = field_validator("new_password")(classmethod(lambda cls, v: _validate_strong_password(v)))
 
 
+class PasswordResetRequest(BaseModel):
+    """Request a recovery email without revealing whether the account exists."""
+
+    email: EmailStr
+
+
+class PasswordResetCompletionRequest(BaseModel):
+    """Redeem an emailed reset token and choose a new local password."""
+
+    token: str = Field(..., min_length=30, max_length=2048)
+    new_password: str = Field(..., min_length=8, max_length=1024)
+
+    _strong_password = field_validator("new_password")(classmethod(lambda cls, v: _validate_strong_password(v)))
+
+
+class PasswordResetStatusResponse(BaseModel):
+    enabled: bool
+
+
 class MessageResponse(BaseModel):
     """Generic message response."""
 
@@ -157,6 +213,53 @@ class MessageResponse(BaseModel):
 def _set_session_cookie(response: Response, token: str, request: Request, *, remember_me: bool | None = None) -> None:
     """Set the access_token HttpOnly cookie on the response."""
     set_session_cookie(response, request, token, remember_me=remember_me)
+
+
+def _set_mfa_challenge_cookie(response: Response, request: Request, token: str) -> None:
+    response.set_cookie(
+        key=MFA_CHALLENGE_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        secure=is_secure_request(request),
+        samesite="strict",
+        max_age=MFA_CHALLENGE_TTL_SECONDS,
+        path=MFA_CHALLENGE_COOKIE_PATH,
+    )
+
+
+def _clear_mfa_challenge_cookie(response: Response, request: Request) -> None:
+    response.delete_cookie(
+        key=MFA_CHALLENGE_COOKIE_NAME,
+        path=MFA_CHALLENGE_COOKIE_PATH,
+        secure=is_secure_request(request),
+        httponly=True,
+        samesite="strict",
+    )
+
+
+async def _require_mfa_challenge(request: Request, response: Response, expected_mode: str) -> tuple[MFAChallenge, User]:
+    challenge = decode_mfa_challenge(request.cookies.get(MFA_CHALLENGE_COOKIE_NAME))
+    if challenge is None or challenge.mode != expected_mode:
+        _clear_mfa_challenge_cookie(response, request)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="MFA challenge is invalid or expired")
+    user = await get_local_provider().get_user(challenge.sub)
+    if (
+        user is None
+        or user.system_role != "admin"
+        or user.token_version != challenge.ver
+        or user.mfa_challenge_id != challenge.jti
+    ):
+        _clear_mfa_challenge_cookie(response, request)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="MFA challenge is invalid or expired")
+    return challenge, user
+
+
+def _finish_mfa_session(request: Request, response: Response, challenge: MFAChallenge, user: User) -> LoginResponse:
+    token = create_access_token(str(user.id), token_version=user.token_version)
+    _set_session_cookie(response, token, request, remember_me=challenge.remember_me)
+    _clear_mfa_challenge_cookie(response, request)
+    response.headers["Cache-Control"] = "no-store"
+    return LoginResponse(expires_in=get_auth_config().token_expiry_days * 24 * 3600, needs_setup=user.needs_setup)
 
 
 # ── Rate Limiting ────────────────────────────────────────────────────────
@@ -420,6 +523,31 @@ async def login_local(
         )
 
     _record_login_success(client_ip)
+    auth_config = get_auth_config()
+    if auth_config.mfa_required_for_admins and user.system_role == "admin":
+        mode = "verify" if user.mfa_enabled else "setup"
+        if mode == "setup":
+            try:
+                validate_mfa_encryption_key()
+            except MFAConfigurationError as exc:
+                logger.error("Admin MFA setup is unavailable because its encryption key is misconfigured")
+                raise HTTPException(status_code=503, detail="Administrator MFA is not configured") from exc
+        challenge_token, challenge_id = create_mfa_challenge(
+            str(user.id), user.token_version, mode=mode, remember_me=remember_me
+        )
+        if not await get_local_provider().set_mfa_challenge(str(user.id), user.token_version, challenge_id):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account changed during login")
+        response.delete_cookie(ACCESS_TOKEN_COOKIE_NAME, path="/")
+        response.delete_cookie(SESSION_PERSISTENCE_COOKIE_NAME, path="/")
+        _set_mfa_challenge_cookie(response, request, challenge_token)
+        response.headers["Cache-Control"] = "no-store"
+        return LoginResponse(
+            expires_in=0,
+            needs_setup=user.needs_setup,
+            mfa_required=True,
+            mfa_setup_required=(mode == "setup"),
+        )
+
     token = create_access_token(str(user.id), token_version=user.token_version)
     _set_session_cookie(response, token, request, remember_me=remember_me)
 
@@ -427,6 +555,151 @@ async def login_local(
         expires_in=get_auth_config().token_expiry_days * 24 * 3600,
         needs_setup=user.needs_setup,
     )
+
+
+@router.post("/mfa/setup", response_model=MFASetupResponse)
+async def begin_admin_mfa_setup(request: Request, response: Response):
+    """Create pending TOTP enrollment material after an admin password login."""
+    if not get_auth_config().mfa_required_for_admins:
+        raise HTTPException(status_code=404, detail="Administrator MFA is disabled")
+    challenge, user = await _require_mfa_challenge(request, response, "setup")
+    if user.mfa_enabled:
+        raise HTTPException(status_code=409, detail="Administrator MFA is already enabled")
+    try:
+        secret = generate_totp_secret()
+        encrypted_secret = encrypt_totp_secret(secret)
+    except MFAConfigurationError as exc:
+        logger.error("Admin MFA setup failed because its encryption key is misconfigured")
+        raise HTTPException(status_code=503, detail="Administrator MFA is not configured") from exc
+    recovery_codes = generate_recovery_codes()
+    saved = await get_local_provider().save_mfa_setup(
+        str(user.id),
+        user.token_version,
+        challenge.jti,
+        encrypted_secret,
+        [hash_recovery_code(code) for code in recovery_codes],
+    )
+    if not saved:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="MFA challenge is invalid or expired")
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return MFASetupResponse(secret=secret, otpauth_uri=otpauth_uri(secret, user.email), recovery_codes=recovery_codes)
+
+
+@router.post("/mfa/setup/confirm", response_model=LoginResponse)
+async def confirm_admin_mfa_setup(request: Request, response: Response, body: MFAInput):
+    """Enable TOTP using a fresh authenticator code and create the browser session."""
+    if not get_auth_config().mfa_required_for_admins:
+        raise HTTPException(status_code=404, detail="Administrator MFA is disabled")
+    client_ip = _get_client_ip(request)
+    await _check_rate_limit(client_ip)
+    challenge, user = await _require_mfa_challenge(request, response, "setup")
+    if not user.mfa_secret_ciphertext:
+        raise HTTPException(status_code=409, detail="Begin administrator MFA setup first")
+    try:
+        secret = decrypt_totp_secret(user.mfa_secret_ciphertext)
+    except MFAConfigurationError as exc:
+        logger.error("Admin MFA setup confirmation failed because its secret could not be decrypted")
+        raise HTTPException(status_code=503, detail="Administrator MFA is unavailable") from exc
+    counter = matching_totp_counter(secret, body.code, last_counter=user.mfa_last_counter)
+    if counter is None or not await get_local_provider().confirm_mfa_setup(
+        str(user.id), user.token_version, challenge.jti, counter
+    ):
+        await _record_login_failure(client_ip)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authenticator code is invalid")
+    _record_login_success(client_ip)
+    user.mfa_enabled = True
+    user.mfa_last_counter = counter
+    user.mfa_challenge_id = None
+    return _finish_mfa_session(request, response, challenge, user)
+
+
+@router.post("/mfa/verify", response_model=LoginResponse)
+async def verify_admin_mfa(request: Request, response: Response, body: MFAInput):
+    """Consume a TOTP step or one recovery code, then issue the admin session."""
+    if not get_auth_config().mfa_required_for_admins:
+        raise HTTPException(status_code=404, detail="Administrator MFA is disabled")
+    client_ip = _get_client_ip(request)
+    await _check_rate_limit(client_ip)
+    challenge, user = await _require_mfa_challenge(request, response, "verify")
+    if not user.mfa_enabled or not user.mfa_secret_ciphertext:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="MFA challenge is invalid or expired")
+    try:
+        secret = decrypt_totp_secret(user.mfa_secret_ciphertext)
+    except MFAConfigurationError as exc:
+        logger.error("Admin MFA verification failed because its secret could not be decrypted")
+        raise HTTPException(status_code=503, detail="Administrator MFA is unavailable") from exc
+    counter = matching_totp_counter(secret, body.code, last_counter=user.mfa_last_counter)
+    provider = get_local_provider()
+    accepted = False
+    if counter is not None:
+        accepted = await provider.consume_mfa_totp(str(user.id), user.token_version, challenge.jti, counter)
+    else:
+        normalized = "".join(character for character in body.code.upper() if character.isalnum())
+        if len(normalized) == 24:
+            accepted = await provider.consume_mfa_recovery_code(
+                str(user.id), user.token_version, challenge.jti, hash_recovery_code(body.code)
+            )
+    if not accepted:
+        await _record_login_failure(client_ip)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authenticator or recovery code is invalid")
+    _record_login_success(client_ip)
+    user.mfa_last_counter = counter if counter is not None else user.mfa_last_counter
+    user.mfa_challenge_id = None
+    return _finish_mfa_session(request, response, challenge, user)
+
+
+@router.get("/password-reset/status", response_model=PasswordResetStatusResponse)
+async def password_reset_status(response: Response):
+    """Expose whether this deployment has explicitly configured reset mail."""
+    response.headers["Cache-Control"] = "no-store"
+    return PasswordResetStatusResponse(enabled=get_auth_config().password_reset_enabled)
+
+
+@router.post("/password-reset/request", response_model=MessageResponse, status_code=status.HTTP_202_ACCEPTED)
+async def request_password_reset(request: Request, response: Response, background_tasks: BackgroundTasks, body: PasswordResetRequest):
+    """Send a short-lived reset link when mail is configured and the account is local."""
+    config = get_auth_config()
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+
+    if config.password_reset_enabled and allow_password_reset_request(_get_client_ip(request), str(body.email)):
+        provider = get_local_provider()
+        user = await provider.get_user_by_email(str(body.email))
+        if user is not None and user.password_hash is not None:
+            token = create_password_reset_token(str(user.id), user.token_version)
+            background_tasks.add_task(send_password_reset_email, config, user.email, token)
+
+    return MessageResponse(message="If this account can receive password reset email, a link will arrive shortly.")
+
+
+def _invalid_password_reset_link() -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": "Password reset link is invalid or expired"},
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+    )
+
+
+@router.post("/password-reset/complete", response_model=MessageResponse)
+async def complete_password_reset(response: Response, body: PasswordResetCompletionRequest) -> MessageResponse | JSONResponse:
+    """Redeem a valid reset token once, invalidating all earlier sessions."""
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    payload = decode_password_reset_token(body.token)
+    if payload is None:
+        return _invalid_password_reset_link()
+
+    provider = get_local_provider()
+    user = await provider.get_user(payload.sub)
+    if user is None or user.password_hash is None or user.token_version != payload.ver:
+        return _invalid_password_reset_link()
+
+    applied = await provider.reset_password_if_token_version(str(user.id), payload.ver, body.new_password)
+    if not applied:
+        return _invalid_password_reset_link()
+
+    return MessageResponse(message="Password reset successfully. Sign in with your new password.")
 
 
 def _local_registration_enabled() -> bool:
@@ -456,27 +729,107 @@ def _local_registration_enabled() -> bool:
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(request: Request, response: Response, body: RegisterRequest):
-    """Register a new user account (always 'user' role).
+    """Register a local user or claim a trusted extension invitation.
 
-    The first admin is created explicitly through /initialize. This endpoint creates regular users.
-    Auto-login by setting the session cookie.
-
-    Returns 403 when ``auth.local.allow_registration`` is false.
+    The first admin is created explicitly through /initialize. Invite-only
+    deployments may create a regular account when exactly one loaded
+    extension accepts its email-bound, one-time invitation token.
     """
-    if not _local_registration_enabled():
+    invitation_handler = None
+    email = str(body.email).strip().lower()
+    if body.invitation_token:
+        extensions = getattr(request.app.state, "extensions", None)
+        handlers = getattr(extensions, "account_invitation_claim_handlers", ())
+        matches = []
+        for _source, handler in handlers:
+            try:
+                if await handler.is_claimable(email=email, token=body.invitation_token):
+                    matches.append(handler)
+            except Exception as exc:  # noqa: BLE001 - never log the supplied token or address
+                logger.warning("Account invitation validation failed (%s)", type(exc).__name__)
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=AuthErrorResponse(
+                        code=AuthErrorCode.INVITATION_SERVICE_UNAVAILABLE,
+                        message="Invitation verification is temporarily unavailable",
+                    ).model_dump(),
+                    headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+                ) from None
+        if len(matches) != 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=AuthErrorResponse(
+                    code=AuthErrorCode.INVITATION_INVALID,
+                    message="Invitation is invalid or expired",
+                ).model_dump(),
+                headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+            )
+        invitation_handler = matches[0]
+    elif not _local_registration_enabled():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=AuthErrorResponse(code=AuthErrorCode.REGISTRATION_DISABLED, message="Self-registration is disabled on this deployment").model_dump(),
+            detail=AuthErrorResponse(
+                code=AuthErrorCode.REGISTRATION_DISABLED,
+                message="Self-registration is disabled on this deployment",
+            ).model_dump(),
         )
 
+    created = True
     try:
-        user = await get_local_provider().create_user(email=body.email, password=body.password, system_role="user")
+        user = await get_local_provider().create_user(email=email, password=body.password, system_role="user")
     except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=AuthErrorResponse(code=AuthErrorCode.EMAIL_ALREADY_EXISTS, message="Email already registered").model_dump(),
-        )
+        if invitation_handler is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=AuthErrorResponse(
+                    code=AuthErrorCode.EMAIL_ALREADY_EXISTS,
+                    message="Email already registered",
+                ).model_dump(),
+            ) from None
+        # Retry after account creation but before invitation binding proves
+        # control of the existing account before completing the same claim.
+        user = await get_local_provider().authenticate({"email": email, "password": body.password})
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=AuthErrorResponse(
+                    code=AuthErrorCode.INVITATION_OR_CREDENTIALS_INVALID,
+                    message="Invitation or account credentials are invalid",
+                ).model_dump(),
+                headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+            ) from None
+        created = False
 
+    if invitation_handler is not None:
+        try:
+            claimed = await invitation_handler.claim(
+                email=email,
+                user_id=str(user.id),
+                token=body.invitation_token or "",
+            )
+        except Exception as exc:  # noqa: BLE001 - do not expose extension or token details
+            logger.warning("Account invitation claim failed (%s)", type(exc).__name__)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=AuthErrorResponse(
+                    code=AuthErrorCode.INVITATION_CLAIM_UNAVAILABLE,
+                    message="Invitation could not be completed; retry with the same code",
+                ).model_dump(),
+                headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+            ) from None
+        if not claimed:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=AuthErrorResponse(
+                    code=AuthErrorCode.INVITATION_INVALID,
+                    message="Invitation is invalid, expired, or already claimed",
+                ).model_dump(),
+                headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+            )
+
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
     token = create_access_token(str(user.id), token_version=user.token_version)
     _set_session_cookie(response, token, request, remember_me=body.remember_me)
 
@@ -492,6 +845,30 @@ async def logout(request: Request, response: Response):
     response.delete_cookie(key=SESSION_PERSISTENCE_COOKIE_NAME, secure=is_https, samesite="lax")
     setattr(request.state, SKIP_AUTH_CSRF_COOKIE_STATE_ATTR, True)
     return MessageResponse(message="Successfully logged out")
+
+
+@router.post("/sessions/revoke-all", response_model=MessageResponse)
+async def revoke_all_sessions(request: Request, response: Response):
+    """Invalidate every current account session and clear this browser session."""
+    from app.gateway.auth_disabled import AUTH_SOURCE_SESSION
+
+    if getattr(request.state, "auth_source", None) != AUTH_SOURCE_SESSION:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Session revocation requires an interactive account session",
+        )
+
+    user = await get_current_user_from_request(request)
+    user.token_version += 1
+    await get_local_provider().update_user(user)
+
+    is_https = is_secure_request(request)
+    response.delete_cookie(key=ACCESS_TOKEN_COOKIE_NAME, secure=is_https, samesite="lax")
+    response.delete_cookie(key=CSRF_COOKIE_NAME, secure=is_https, samesite="strict")
+    response.delete_cookie(key=SESSION_PERSISTENCE_COOKIE_NAME, secure=is_https, samesite="lax")
+    setattr(request.state, SKIP_AUTH_CSRF_COOKIE_STATE_ATTR, True)
+    response.headers["Cache-Control"] = "no-store"
+    return MessageResponse(message="All account sessions have been revoked")
 
 
 @router.post("/change-password", response_model=MessageResponse)

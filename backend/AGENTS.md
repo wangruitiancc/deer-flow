@@ -10,138 +10,7 @@ DeerFlow is a LangGraph-based AI super agent system with a full-stack architectu
 - **Nginx** (port 2026): Unified reverse proxy entry point
 - **Provisioner** (port 8002, optional in Docker dev): Started only when sandbox is configured for provisioner/Kubernetes mode
 
-**Runtime**:
-- `make dev`, Docker dev, and production all run the agent runtime in Gateway via `RunManager` + `run_agent()` + `StreamBridge` (`packages/harness/deerflow/runtime/`). Nginx exposes that runtime at `/api/langgraph/*` and rewrites it to Gateway's native `/api/*` routers.
-- Gateway streams `write_file` and `str_replace` argument deltas in bounded batches for multi-mode `messages-tuple` consumers; single-mode message consumers retain the original per-chunk contract. Non-message frames flush pending batches, and `values` remains an optional complete-state snapshot rather than a prerequisite for batching.
-- With `stream_subgraphs`, subgraph frames keep their namespace in the SSE event name (`values|<ns>`, LangGraph Platform style) instead of impersonating root frames — a delegated subagent inherits the parent checkpoint namespace, so publishing its `values` snapshot as bare `values` replaces the whole thread view in SDK clients (#4399). Root-only consumers (file-tool chunk batcher, subagent event persistence, LLM error-fallback detection) ignore namespaced frames. The web frontend does not request subgraph streaming; subtask progress rides root-namespace `task_*` custom events.
-- Background subagent identity is deliberately split: the provider `tool_call_id` remains the correlation key for `ToolMessage`, `task_*` SSE events, persisted lifecycle events, frontend cards, and the public `ExtensionData.scope_id` contract (stored as `SubagentResult.external_task_id`), while `SubagentExecutor.execute_async()` generates a full server-side `execution_id` for `SubagentResult.task_id`, the process-wide registry, polling, cancellation, timeout handling, and cleanup. Provider IDs are not globally unique across parent runs, so they must never become registry ownership keys; scheduler closures retain their own `SubagentResult` rather than resolving ownership again through the mutable registry. Terminal subagent token usage travels in the current run's `ToolMessage.additional_kwargs` and is attributed from message state, never through a process-global provider-ID cache.
-- Scheduled-task executions must reuse that same Gateway run lifecycle. The scheduler may decide *when* work runs, but it must dispatch through the existing run path rather than introducing a parallel execution stack. Scheduled launches pass `scheduler.recursion_limit` (default 1000, matching the web UI's `recursion_limit: 1000`, clamped by `max_recursion_limit`) via `launch_scheduled_thread_run`; the value is read from `get_app_config()` at dispatch.
-- The background scheduler is single-instance by default. `scheduler.multi_instance=true` opts into lease-aware recovery across Gateway instances and requires shared Postgres, `run_ownership.heartbeat_enabled=true`, and `run_events.backend=db`; otherwise startup rejects the configuration. Live scheduled runs are preserved when a peer starts; expired launch claims return to the durable queue, expired run leases are atomically taken over, stale launch writes are fenced by lease ownership, and the Postgres advisory-locked budget makes `max_concurrent_runs` a shared global cap for `launching`/`running` rows.
-- Long-running MCP work uses a separate durable task runtime (`McpTaskService` + `mcp_tasks`, lease-based recovery) rather than keeping remote task IDs or status polling inside the Agent loop; only submit remains Agent-visible, the database is the source of truth, and `ThreadState` receives only a bounded current-thread projection. Full contract (leases, cancellation fencing, delivery idempotency, management-tool exposure): [packages/harness/deerflow/mcp/AGENTS.md](packages/harness/deerflow/mcp/AGENTS.md).
-- MCP task notification retries, dead-lettering, and the cancel endpoint's worker-stopped 503 are part of that same contract — see [packages/harness/deerflow/mcp/AGENTS.md](packages/harness/deerflow/mcp/AGENTS.md).
-- Scheduled-task dispatch enforces at most one non-terminal occurrence per task through `uq_scheduled_task_run_active` (`task_id WHERE status IN ('queued','launching','running')`). `queued` is durable and survives restart; `launching` carries a short owner/expiry lease and is the only state that may call the normal Gateway launch path; `running` is associated with the durable run. Each occurrence also supplies a stable run-admission idempotency key, so a recovered launch retry reuses the same durable run. A reused-thread `ConflictError` moves `launching` back to `queued`, while non-conflict launch errors become terminal `failed`. Waiting rows do not consume `max_concurrent_runs`; the atomic queue claim enforces the budget. Repeated triggers coalesce on the one active row, and same-thread FIFO treats older `queued`, `launching`, and `running` rows as blockers. The task definition stays immutable for all three active states because queue admission, PATCH/resume, pause, and delete serialize on the parent task row before touching the occurrence row. Pause/delete atomically interrupt existing `queued` rows and reject `launching`/`running` rows; PATCH/resume reject every active state, and mutation errors advertise pause cancellation only for `queued` work. A manual trigger may queue and run while the parent schedule remains paused. Recovery and multi-instance reconciliation lock task/run pairs in deterministic task-id/run-id order and must reconstruct `run_id`, `started_at`, and the live error state before releasing the short launch claim. Launch/failure/timeout bookkeeping changes the occurrence and its parent task in one parent-first transaction so a peer cannot claim the released task between those writes. Queue timeout marks the occurrence failed and advances a scheduled occurrence so it cannot immediately requeue forever; repository write boundaries coerce serialized task timestamps before binding SQL `DateTime` fields.
-- `extensions_config.json` is written at runtime by the Gateway (`PUT`/`PATCH /api/mcp/config`, the MCP enable switch, skill updates), so the production compose mounts it read-write while `config.yaml` stays `:ro`; Helm copies its ConfigMap seed into a writable home-volume directory before Gateway starts. Every read-modify-write holds both `extensions_config_write_lock` and the sidecar advisory `extensions_config_file_lock`, because the process-local lock alone loses updates across workers. Docker mounts the compose file as its own mount point, and Linux refuses `rename()` over a mount point with `EBUSY` even when the mount is writable — so `atomic_write_extensions_config` keeps the temp-file-plus-rename path and falls back to an in-place overwrite only on `EBUSY`. That fallback is deliberately non-atomic (a crash mid-write truncates the file); it exists because the alternative is a write that can never succeed, and only its first occurrence per target is logged at warning level. Any other `errno` still propagates. Pinned by `tests/test_compose_extensions_config_writable.py`, `tests/test_extensions_config_atomic_write.py`, and `tests/test_helm_extensions_config_writable.py`.
-
-**Project Structure**:
-```
-deer-flow/
-├── Makefile                    # Root commands (check, install, dev, stop)
-├── config.yaml                 # Main application configuration
-├── extensions_config.json      # MCP servers and skills configuration
-├── backend/                    # Backend application (this directory)
-│   ├── Makefile               # Backend-only commands (dev, gateway, lint)
-│   ├── langgraph.json         # LangGraph Studio graph configuration
-│   ├── packages/
-│   │   ├── extension-api/     # public, host-independent extension contracts (import: deerflow_extension_api.*)
-│   │   └── harness/           # deerflow-harness package (import: deerflow.*)
-│   │       ├── pyproject.toml
-│   │       └── deerflow/
-│   │           ├── agents/            # LangGraph agent system
-│   │           │   ├── lead_agent/    # Main agent (factory + system prompt)
-│   │           │   ├── middlewares/   # middleware components (see Middleware Chain section)
-│   │           │   ├── memory/        # Memory extraction, queue, prompts
-│   │           │   └── thread_state.py # ThreadState schema
-│   │           ├── sandbox/           # Sandbox execution system
-│   │           │   ├── local/         # Local filesystem provider
-│   │           │   ├── sandbox.py     # Abstract Sandbox interface
-│   │           │   ├── tools.py       # bash, ls, read/write/str_replace
-│   │           │   └── middleware.py  # Sandbox lifecycle management
-│   │           ├── subagents/         # Subagent delegation system
-│   │           │   ├── builtins/      # general-purpose, bash agents
-│   │           │   ├── executor.py    # Background execution engine
-│   │           │   └── registry.py    # Agent registry
-│   │           ├── tools/builtins/    # Built-in tools (present_files, ask_clarification, view_image, review_skill_package)
-│   │           ├── mcp/               # MCP integration (tools, cache, client)
-│   │           ├── integrations/      # Managed first-party integration installers (e.g. Lark CLI skill pack)
-│   │           ├── extensions/        # Python plugin loader, registry, placement, and isolation
-│   │           ├── models/            # Model factory with thinking/vision support
-│   │           ├── skills/            # Skills discovery, loading, parsing
-│   │           ├── config/            # Configuration system (app, model, sandbox, tool, etc.)
-│   │           ├── community/         # Community tools (search/fetch/scrape, image search, AIO sandbox)
-│   │           ├── reflection/        # Dynamic module loading (resolve_variable, resolve_class)
-│   │           ├── utils/             # Utilities (network, readability)
-│   │           └── client.py          # Embedded Python client (DeerFlowClient)
-│   ├── app/                   # Application layer (import: app.*)
-│   │   ├── gateway/           # FastAPI Gateway API
-│   │   │   ├── app.py         # FastAPI application
-│   │   │   └── routers/       # FastAPI route modules (models, mcp, memory, skills, uploads, threads, artifacts, agents, suggestions, channels)
-│   │   └── channels/          # IM platform integrations
-│   ├── scripts/benchmark/       # Standalone reproducible backend benchmarks
-│   ├── tests/                 # Test suite
-│   └── docs/                  # Documentation
-├── frontend/                   # Next.js frontend application
-└── skills/                     # Agent skills directory
-    ├── public/                # Public skills (committed)
-    └── custom/                # Custom skills (gitignored)
-```
-
-## Important Development Guidelines
-
-### Documentation Update Policy
-**CRITICAL: Always update README.md and AGENTS.md after every code change**
-
-When making code changes, you MUST update the relevant documentation:
-- Update `README.md` for user-facing changes (features, setup, usage instructions)
-- Update `AGENTS.md` for development changes (architecture, commands, workflows, internal systems). `CLAUDE.md` imports it via `@AGENTS.md`, so editing `AGENTS.md` updates both.
-- Keep documentation synchronized with the codebase at all times
-- Ensure accuracy and timeliness of all documentation
-
-### Backend Benchmarks
-
-`scripts/benchmark/` contains standalone, reproducible measurements and
-evaluations of production backend behavior. A benchmark may import the
-production function it measures, but it must not duplicate or introduce an
-alternative runtime implementation.
-
-- Pin every external dataset by immutable revision and SHA-256. Callers provide
-  the local dataset path; evaluation commands must not silently download data.
-- Never commit upstream dataset text, credentials, complete provider requests,
-  or response headers. Committed manifests may contain stable IDs and source
-  locators. Synthetic cases must identify themselves as synthetic.
-- Read provider credentials and endpoints from named environment variables.
-  Version model IDs, inference parameters, prompts, retry rules, clocks, and
-  random seeds in the evaluation config.
-- Public raw results may contain case IDs, policy decisions, model hypotheses,
-  grades, and non-secret response metadata. Keep dataset questions, reference
-  answers, memory content, and full provider payloads in ignored local run
-  directories.
-- Use fixed clocks and deterministic ordering for offline selection. Results
-  must record the config, manifest, prompt, dataset, and git revisions used.
-
-`scripts/benchmark/deermem_eviction/` evaluates the production
-`select_facts_for_capacity()` implementation used by DeerMem. It compares only
-the historical `confidence` policy and PR #4789's opt-in `hybrid-v1`; do not add
-another eviction strategy to this evaluation. Run its offline checks from
-`backend/`:
-
-```bash
-PYTHONPATH=. uv run python -m scripts.benchmark.deermem_eviction validate-contracts
-PYTHONPATH=. uv run python -m scripts.benchmark.deermem_eviction validate --dataset "$LONGMEMEVAL_ORACLE_PATH"
-PYTHONPATH=. uv run python -m scripts.benchmark.deermem_eviction run-policy \
-  --dataset "$LONGMEMEVAL_ORACLE_PATH" \
-  --output-dir /tmp/deermem-eviction-policy-run
-PYTHONPATH=. uv run pytest tests/test_bench_deermem_eviction_*.py -q
-```
-
-The offline test suite must not require network access, provider credentials,
-or the LongMemEval dataset. Small LongMemEval-shaped fixtures must be synthetic
-and generated by tests.
-
-`scripts/benchmark/concurrency/` measures multi-process contention on the
-`users` table (N separate OS processes, not asyncio tasks) for SQLite vs
-Postgres -- the scenario `CONFIGURATION.md` requires Postgres for. `worker.py`
-connects directly via SQLAlchemy (skipping the ~8.5s Alembic bootstrap the
-orchestrator already ran once) and mirrors the app's per-connection SQLite
-PRAGMAs; `run_concurrency_bench.py` seeds a disposable per-run Postgres schema,
-synchronises workers on a READY/GO barrier before timing, and exits non-zero on
-any crash, short op count, or `errors > 0`. Postgres runs need a throwaway
-database via `--pg-url`; nothing here touches `public`. Run from `backend/`:
-
-```bash
-uv run python scripts/benchmark/concurrency/run_concurrency_bench.py \
-  --backend sqlite --workers 2,4,8,16 --ops-per-worker 50 --read-ratio 0.7
-uv run pytest tests/test_bench_concurrency.py tests/test_bench_worker.py -q
-```
+**Runtime**: Before changing runtime, persistence, scheduling, MCP or authentication, read [the shared runtime invariants](runtime-guidance.md) and the owning module guide.
 
 ## Commands
 
@@ -185,12 +54,41 @@ More specific `AGENTS.md` files in backend code directories contain the subsyste
 
 ## Architecture
 
+Matrix Law's managed snapshot mirrors the sibling canonical project; see
+[extensions guidance](packages/harness/deerflow/extensions/AGENTS.md#managed-matrix-law-snapshot)
+and its package README for identity, RLS, citation, provenance and deployment boundaries.
+Graph enforcement requires the configured `LawEnforcementMiddleware` (see linked guide),
+not an observational plugin wrapper, and the optional host `read_output_text` capability;
+the legal extension owns validation, not the generic Agent. No new file/Agent workflow.
+Refresh installed snapshots with `uv sync --locked --extra postgres --reinstall-package matrix-law-extension`.
+
 ### Harness / App Split
 
 The backend is split into two layers with a strict dependency direction:
 
 - **Harness** (`packages/harness/deerflow/`): Publishable agent framework package (`deerflow-harness`). Import prefix: `deerflow.*`. Contains agent orchestration, tools, sandbox, models, MCP, skills, config — everything needed to build and run agents.
 - **App** (`app/`): Unpublished application code. Import prefix: `app.*`. Contains the FastAPI Gateway API and IM channel integrations (Feishu, Slack, Telegram, DingTalk).
+
+The public extension API also exposes opt-in `ControlledModelRuntime` and
+`ControlledMcpRuntime` bindings for verticals that need task-scoped capability
+Gateway access. A trusted task-admission hook owns the concrete signer and may
+bind it only for a live task; the harness routes fixed-purpose model and managed
+MCP calls through it without importing the vertical extension or serializing
+credentials. When managed MCP is bound, local `extensions_config.json` MCP
+discovery is skipped for that task. Durable managed MCP tools use the normal
+`McpTaskService`/driver path: the model receives only a local task id, while
+remote job refs and runtime references stay server-side and fail closed after
+process loss unless the vertical extension supplies a recoverable resolver. A
+missing binding is not a permissive fallback, and embedded/CLI callers remain
+outside that authority until they add their own trusted admission path.
+
+For the Matrix Law product only, an enabled controlled-model admission may
+accept a model name that is absent from DeerFlow's static model list because
+the name comes from the capability-server catalog. This exception is limited
+to the single trusted legal admission; ordinary DeerFlow deployments and legal
+deployments without controlled models retain the static allowlist. Task
+admission and the capability Gateway still fail closed on tenant, member,
+deployment, policy, and catalog authorization before model construction.
 
 **Dependency rule**: App imports deerflow, but deerflow never imports app. This boundary is enforced by `tests/test_harness_boundary.py` which runs in CI.
 
@@ -365,6 +263,26 @@ For models with `supports_vision: true`:
 - `view_image_tool` added to agent's toolset
 - Images are converted to base64 and appended to the model request as a hidden message carrying both a reserved ID prefix and a server-owned metadata marker; Gateway strips that marker from untrusted input, and the middleware requires both identifiers to recognize its own message. The middleware injects inside `wrap_model_call`, so the payload never enters graph state: checkpoints retain only lightweight `viewed_images` metadata, while client-chosen IDs survive. It also sweeps its own message out of every request before rebuilding it, so a payload stranded in an older checkpoint by an interrupted run stops being resent
 
+### Password Recovery
+
+Local-account recovery is optional and remains disabled unless SMTP host, sender,
+and a fixed HTTPS public base URL are configured. The reset-only token is
+short-lived, read from a URL fragment by the frontend, and consumed through an
+atomic user-version update. OAuth-only accounts are not reset through local
+password recovery. Read [PASSWORD_RESET.md](docs/PASSWORD_RESET.md) before
+changing this flow; production multi-worker deployments also need a shared edge
+rate limit.
+
+Local Gateway administrator MFA is implemented in `auth/mfa.py` and
+`routers/auth.py`, with persistence in migration `0020_admin_mfa`. It is
+opt-in through `AUTH_MFA_REQUIRED_FOR_ADMINS`; the Matrix Law candidate enables
+it explicitly. It covers local password admins only. Do not imply OIDC or
+capability-platform admins are covered. Keep the 32-byte
+`AUTH_MFA_ENCRYPTION_KEY` in the tenant secret store and consistent across
+workers. MFA has no supported audited reset command yet; production rollout
+remains blocked on a rehearsed recovery and key-rotation procedure. See
+`docs/ADMIN_MFA.md`.
+
 ## Code Style
 
 - Uses `ruff` for linting and formatting
@@ -379,7 +297,13 @@ See `docs/` directory for detailed documentation:
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) - Architecture details
 - [API.md](docs/API.md) - API reference
 - [SETUP.md](docs/SETUP.md) - Setup guide
+- [PASSWORD_RESET.md](docs/PASSWORD_RESET.md) - Password recovery configuration and API
+- [ADMIN_MFA.md](docs/ADMIN_MFA.md) - Local Gateway administrator MFA, secret-key handling, scope, and recovery limits
 - [FILE_UPLOAD.md](docs/FILE_UPLOAD.md) - File upload feature
 - [PATH_EXAMPLES.md](docs/PATH_EXAMPLES.md) - Path types and usage
 - [summarization.md](docs/summarization.md) - Context summarization
 - [plan_mode_usage.md](docs/plan_mode_usage.md) - Plan mode with TodoList
+
+### Matrix Law W19 Gateway process-crash recovery smoke
+
+From backend/, run .venv/bin/python tests/w19_gateway_process_crash_recovery.py to verify that a persisted synthetic run is reconciled after one real Uvicorn Gateway process is killed and a fresh process starts against the same disposable SQLite state. This is a narrow local recovery check only; it does not establish PostgreSQL/Redis/object-store recovery, multi-host availability, or production stability. It uses no provider credentials or legal case data.
