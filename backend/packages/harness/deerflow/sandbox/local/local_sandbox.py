@@ -212,7 +212,7 @@ class LocalSandbox(Sandbox):
         except OSError:
             return False
 
-    def __init__(self, id: str, path_mappings: list[PathMapping] | None = None):
+    def __init__(self, id: str, path_mappings: list[PathMapping] | None = None, *, directory_user_id: str | None = None):
         """
         Initialize local sandbox with optional path mappings.
 
@@ -223,6 +223,7 @@ class LocalSandbox(Sandbox):
         """
         super().__init__(id)
         self.path_mappings = path_mappings or []
+        self._directory_user_id = directory_user_id
         # Track files written through write_file so read_file only
         # reverse-resolves paths in agent-authored content.
         self._agent_written_paths: set[str] = set()
@@ -318,10 +319,17 @@ class LocalSandbox(Sandbox):
         Returns:
             Resolved local path and the matched mapping, if any
         """
+        if self._directory_user_id is not None:
+            from deerflow.runtime.user_context import require_current_user
+
+            if str(require_current_user().id) != self._directory_user_id:
+                raise PermissionError("directory_sandbox_user_mismatch")
         path_str = str(path)
 
         mapping_match = self._find_path_mapping(path_str)
         if mapping_match is None:
+            if self._directory_user_id is not None:
+                raise PermissionError(errno.EACCES, "Access denied: unmapped directory path", path_str)
             return ResolvedPath(path_str, None)
 
         mapping, relative = mapping_match
@@ -490,6 +498,8 @@ class LocalSandbox(Sandbox):
         # which DOES splice keys into ``export <k>=<v>``. Enforcing the same
         # rule on both implementations keeps the contract consistent and forces
         # any new caller to use safe key names.
+        if self._directory_user_id is not None:
+            raise PermissionError("directory_sandbox_commands_disabled")
         _validate_extra_env(env)
         # Resolve container paths in command before execution
         resolved_command = self._resolve_paths_in_command(command)

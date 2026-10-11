@@ -42,4 +42,4 @@ def is_host_bash_allowed(config=None) -> bool:
         return False
     if not uses_local_sandbox_provider(config):
         return True
-    return bool(getattr(sandbox_cfg, "allow_host_bash", False))
+    return not bool(getattr(sandbox_cfg, "directory_isolation", False)) and bool(getattr(sandbox_cfg, "allow_host_bash", False))

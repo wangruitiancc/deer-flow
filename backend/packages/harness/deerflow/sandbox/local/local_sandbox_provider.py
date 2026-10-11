@@ -91,6 +91,17 @@ class LocalSandboxProvider(SandboxProvider):
                 the LRU cache. When exceeded, the least-recently-used entry is
                 evicted on the next ``acquire``.
         """
+        from deerflow.config import get_app_config
+
+        try:
+            sandbox_config = get_app_config().sandbox
+        except Exception:
+            # Preserve legacy config-free CLI/test use. Native startup validates
+            # a readable strict profile before constructing this provider.
+            sandbox_config = None
+        self._directory_isolation = bool(getattr(sandbox_config, "directory_isolation", False))
+        if self._directory_isolation and (sandbox_config.allow_host_bash or sandbox_config.mounts or sandbox_config.environment or sandbox_config.image):
+            raise ValueError("directory_sandbox_unsafe_configuration")
         self._skills_container_path = DEFAULT_SKILLS_CONTAINER_PATH
         self._path_mappings = self._setup_path_mappings()
         self._generic_sandbox: LocalSandbox | None = None
@@ -449,6 +460,16 @@ class LocalSandboxProvider(SandboxProvider):
         """
         global _singleton
 
+        if self._directory_isolation:
+            if thread_id is None:
+                raise PermissionError("directory_sandbox_thread_required")
+            from deerflow.runtime.user_context import require_current_user
+
+            authenticated_user_id = str(require_current_user().id)
+            if user_id is not None and user_id != authenticated_user_id:
+                raise PermissionError("directory_sandbox_user_mismatch")
+            user_id = authenticated_user_id
+
         if thread_id is None:
             skill_projection = self._ensure_skills_projection()
             with self._lock:
@@ -500,6 +521,7 @@ class LocalSandboxProvider(SandboxProvider):
                 replacement = LocalSandbox(
                     self._sandbox_id_for_thread(thread_id, effective_user_id),
                     path_mappings=new_mappings,
+                    directory_user_id=effective_user_id if self._directory_isolation else None,
                 )
                 if cached is not None:
                     replacement._agent_written_paths.update(cached._agent_written_paths)
@@ -525,6 +547,12 @@ class LocalSandboxProvider(SandboxProvider):
             )
 
     def get(self, sandbox_id: str) -> Sandbox | None:
+        if self._directory_isolation:
+            from deerflow.runtime.user_context import require_current_user
+
+            key = self._key_from_sandbox_id(sandbox_id) if isinstance(sandbox_id, str) else None
+            if key is None or key[0] != str(require_current_user().id):
+                return None
         if sandbox_id == "local":
             with self._lock:
                 generic = self._generic_sandbox

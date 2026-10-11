@@ -15,7 +15,7 @@
 # ============================================================================
 # Bump this number when the config schema changes.
 # Run `make config-upgrade` to merge new fields into your local config.yaml.
-config_version: 42
+config_version: 43
 
 # ============================================================================
 # Logging
@@ -1330,6 +1330,9 @@ sandbox:
   # not a secure isolation boundary for shell access. Enable only for fully
   # trusted, single-user local workflows.
   allow_host_bash: false
+  # Opt-in file-only user/thread isolation for native managed deployments.
+  # Requires authenticated context; no host commands or custom mounts.
+  directory_isolation: false
   # Optional: Mount additional host directories into the sandbox.
   # Each mount maps a host path to a virtual container path accessible by the agent.
   # Note: with LocalSandboxProvider under `make up` (docker-compose), host_path is

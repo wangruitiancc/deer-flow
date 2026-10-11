@@ -114,6 +114,10 @@ class SandboxConfig(BaseModel):
         default=False,
         description="Allow the bash tool to execute directly on the host when using LocalSandboxProvider. Dangerous; intended only for fully trusted local environments.",
     )
+    directory_isolation: bool = Field(
+        default=False,
+        description="Restrict local file tools to authenticated user/thread mappings; deny generic sandboxes, unmapped paths and host commands. Requires empty mounts/environment and no image.",
+    )
     image: str | None = Field(
         default=None,
         description="Sandbox image to use (Docker/AIO, BoxLite OCI, or OpenSandbox image)",
