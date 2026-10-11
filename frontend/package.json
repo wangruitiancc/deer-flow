@@ -17,6 +17,8 @@
     "start": "next start",
     "test": "rstest",
     "test:e2e": "playwright test",
+    "test:e2e:speech-matrix": "playwright test -c playwright.speech-capture-matrix.config.ts",
+    "test:e2e:speech-live-api": "playwright test -c playwright.speech-live-api.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

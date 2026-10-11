@@ -60,6 +60,8 @@ import {
   createMatterSpeechTranscription,
   cancelMatterSpeechTranscription,
   reviewMatterSpeechTranscription,
+  listMatterSpeechCitations,
+  createMatterSpeechCitation,
   listLegalAuthorities,
   captureLegalAuthority,
   refreshLegalAuthority,
@@ -85,6 +87,7 @@ import {
   transitionOcrWorkflow,
   uploadEvidence,
 } from "./api";
+import { publishLawMatterAccessRevoked } from "./speech-capture-access-events";
 import type {
   CreateCitationInput,
   DecideMatterMemoryInput,
@@ -114,6 +117,8 @@ import type {
   SpeechTranscriptionCollection,
   SpeechTranscriptionDetail,
   ReviewSpeechTranscriptInput,
+  SpeechTranscriptCitation,
+  CreateSpeechTranscriptCitationInput,
   LegalAuthorityCollection,
   LegalAuthorityVersionSummary,
   LegalAuthorityVersionContent,
@@ -224,6 +229,8 @@ const lawKeys = {
     ["law", "speech-transcriptions", tenantId, matterId] as const,
   speechTranscription: (tenantId: string, matterId: string, taskId: string) =>
     ["law", "speech-transcription", tenantId, matterId, taskId] as const,
+  speechCitations: (tenantId: string, matterId: string, taskId: string) =>
+    ["law", "speech-citations", tenantId, matterId, taskId] as const,
   authorities: (tenantId: string, matterId: string) =>
     ["law", "matter-authorities", tenantId, matterId] as const,
   evidence: (tenantId: string, matterId: string) =>
@@ -411,12 +418,13 @@ export function useLawMatter(tenantId: string | null, matterId: string | null) {
 export function useLawCaseWorkbench(
   tenantId: string | null,
   matterId: string | null,
+  enabled = true,
 ) {
   return useQuery<CaseWorkbenchOverview>({
     queryKey: lawKeys.caseWorkbench(tenantId ?? "", matterId ?? ""),
     queryFn: ({ signal }) =>
       getCaseWorkbenchOverview(tenantId!, matterId!, signal),
-    enabled: Boolean(tenantId && matterId),
+    enabled: Boolean(tenantId && matterId && enabled),
     retry: false,
     refetchOnWindowFocus: true,
     refetchInterval: () =>
@@ -502,6 +510,7 @@ export function useLawCaseWorkbenchEvents(
             }
             if (eventName === "revoked") {
               revoked = true;
+              publishLawMatterAccessRevoked(tenantId, matterId);
               await clearMatterQueries();
               controller.abort();
               return;
@@ -530,6 +539,7 @@ export function useLawCaseWorkbenchEvents(
           (error.status === 403 || error.status === 404)
         ) {
           revoked = true;
+          publishLawMatterAccessRevoked(tenantId, matterId);
           await clearMatterQueries();
           return;
         }
@@ -1047,6 +1057,31 @@ export function useReviewLawSpeechTranscription(
           ),
         }),
       ]),
+  });
+}
+
+export function useLawSpeechCitations(
+  tenantId: string,
+  matterId: string,
+  taskId: string | null,
+) {
+  return useQuery<SpeechTranscriptCitation[]>({
+    queryKey: lawKeys.speechCitations(tenantId, matterId, taskId ?? ""),
+    queryFn: ({ signal }) => listMatterSpeechCitations(tenantId, matterId, taskId!, signal),
+    enabled: Boolean(taskId),
+    retry: false,
+  });
+}
+
+export function useCreateLawSpeechCitation(tenantId: string, matterId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ taskId, input }: { taskId: string; input: CreateSpeechTranscriptCitationInput }) =>
+      createMatterSpeechCitation(tenantId, matterId, taskId, input),
+    onSuccess: async (_citation, variables) =>
+      queryClient.invalidateQueries({
+        queryKey: lawKeys.speechCitations(tenantId, matterId, variables.taskId),
+      }),
   });
 }
 

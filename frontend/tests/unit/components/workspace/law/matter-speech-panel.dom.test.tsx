@@ -15,10 +15,14 @@ rs.mock("@/core/law", () => ({
   getMatterSpeechCapture: rs.fn(),
   uploadMatterSpeechCaptureChunk: rs.fn(),
   useCancelLawSpeechTranscription: rs.fn(),
+  useCreateLawSpeechCitation: rs.fn(),
   useCreateLawSpeechTranscription: rs.fn(),
   useLawEvidence: rs.fn(),
   useLawEvidenceVersions: rs.fn(),
+  useLawCaseWorkbench: rs.fn(() => ({ data: undefined })),
+  useLawCaseWorkbenchEvents: rs.fn(),
   useLawSpeechTranscription: rs.fn(),
+  useLawSpeechCitations: rs.fn(),
   useLawSpeechTranscriptions: rs.fn(),
   useReviewLawSpeechTranscription: rs.fn(),
   useUploadLawEvidence: rs.fn(),
@@ -32,10 +36,12 @@ import {
   getMatterSpeechCapture,
   uploadMatterSpeechCaptureChunk,
   useCancelLawSpeechTranscription,
+  useCreateLawSpeechCitation,
   useCreateLawSpeechTranscription,
   useLawEvidence,
   useLawEvidenceVersions,
   useLawSpeechTranscription,
+  useLawSpeechCitations,
   useLawSpeechTranscriptions,
   useReviewLawSpeechTranscription,
   useUploadLawEvidence,
@@ -104,48 +110,7 @@ let available = false;
 let evidenceItems: EvidenceItem[] = [];
 let liveCaptureAvailable = false;
 let liveCaptureTypes: string[] = [];
-let recorderConstructor: typeof MediaRecorder | undefined;
-let mediaDevicesDescriptor: PropertyDescriptor | undefined;
-
-class TestMediaRecorder extends EventTarget {
-  static isTypeSupported = (type: string) => type === "audio/webm";
-  state: RecordingState = "inactive";
-  mimeType = "audio/webm";
-
-  constructor(_stream: MediaStream, _options?: MediaRecorderOptions) {
-    super();
-  }
-
-  start() {
-    this.state = "recording";
-  }
-
-  pause() {
-    this.state = "paused";
-  }
-
-  resume() {
-    this.state = "recording";
-  }
-
-  stop() {
-    if (this.state === "inactive") return;
-    const dataEvent = Object.assign(new Event("dataavailable"), {
-      data: new Blob(["synthetic live audio"], { type: "audio/webm" }),
-    });
-    this.dispatchEvent(dataEvent);
-    this.state = "inactive";
-    this.dispatchEvent(new Event("stop"));
-  }
-}
-
 beforeEach(() => {
-  recorderConstructor = Object.getOwnPropertyDescriptor(window, "MediaRecorder")
-    ?.value as typeof MediaRecorder | undefined;
-  mediaDevicesDescriptor = Object.getOwnPropertyDescriptor(
-    navigator,
-    "mediaDevices",
-  );
   available = false;
   liveCaptureAvailable = false;
   liveCaptureTypes = [];
@@ -178,6 +143,13 @@ beforeEach(() => {
     data: undefined,
     isError: false,
   } as unknown as ReturnType<typeof useLawSpeechTranscription>);
+  rs.mocked(useLawSpeechCitations).mockReturnValue({
+    data: [],
+  } as unknown as ReturnType<typeof useLawSpeechCitations>);
+  rs.mocked(useCreateLawSpeechCitation).mockReturnValue({
+    mutateAsync: mutationAsync,
+    isPending: false,
+  } as unknown as ReturnType<typeof useCreateLawSpeechCitation>);
   rs.mocked(useCreateLawSpeechTranscription).mockReturnValue({
     mutateAsync: mutationAsync,
     isPending: false,
@@ -207,6 +179,12 @@ beforeEach(() => {
     title: "合成实时录音",
     original_filename: "live-recording.webm",
     media_type: "audio/webm",
+    capture_protocol: "pcm_s16le_v1",
+    total_samples: 0,
+    final_sequence_number: null,
+    final_total_samples: null,
+    preview_revision: 0,
+    transcription_task_id: null,
     status: "open",
     next_sequence_number: 0,
     total_byte_size: 0,
@@ -236,6 +214,12 @@ beforeEach(() => {
     title: "合成实时录音",
     original_filename: "live-recording.webm",
     media_type: "audio/webm",
+    capture_protocol: "pcm_s16le_v1",
+    total_samples: 0,
+    final_sequence_number: null,
+    final_total_samples: null,
+    preview_revision: 0,
+    transcription_task_id: null,
     status: "completed",
     next_sequence_number: 1,
     total_byte_size: 19,
@@ -258,6 +242,12 @@ beforeEach(() => {
     title: "合成实时录音",
     original_filename: "live-recording.webm",
     media_type: "audio/webm",
+    capture_protocol: "pcm_s16le_v1",
+    total_samples: 0,
+    final_sequence_number: null,
+    final_total_samples: null,
+    preview_revision: 0,
+    transcription_task_id: null,
     status: "open",
     next_sequence_number: 0,
     total_byte_size: 0,
@@ -278,6 +268,12 @@ beforeEach(() => {
     title: "合成实时录音",
     original_filename: "live-recording.webm",
     media_type: "audio/webm",
+    capture_protocol: "pcm_s16le_v1",
+    total_samples: 0,
+    final_sequence_number: null,
+    final_total_samples: null,
+    preview_revision: 0,
+    transcription_task_id: null,
     status: "cancelled",
     next_sequence_number: 0,
     total_byte_size: 0,
@@ -294,19 +290,6 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  if (recorderConstructor) {
-    Object.defineProperty(window, "MediaRecorder", {
-      configurable: true,
-      value: recorderConstructor,
-    });
-  } else {
-    Reflect.deleteProperty(window, "MediaRecorder");
-  }
-  if (mediaDevicesDescriptor) {
-    Object.defineProperty(navigator, "mediaDevices", mediaDevicesDescriptor);
-  } else {
-    Reflect.deleteProperty(navigator, "mediaDevices");
-  }
 });
 
 describe("matter speech panel", () => {
@@ -316,6 +299,8 @@ describe("matter speech panel", () => {
         tenantId="tenant-1"
         matterId="matter-1"
         matterRole="owner"
+        userId="user-1"
+        membershipId="member-1"
       />,
     );
 
@@ -348,6 +333,8 @@ describe("matter speech panel", () => {
         tenantId="tenant-1"
         matterId="matter-1"
         matterRole="owner"
+        userId="user-1"
+        membershipId="member-1"
       />,
     );
     fireEvent.change(screen.getByLabelText("已扫描的音视频材料"), {
@@ -366,79 +353,272 @@ describe("matter speech panel", () => {
     );
   });
 
-  it("uploads confirmed microphone chunks, scans the recording, then starts transcription", async () => {
+  it("explains that queued speech work is deferred during a matter data-exit freeze", async () => {
     available = true;
-    liveCaptureAvailable = true;
-    liveCaptureTypes = ["audio/webm"];
-    evidenceItems = [];
-    rs.mocked(useLawEvidence).mockReturnValue({
-      data: evidenceItems,
-      refetch: evidenceRefetch,
-    } as unknown as ReturnType<typeof useLawEvidence>);
+    const deferredTask = {
+      ...task,
+      status: "processing" as const,
+      processing_deferred_reason: "tenant_data_exit_frozen" as const,
+    };
     rs.mocked(useLawSpeechTranscriptions).mockReturnValue({
       data: {
-        items: [],
+        items: [deferredTask],
         transcription_available: true,
-        supported_media_types: ["audio/webm"],
-        live_capture_available: true,
-        live_capture_media_types: ["audio/webm"],
+        supported_media_types: ["audio/wav"],
       },
       isFetching: false,
       isError: false,
       refetch,
     } as unknown as ReturnType<typeof useLawSpeechTranscriptions>);
-    Object.defineProperty(window, "MediaRecorder", {
-      configurable: true,
-      value: TestMediaRecorder,
-    });
-    Object.defineProperty(navigator, "mediaDevices", {
-      configurable: true,
-      value: {
-        getUserMedia: rs.fn(async () => ({
-          getTracks: () => [{ stop: rs.fn() }],
-        })),
-      },
-    });
+    rs.mocked(useLawSpeechTranscription).mockReturnValue({
+      data: { task: deferredTask, versions: [], events: [] },
+      isError: false,
+    } as unknown as ReturnType<typeof useLawSpeechTranscription>);
+
     render(
       <MatterSpeechPanel
         tenantId="tenant-1"
         matterId="matter-1"
         matterRole="owner"
+        userId="user-1"
+        membershipId="member-1"
       />,
     );
 
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: /开始麦克风录音/ }),
-      ).toBeTruthy(),
-    );
-    fireEvent.click(screen.getByRole("button", { name: /开始麦克风录音/ }));
-    await waitFor(() => expect(createMatterSpeechCapture).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole("button", { name: /停止并保存/ }));
+    expect(
+      await screen.findByText(
+        /案件正在进行数据退出冻结，语音识别暂缓；解除冻结后工作进程会自动恢复。/,
+      ),
+    ).toBeTruthy();
+  });
 
+  it("explains that queued speech work is paused when the matter write gate is unavailable", async () => {
+    available = true;
+    const deferredTask = {
+      ...task,
+      status: "processing" as const,
+      processing_deferred_reason: "write_gate_unavailable" as const,
+    };
+    rs.mocked(useLawSpeechTranscriptions).mockReturnValue({
+      data: {
+        items: [deferredTask],
+        transcription_available: true,
+        supported_media_types: ["audio/wav"],
+      },
+      isFetching: false,
+      isError: false,
+      refetch,
+    } as unknown as ReturnType<typeof useLawSpeechTranscriptions>);
+    rs.mocked(useLawSpeechTranscription).mockReturnValue({
+      data: { task: deferredTask, versions: [], events: [] },
+      isError: false,
+    } as unknown as ReturnType<typeof useLawSpeechTranscription>);
+
+    render(
+      <MatterSpeechPanel
+        tenantId="tenant-1"
+        matterId="matter-1"
+        matterRole="owner"
+        userId="user-1"
+        membershipId="member-1"
+      />,
+    );
+
+    expect(
+      await screen.findByText(
+        /当前无法确认案件写入门禁，语音识别已暂停；服务恢复后会重新检查。/,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("shows a terminal explanation when the speech requester loses access during processing", async () => {
+    available = true;
+    const revokedTask = {
+      ...task,
+      status: "failed" as const,
+      error_code: "speech_requester_revoked",
+    };
+    rs.mocked(useLawSpeechTranscriptions).mockReturnValue({
+      data: {
+        items: [revokedTask],
+        transcription_available: true,
+        supported_media_types: ["audio/wav"],
+      },
+      isFetching: false,
+      isError: false,
+      refetch,
+    } as unknown as ReturnType<typeof useLawSpeechTranscriptions>);
+    rs.mocked(useLawSpeechTranscription).mockReturnValue({
+      data: { task: revokedTask, versions: [], events: [] },
+      isError: false,
+    } as unknown as ReturnType<typeof useLawSpeechTranscription>);
+
+    render(
+      <MatterSpeechPanel
+        tenantId="tenant-1"
+        matterId="matter-1"
+        matterRole="owner"
+        userId="user-1"
+        membershipId="member-1"
+      />,
+    );
+
+    expect(
+      await screen.findByText(
+        /本地识别失败（speech_requester_revoked）。请检查模型配置后重试。/,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("preserves a dirty transcript draft across refreshes and exposes a newer version conflict", async () => {
+    available = true;
+    const reviewTask = {
+      ...task,
+      status: "awaiting_review" as const,
+      current_version_number: 1,
+    };
+    const makeVersion = (id: string, versionNumber: number, text: string) => ({
+      id,
+      task_id: reviewTask.id,
+      version_number: versionNumber,
+      origin: "asr" as const,
+      source_sha256: reviewTask.source_sha256,
+      transcript: {
+        schemaVersion: 1,
+        offsetUnit: "utf16" as const,
+        text,
+        durationMs: 2_000,
+        reviewStatus: "unreviewed" as const,
+        approxAlignment: true,
+        warnings: ["合成估算警告"],
+        segments: [
+          {
+            text,
+            charStart: 0,
+            charEnd: text.length,
+            startMs: 0,
+            endMs: 2_000,
+            speakerId: null,
+          },
+        ],
+        speakers: [],
+      },
+      actor_membership_id: "member-1",
+      created_at: "2026-10-03T00:00:00Z",
+    });
+    const firstVersion = makeVersion("speech-version-1", 1, "机器初稿。");
+    let currentDetail = {
+      task: reviewTask,
+      versions: [firstVersion],
+      events: [],
+    };
+    rs.mocked(useLawSpeechTranscriptions).mockReturnValue({
+      data: {
+        items: [reviewTask],
+        transcription_available: true,
+        supported_media_types: ["audio/wav"],
+        live_capture_available: false,
+        live_capture_media_types: [],
+      },
+      isFetching: false,
+      isError: false,
+      refetch,
+    } as unknown as ReturnType<typeof useLawSpeechTranscriptions>);
+    rs.mocked(useLawSpeechTranscription).mockImplementation(
+      () =>
+        ({ data: currentDetail, isError: false }) as unknown as ReturnType<
+          typeof useLawSpeechTranscription
+        >,
+    );
+
+    const props = {
+      tenantId: "tenant-1",
+      matterId: "matter-1",
+      matterRole: "owner" as const,
+      userId: "user-1",
+      membershipId: "member-1",
+    };
+    const view = render(<MatterSpeechPanel {...props} />);
+    const segmentEditor = await screen.findByLabelText("校对片段 1");
+    fireEvent.change(segmentEditor, {
+      target: { value: "尚未保存的律师草稿。" },
+    });
+    expect(screen.getByText(/时间位置为估算值/)).toBeTruthy();
+    expect(screen.getByText(/模型提示：合成估算警告/)).toBeTruthy();
+
+    currentDetail = {
+      ...currentDetail,
+      versions: [
+        { ...firstVersion, transcript: { ...firstVersion.transcript } },
+      ],
+    };
+    view.rerender(<MatterSpeechPanel {...props} />);
     await waitFor(() =>
-      expect(uploadMatterSpeechCaptureChunk).toHaveBeenCalledWith(
-        "tenant-1",
-        "matter-1",
-        "capture-1",
-        0,
-        expect.any(Blob),
-        expect.stringMatching(/^[0-9a-f]{64}$/),
+      expect(screen.getByLabelText("校对片段 1")).toHaveProperty(
+        "value",
+        "尚未保存的律师草稿。",
       ),
     );
+
+    const secondVersion = makeVersion(
+      "speech-version-2",
+      2,
+      "服务器产生的新版本。",
+    );
+    currentDetail = {
+      task: { ...reviewTask, current_version_number: 2 },
+      versions: [firstVersion, secondVersion],
+      events: [],
+    };
+    view.rerender(<MatterSpeechPanel {...props} />);
+    expect(await screen.findByText(/当前未保存草稿已保留/)).toBeTruthy();
+    expect(screen.getByLabelText("校对片段 1")).toHaveProperty(
+      "value",
+      "尚未保存的律师草稿。",
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "放弃草稿并载入版本 2" }),
+    );
     await waitFor(() =>
-      expect(finishMatterSpeechCapture).toHaveBeenCalledWith(
-        "tenant-1",
-        "matter-1",
-        "capture-1",
-        0,
+      expect(screen.getByLabelText("校对片段 1")).toHaveProperty(
+        "value",
+        "服务器产生的新版本。",
       ),
     );
-    await waitFor(() =>
-      expect(mutationAsync).toHaveBeenCalledWith({
-        evidenceItemId: evidenceItem.id,
-        evidenceVersionId: evidenceVersion.id,
-      }),
+    expect(screen.getByText(/时间位置为估算值/)).toBeTruthy();
+    expect(screen.getByText(/模型提示：合成估算警告/)).toBeTruthy();
+  });
+
+  it("keeps microphone capture disabled when the browser lacks durable recovery support", () => {
+    available = true;
+    liveCaptureAvailable = true;
+    liveCaptureTypes = ["audio/wav"];
+    rs.mocked(useLawSpeechTranscriptions).mockReturnValue({
+      data: {
+        items: [],
+        transcription_available: true,
+        supported_media_types: ["audio/wav"],
+        live_capture_available: true,
+        live_capture_media_types: ["audio/wav"],
+      },
+      isFetching: false,
+      isError: false,
+      refetch,
+    } as unknown as ReturnType<typeof useLawSpeechTranscriptions>);
+
+    render(
+      <MatterSpeechPanel
+        tenantId="tenant-1"
+        matterId="matter-1"
+        matterRole="owner"
+        userId="user-1"
+        membershipId="member-1"
+      />,
     );
+
+    expect(
+      screen.getByText(/当前浏览器无法建立受支持的 16 kHz 录音能力/),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /开始麦克风录音/ })).toBeNull();
   });
 });

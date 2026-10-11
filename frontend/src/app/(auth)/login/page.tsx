@@ -159,7 +159,7 @@ export default function LoginPage() {
       setError("账户角色数据异常，请联系平台运营人员。");
       return;
     }
-    applyUser(parsedUser.data);
+    await applyUser(parsedUser.data);
     router.push(resolveAuthenticatedDestination(parsedUser.data, redirectPath));
   };
 

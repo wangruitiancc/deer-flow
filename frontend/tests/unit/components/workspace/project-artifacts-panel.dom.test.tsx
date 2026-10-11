@@ -119,7 +119,7 @@ rs.mock("@/core/law", () => ({
   listProjectArtifacts: rs.fn(),
   listProjectArtifactReviews: rs.fn().mockResolvedValue([]),
   listProjectArtifactVersions: rs.fn(),
-  useLawProjectArtifactSources: () => ({
+  useLawProjectArtifactSources: rs.fn().mockReturnValue({
     data: {
       source_state: "bound",
       source_manifest: { citations: [], authorities: [] },
@@ -128,23 +128,28 @@ rs.mock("@/core/law", () => ({
     isError: false,
   }),
   reviewProjectArtifactVersion: rs.fn(),
+  fetchEvidenceContent: rs.fn(),
   fetchProjectArtifactContent: rs.fn(),
   fetchProjectArtifactExport: rs.fn(),
   getMatterContextByThread: rs.fn(),
 }));
 
 import { ProjectArtifactsPanel } from "@/components/workspace/law/project-artifacts-panel";
+import { runAuthSessionCleanups } from "@/core/auth/session-lifecycle";
 import {
+  fetchEvidenceContent,
   fetchProjectArtifactContent,
   fetchProjectArtifactExport,
   listProjectArtifacts,
   listProjectArtifactReviews,
   listProjectArtifactVersions,
   reviewProjectArtifactVersion,
+  useLawProjectArtifactSources,
 } from "@/core/law";
 import type { ProjectArtifact, ProjectArtifactVersion } from "@/core/law/types";
 
 const clients: QueryClient[] = [];
+let revokedObjectUrls: string[] = [];
 const version = {
   id: "version",
   tenant_id: "tenant",
@@ -156,6 +161,7 @@ const version = {
   created_at: "2026-09-06T00:00:00Z",
 } as ProjectArtifactVersion;
 beforeEach(() => {
+  revokedObjectUrls = [];
   rs.mocked(listProjectArtifacts).mockResolvedValue([
     {
       id: "item",
@@ -169,8 +175,18 @@ beforeEach(() => {
   ]);
   rs.mocked(listProjectArtifactVersions).mockResolvedValue([version]);
   rs.mocked(listProjectArtifactReviews).mockResolvedValue([]);
+  rs.mocked(useLawProjectArtifactSources).mockReturnValue({
+    data: {
+      source_state: "bound",
+      source_manifest: { citations: [], authorities: [] },
+    },
+    isPending: false,
+    isError: false,
+  } as unknown as ReturnType<typeof useLawProjectArtifactSources>);
   rs.spyOn(URL, "createObjectURL").mockReturnValue("blob:synthetic");
-  rs.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+  rs.spyOn(URL, "revokeObjectURL").mockImplementation((url) => {
+    revokedObjectUrls.push(url);
+  });
 });
 afterEach(() => {
   cleanup();
@@ -321,6 +337,82 @@ describe("project artifact preview lifetime", () => {
       ),
     );
     expect(view.container).toBeTruthy();
+  });
+
+  it("plays and positions a fixed speech citation from the saved-version source receipt", async () => {
+    const speechCitation = {
+      kind: "speech_transcript",
+      source_kind: "speech_transcript",
+      citation_id: "speech-citation-1",
+      recording_name: "庭审录音-合成.wav",
+      task_id: "speech-task-1",
+      evidence_item_id: "recording-item-1",
+      evidence_version_id: "recording-version-1",
+      transcript_version_id: "transcript-version-1",
+      audio_locator: { kind: "audio_time", start_ms: 12_000, end_ms: 14_500 },
+      source_sha256: "a".repeat(64),
+      quote_sha256: "b".repeat(64),
+    };
+    rs.mocked(useLawProjectArtifactSources).mockReturnValue({
+      data: {
+        source_state: "bound",
+        source_manifest: { citations: [speechCitation], authorities: [] },
+      },
+      isPending: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useLawProjectArtifactSources>);
+    rs.mocked(fetchProjectArtifactContent).mockResolvedValue(
+      new Blob(["# 引用成果\n"], { type: "text/markdown" }),
+    );
+    rs.mocked(fetchEvidenceContent).mockResolvedValue(
+      new Blob(["synthetic audio"], { type: "audio/wav" }),
+    );
+
+    await open();
+    expect(
+      await screen.findByText(/录音来源 · 庭审录音-合成\.wav · 12\.0 秒–14\.5 秒/),
+    ).toBeTruthy();
+    expect(screen.getByText(/固定转写版本 transcript-version-1/)).toBeTruthy();
+    expect(screen.queryByText(/第 undefined 页/)).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "定位录音 12.0 秒 至 14.5 秒",
+      }),
+    );
+
+    const audio = await screen.findByLabelText(
+      "固定版本录音来源播放器",
+    );
+    if (!(audio instanceof HTMLAudioElement))
+      throw new Error("Expected the protected speech audio player");
+    await waitFor(() =>
+      expect(fetchEvidenceContent).toHaveBeenCalledWith(
+        "tenant",
+        "matter",
+        "recording-item-1",
+        "recording-version-1",
+        expect.any(AbortSignal),
+      ),
+    );
+    Object.defineProperty(audio, "readyState", {
+      configurable: true,
+      value: 1,
+    });
+    Object.defineProperty(audio, "currentTime", {
+      configurable: true,
+      writable: true,
+      value: 0,
+    });
+    fireEvent.loadedMetadata(audio);
+    expect(audio.currentTime).toBe(12);
+
+    await runAuthSessionCleanups();
+    await waitFor(() =>
+      expect(
+        screen.queryByLabelText("固定版本录音来源播放器"),
+      ).toBeNull(),
+    );
+    expect(revokedObjectUrls).toContain("blob:synthetic");
   });
 
   for (const kind of [

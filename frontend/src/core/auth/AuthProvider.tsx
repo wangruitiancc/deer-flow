@@ -7,11 +7,13 @@ import React, {
   useState,
   useCallback,
   useEffect,
+  useRef,
   type ReactNode,
 } from "react";
 
 import { isStaticWebsiteOnly } from "../static-mode";
 
+import { runAuthSessionCleanups } from "./session-lifecycle";
 import { type User, buildLoginUrl } from "./types";
 
 // Re-export for consumers
@@ -26,7 +28,7 @@ interface AuthContextType {
   isLoading: boolean;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
-  applyUser: (user: User | null) => void;
+  applyUser: (user: User | null) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -46,6 +48,7 @@ interface AuthProviderProps {
  */
 export function AuthProvider({ children, initialUser }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(initialUser);
+  const userRef = useRef<User | null>(initialUser);
   const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
@@ -58,7 +61,18 @@ export function AuthProvider({ children, initialUser }: AuthProviderProps) {
    * already fetched it. Equivalent to setUser, exposed with a stable name
    * so consumers don't reach into React internals.
    */
-  const applyUser = useCallback((next: User | null) => {
+  const applyUser = useCallback(async (next: User | null) => {
+    const previous = userRef.current;
+    if (previous && next && previous.id !== next.id) {
+      await runAuthSessionCleanups().catch(() => {
+        console.error("Local session cleanup failed during account switch.");
+      });
+    } else if (previous && !next) {
+      await runAuthSessionCleanups().catch(() => {
+        console.error("Local session cleanup failed while clearing identity.");
+      });
+    }
+    userRef.current = next;
     setUser(next);
   }, []);
 
@@ -77,22 +91,22 @@ export function AuthProvider({ children, initialUser }: AuthProviderProps) {
 
       if (res.ok) {
         const data = await res.json();
-        setUser(data);
+        await applyUser(data);
       } else if (res.status === 401) {
         // Session expired or invalid
-        setUser(null);
+        await applyUser(null);
         // Redirect to login if on a protected route
         if (pathname?.startsWith("/workspace")) {
           router.push(buildLoginUrl(pathname));
         }
       }
-    } catch (err) {
-      console.error("Failed to refresh user:", err);
-      setUser(null);
+      } catch (err) {
+        console.error("Failed to refresh user:", err);
+        await applyUser(null);
     } finally {
       setIsLoading(false);
     }
-  }, [staticMode, pathname, router]);
+  }, [applyUser, staticMode, pathname, router]);
 
   /**
    * Logout - call FastAPI logout endpoint and clear local state
@@ -106,8 +120,13 @@ export function AuthProvider({ children, initialUser }: AuthProviderProps) {
    * logout used to.
    */
   const logout = useCallback(async () => {
+    const localCleanup = runAuthSessionCleanups();
     // Immediately clear local state to prevent UI flicker
+    userRef.current = null;
     setUser(null);
+    await localCleanup.catch(() => {
+      console.error("Local session cleanup failed during logout.");
+    });
 
     if (staticMode) {
       router.push("/");
@@ -169,7 +188,11 @@ export function AuthProvider({ children, initialUser }: AuthProviderProps) {
     applyUser,
   };
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>
+      <React.Fragment key={user?.id ?? "signed-out"}>{children}</React.Fragment>
+    </AuthContext.Provider>
+  );
 }
 
 /**

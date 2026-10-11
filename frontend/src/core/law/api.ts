@@ -19,12 +19,17 @@ import type {
   SpeechTranscriptionCollection,
   SpeechTranscriptionDetail,
   SpeechTranscriptionTask,
+  SpeechTranscriptCitation,
+  SpeechCaptureAudioTrackSettings,
   SpeechCaptureCreateReceipt,
   SpeechCaptureChunkReceipt,
   SpeechCaptureFinishReceipt,
   SpeechCaptureSession,
+  SpeechCaptureChunkReceiptPage,
+  SpeechCapturePreviewReceipt,
   ReviewSpeechTranscriptInput,
   ReviewSpeechTranscriptReceipt,
+  CreateSpeechTranscriptCitationInput,
   LegalAuthorityCollection,
   LegalAuthorityVersionSummary,
   LegalAuthorityVersionContent,
@@ -1734,13 +1739,88 @@ function matterSpeechCapturePath(
 export async function createMatterSpeechCapture(
   tenantId: string,
   matterId: string,
-  input: { title: string; media_type: string },
+  input: {
+    title: string;
+    media_type: string;
+    capture_protocol?: "container_v1" | "pcm_s16le_v1";
+    audioTrackSettings?: SpeechCaptureAudioTrackSettings | null;
+    idempotencyKey?: string;
+  },
 ): Promise<SpeechCaptureCreateReceipt> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (input.idempotencyKey) headers["Idempotency-Key"] = input.idempotencyKey;
+  const payload = {
+    title: input.title,
+    media_type: input.media_type,
+    ...(input.capture_protocol
+      ? { capture_protocol: input.capture_protocol }
+      : {}),
+    ...(input.audioTrackSettings
+      ? { audio_track_settings: input.audioTrackSettings }
+      : {}),
+  };
   return requestLaw<SpeechCaptureCreateReceipt>(
     matterSpeechCapturePath(tenantId, matterId),
-    jsonRequest("POST", input),
+    { method: "POST", headers, body: JSON.stringify(payload) },
     "无法创建录音会话。",
   );
+}
+
+export async function listMatterSpeechCaptures(
+  tenantId: string,
+  matterId: string,
+  signal?: AbortSignal,
+): Promise<SpeechCaptureSession[]> {
+  const result = await requestLaw<{ items: SpeechCaptureSession[] }>(
+    `${matterSpeechCapturePath(tenantId, matterId)}?limit=100`,
+    { signal, cache: "no-store" },
+    "无法读取待恢复录音。",
+  );
+  return result.items;
+}
+
+export async function listMatterSpeechCaptureChunks(
+  tenantId: string,
+  matterId: string,
+  captureId: string,
+  afterSequence = -1,
+  signal?: AbortSignal,
+): Promise<SpeechCaptureChunkReceiptPage> {
+  const query = new URLSearchParams({
+    after_sequence: String(afterSequence),
+    limit: "500",
+  });
+  return requestLaw<SpeechCaptureChunkReceiptPage>(
+    `${matterSpeechCapturePath(tenantId, matterId, captureId)}/chunks?${query}`,
+    { signal, cache: "no-store" },
+    "无法核对录音分片回执。",
+  );
+}
+
+export async function getMatterSpeechCapturePreview(
+  tenantId: string,
+  matterId: string,
+  captureId: string,
+  afterRevision: number,
+  signal?: AbortSignal,
+): Promise<SpeechCapturePreviewReceipt | null> {
+  const query = new URLSearchParams({ after_revision: String(afterRevision) });
+  const response = await fetchWithAuth(
+    lawUrl(
+      `${matterSpeechCapturePath(tenantId, matterId, captureId)}/preview?${query}`,
+    ),
+    { signal, cache: "no-store" },
+  );
+  if (response.status === 204) return null;
+  if (!response.ok) {
+    const error = await readError(response, "无法读取录音实时预览。");
+    throw new LawRequestError(error.message, response.status, error.code);
+  }
+  const body =
+    (await response.json()) as LawEnvelope<SpeechCapturePreviewReceipt>;
+  return body.data;
 }
 
 export async function getMatterSpeechCapture(
@@ -1763,15 +1843,21 @@ export async function uploadMatterSpeechCaptureChunk(
   sequenceNumber: number,
   chunk: Blob,
   sha256: string,
+  pcm?: { sampleCount: number; startSample: number },
 ): Promise<SpeechCaptureChunkReceipt> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/octet-stream",
+    "X-Chunk-SHA256": sha256,
+  };
+  if (pcm) {
+    headers["X-Sample-Count"] = String(pcm.sampleCount);
+    headers["X-Start-Sample"] = String(pcm.startSample);
+  }
   return requestLaw<SpeechCaptureChunkReceipt>(
     `${matterSpeechCapturePath(tenantId, matterId, captureId)}/chunks/${sequenceNumber}`,
     {
       method: "PUT",
-      headers: {
-        "Content-Type": "application/octet-stream",
-        "X-Chunk-SHA256": sha256,
-      },
+      headers,
       body: chunk,
     },
     "录音分片上传失败。",
@@ -1783,10 +1869,16 @@ export async function finishMatterSpeechCapture(
   matterId: string,
   captureId: string,
   finalSequenceNumber: number,
+  totalSamples?: number,
+  endReason: "user_stop" | "interrupted" | "limit_reached" = "user_stop",
 ): Promise<SpeechCaptureFinishReceipt> {
   return requestLaw<SpeechCaptureFinishReceipt>(
     `${matterSpeechCapturePath(tenantId, matterId, captureId)}/finish`,
-    jsonRequest("POST", { final_sequence_number: finalSequenceNumber }),
+    jsonRequest("POST", {
+      final_sequence_number: finalSequenceNumber,
+      ...(totalSamples === undefined ? {} : { total_samples: totalSamples }),
+      end_reason: endReason,
+    }),
     "无法完成录音保存。",
   );
 }
@@ -1868,6 +1960,34 @@ export async function reviewMatterSpeechTranscription(
     jsonRequest("POST", input),
     "无法保存律师校对版本。",
   );
+}
+
+export async function listMatterSpeechCitations(
+  tenantId: string,
+  matterId: string,
+  taskId: string,
+  signal?: AbortSignal,
+): Promise<SpeechTranscriptCitation[]> {
+  const result = await requestLaw<{ items: SpeechTranscriptCitation[] }>(
+    `${matterSpeechTranscriptionsPath(tenantId, matterId)}/${encodeURIComponent(taskId)}/citations`,
+    { signal, cache: "no-store" },
+    "无法读取录音引用。",
+  );
+  return result.items;
+}
+
+export async function createMatterSpeechCitation(
+  tenantId: string,
+  matterId: string,
+  taskId: string,
+  input: CreateSpeechTranscriptCitationInput,
+): Promise<SpeechTranscriptCitation> {
+  const result = await requestLaw<{ citation: SpeechTranscriptCitation }>(
+    `${matterSpeechTranscriptionsPath(tenantId, matterId)}/${encodeURIComponent(taskId)}/citations`,
+    jsonRequest("POST", input),
+    "无法创建录音时间引用。",
+  );
+  return result.citation;
 }
 
 export async function listMatterDeadlineRecipients(

@@ -1354,6 +1354,10 @@ export interface SpeechTranscriptionTask {
   current_version_number: number;
   model_id: string | null;
   error_code: string | null;
+  processing_deferred_reason?:
+    | "tenant_data_exit_frozen"
+    | "write_gate_unavailable"
+    | null;
   cancel_requested: boolean;
   created_at: string;
   updated_at: string;
@@ -1375,6 +1379,7 @@ export interface SpeechTranscriptSpeaker {
 
 export interface SpeechTranscript {
   schemaVersion: number;
+  offsetUnit?: "utf16";
   text: string;
   durationMs: number;
   language?: string;
@@ -1403,6 +1408,33 @@ export interface SpeechTranscriptVersion {
   created_at: string;
 }
 
+export interface SpeechTranscriptCitation {
+  id: string;
+  source_type: "speech_transcript";
+  evidence_item_id: string;
+  evidence_version_id: string;
+  task_id: string;
+  transcript_version_id: string;
+  source_sha256: string;
+  offset_unit: "utf16";
+  anchor: { start_character: number; end_character: number };
+  physical_page_number: null;
+  audio_locator: { kind: "audio_time"; start_ms: number; end_ms: number };
+  source_state: string;
+  lineage_state: "current" | "superseded";
+  text_basis: "lawyer_reviewed_transcript";
+  quote_sha256: string;
+  quote_text?: string;
+  quote_preview?: string;
+  created_at: string;
+}
+
+export interface CreateSpeechTranscriptCitationInput {
+  transcript_version_id: string;
+  start_character: number;
+  end_character: number;
+}
+
 export interface SpeechTranscriptionEvent {
   id: string;
   task_id: string;
@@ -1421,6 +1453,22 @@ export interface SpeechTranscriptionCollection {
   live_capture_media_types: string[];
 }
 
+export interface SpeechCaptureLimits {
+  sample_rate: number;
+  channels: number;
+  chunk_samples: number;
+  chunk_bytes: number;
+  max_samples: number;
+  max_total_bytes: number;
+  max_pending_bytes_per_session: number;
+  max_pending_bytes_per_origin: number;
+  max_uncommitted_chunks: number;
+  max_active_captures_per_member: number;
+  max_active_captures_per_deployment: number;
+  preview_window_samples: number;
+  preview_poll_interval_ms: number;
+}
+
 export interface SpeechCaptureSession {
   id: string;
   tenant_id: string;
@@ -1429,23 +1477,50 @@ export interface SpeechCaptureSession {
   title: string;
   original_filename: string;
   media_type: string;
-  status: "open" | "completed" | "failed" | "cancelled" | "expired";
+  capture_protocol: "container_v1" | "pcm_s16le_v1";
+  limits?: SpeechCaptureLimits;
+  audio_track_settings?: SpeechCaptureAudioTrackSettings | null;
+  status:
+    | "open"
+    | "finalizing"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "expired";
   next_sequence_number: number;
   total_byte_size: number;
+  total_samples: number;
+  final_sequence_number: number | null;
+  final_total_samples: number | null;
+  preview_revision: number;
   expires_at: string;
   cleanup_pending: boolean;
   evidence_item_id: string | null;
   evidence_version_id: string | null;
+  transcription_task_id: string | null;
   source_sha256: string | null;
   error_code: string | null;
   created_at: string;
   updated_at: string;
 }
 
+export interface SpeechCaptureAudioTrackSettings {
+  context_sample_rate: 16000;
+  track_sample_rate: number | null;
+  track_channel_count: number | null;
+  track_sample_size: number | null;
+  echo_cancellation: boolean | null;
+  noise_suppression: boolean | null;
+  auto_gain_control: boolean | null;
+}
+
 export interface SpeechCaptureCreateReceipt extends SpeechCaptureSession {
   max_chunk_bytes: number;
   max_total_bytes: number;
   transcription_available: boolean;
+  sample_rate?: number | null;
+  channels?: number | null;
+  max_samples?: number | null;
 }
 
 export interface SpeechCaptureChunkReceipt {
@@ -1453,6 +1528,44 @@ export interface SpeechCaptureChunkReceipt {
   accepted_sequence_number: number;
   next_sequence_number: number;
   chunk_sha256: string;
+  sample_count?: number;
+  start_sample?: number;
+}
+
+export interface SpeechCaptureChunkReceiptItem {
+  sequence_number: number;
+  byte_size: number;
+  sha256: string;
+  sample_count: number | null;
+  start_sample: number | null;
+}
+
+export interface SpeechCaptureChunkReceiptPage {
+  items: SpeechCaptureChunkReceiptItem[];
+  next_sequence_number: number;
+}
+
+export interface SpeechCapturePreviewWindow {
+  window_id: string;
+  window_index: number;
+  start_sample: number;
+  end_sample: number;
+  revision: number;
+  provisional: true;
+  transcript: {
+    text: string;
+    segments: SpeechTranscriptSegment[];
+    warnings: string[];
+    provisional: true;
+    offset_unit: "utf16";
+    speakers: [];
+  } | null;
+}
+
+export interface SpeechCapturePreviewReceipt {
+  capture_id: string;
+  revision: number;
+  items: SpeechCapturePreviewWindow[];
 }
 
 export interface SpeechCaptureFinishReceipt extends SpeechCaptureSession {
@@ -1471,6 +1584,8 @@ export interface ReviewSpeechTranscriptInput {
   text: string;
   segments: SpeechTranscriptSegment[];
   speakers: SpeechTranscriptSpeaker[];
+  reviewed_text: boolean;
+  reviewed_time_ranges: boolean;
 }
 
 export interface ReviewSpeechTranscriptReceipt {

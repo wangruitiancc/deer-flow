@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -32,7 +32,9 @@ import {
 import { ArtifactFilePreview } from "@/components/workspace/artifacts/artifact-file-preview";
 import { useArtifacts } from "@/components/workspace/artifacts/context";
 import { importTextArtifactCopy } from "@/core/artifacts/api";
+import { registerAuthSessionCleanup } from "@/core/auth/session-lifecycle";
 import {
+  fetchEvidenceContent,
   fetchProjectArtifactContent,
   fetchProjectArtifactExport,
   getMatterContextByThread,
@@ -76,6 +78,193 @@ type WorkTab =
   | { id: string; title: string; kind: "file"; path: string }
   | { id: string; title: string; kind: "evidence"; item: EvidenceItem }
   | { id: string; title: string; kind: "saved"; item: ProjectArtifact };
+
+type SpeechCitationSource = Record<string, unknown> & {
+  citation_id: string;
+  evidence_item_id: string;
+  evidence_version_id: string;
+  audio_locator: { kind: "audio_time"; start_ms: number; end_ms: number };
+};
+
+function isSpeechCitationSource(
+  citation: Record<string, unknown>,
+): citation is SpeechCitationSource {
+  const locator = citation.audio_locator;
+  return (
+    (citation.kind === "speech_transcript" ||
+      citation.source_kind === "speech_transcript") &&
+    typeof citation.citation_id === "string" &&
+    typeof citation.evidence_item_id === "string" &&
+    typeof citation.evidence_version_id === "string" &&
+    typeof locator === "object" &&
+    locator !== null &&
+    (locator as Record<string, unknown>).kind === "audio_time" &&
+    Number.isSafeInteger((locator as Record<string, unknown>).start_ms) &&
+    Number.isSafeInteger((locator as Record<string, unknown>).end_ms) &&
+    Number((locator as Record<string, unknown>).start_ms) >= 0 &&
+    Number((locator as Record<string, unknown>).end_ms) >
+      Number((locator as Record<string, unknown>).start_ms)
+  );
+}
+
+function SpeechCitationSources({
+  tenantId,
+  matterId,
+  citations,
+}: {
+  tenantId: string;
+  matterId: string;
+  citations: SpeechCitationSource[];
+}) {
+  const [activeCitation, setActiveCitation] =
+    useState<SpeechCitationSource | null>(null);
+  const [mediaUrl, setMediaUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const mediaRef = useRef<HTMLAudioElement | null>(null);
+  const requestRef = useRef<AbortController | null>(null);
+  const objectUrlRef = useRef<string | null>(null);
+  const activeSourceKeyRef = useRef<string | null>(null);
+
+  const clearSensitiveMedia = useCallback(() => {
+    requestRef.current?.abort();
+    requestRef.current = null;
+    mediaRef.current?.pause();
+    mediaRef.current?.removeAttribute("src");
+    mediaRef.current?.load();
+    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    objectUrlRef.current = null;
+    activeSourceKeyRef.current = null;
+    setMediaUrl(null);
+    setActiveCitation(null);
+    setLoading(false);
+    setError("");
+  }, []);
+
+  useEffect(() => {
+    const unregister = registerAuthSessionCleanup(clearSensitiveMedia);
+    return () => {
+      unregister();
+      clearSensitiveMedia();
+    };
+  }, [clearSensitiveMedia]);
+
+  const seekToCitation = useCallback((citation: SpeechCitationSource) => {
+    const audio = mediaRef.current;
+    if (!audio || audio.readyState < 1) return;
+    audio.currentTime = citation.audio_locator.start_ms / 1000;
+  }, []);
+
+  const loadOrLocate = useCallback(
+    async (citation: SpeechCitationSource) => {
+      const sourceKey = `${citation.evidence_item_id}:${citation.evidence_version_id}`;
+      setActiveCitation(citation);
+      setError("");
+      if (activeSourceKeyRef.current === sourceKey && mediaRef.current) {
+        seekToCitation(citation);
+        mediaRef.current.focus();
+        return;
+      }
+
+      requestRef.current?.abort();
+      const controller = new AbortController();
+      requestRef.current = controller;
+      setLoading(true);
+      setMediaUrl(null);
+      activeSourceKeyRef.current = null;
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = null;
+      }
+      try {
+        const blob = await fetchEvidenceContent(
+          tenantId,
+          matterId,
+          citation.evidence_item_id,
+          citation.evidence_version_id,
+          controller.signal,
+        );
+        if (controller.signal.aborted) return;
+        const url = URL.createObjectURL(blob);
+        objectUrlRef.current = url;
+        activeSourceKeyRef.current = sourceKey;
+        setMediaUrl(url);
+      } catch (loadError) {
+        if (!controller.signal.aborted)
+          setError(
+            loadError instanceof Error
+              ? loadError.message
+              : "无法读取受保护的录音来源。",
+          );
+      } finally {
+        if (requestRef.current === controller) {
+          requestRef.current = null;
+          setLoading(false);
+        }
+      }
+    },
+    [matterId, seekToCitation, tenantId],
+  );
+
+  const formatSeconds = (milliseconds: number) =>
+    `${(milliseconds / 1000).toFixed(1)} 秒`;
+
+  return (
+    <div className="space-y-2" aria-label="语音来源与音频定位">
+      {citations.map((citation) => (
+        <div
+          key={citation.citation_id}
+          className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-2"
+        >
+          <p className="break-all">
+            录音来源 ·{" "}
+            {typeof citation.recording_name === "string"
+              ? citation.recording_name
+              : "案件录音"}{" "}·{" "}
+            {formatSeconds(citation.audio_locator.start_ms)}–
+            {formatSeconds(citation.audio_locator.end_ms)} · 转写引用 {citation.citation_id}
+            {typeof citation.transcript_version_id === "string" && (
+              <> · 固定转写版本 {citation.transcript_version_id}</>
+            )}
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            aria-label={`定位录音 ${formatSeconds(citation.audio_locator.start_ms)} 至 ${formatSeconds(citation.audio_locator.end_ms)}`}
+            onClick={() => void loadOrLocate(citation)}
+            disabled={loading}
+          >
+            {activeCitation?.citation_id === citation.citation_id && mediaUrl
+              ? "定位到录音时间"
+              : "加载录音并定位"}
+          </Button>
+        </div>
+      ))}
+      {loading && (
+        <p role="status" className="text-muted-foreground">
+          正在读取受保护的录音来源…
+        </p>
+      )}
+      {error && (
+        <p role="alert" className="text-destructive">
+          录音来源当前不可读取：{error}
+        </p>
+      )}
+      {activeCitation && mediaUrl && (
+        <audio
+          ref={mediaRef}
+          aria-label="固定版本录音来源播放器"
+          controls
+          preload="metadata"
+          src={mediaUrl}
+          onLoadedMetadata={() => seekToCitation(activeCitation)}
+          className="w-full"
+        />
+      )}
+    </div>
+  );
+}
 
 export function ProjectArtifactsPanel({
   threadId,
@@ -422,6 +611,8 @@ function LegalDocumentWorkspace({
           tenantId={scope.tenant_id}
           matterId={scope.matter_id}
           matterRole={scope.matter_role}
+          userId={scope.user_id}
+          membershipId={scope.membership_id}
         />
         <MatterAuthoritiesPanel
           tenantId={scope.tenant_id}
@@ -913,6 +1104,10 @@ function ProjectArtifactContent({
   const sourceCitations = Array.isArray(sourceManifest?.citations)
     ? (sourceManifest.citations as Array<Record<string, unknown>>)
     : [];
+  const speechSourceCitations = sourceCitations.filter(isSpeechCitationSource);
+  const otherSourceCitations = sourceCitations.filter(
+    (citation) => !isSpeechCitationSource(citation),
+  );
   const sourceAuthorities = Array.isArray(sourceManifest?.authorities)
     ? (sourceManifest.authorities as Array<Record<string, unknown>>)
     : [];
@@ -1199,13 +1394,20 @@ function ProjectArtifactContent({
                   {sourceAuthorities.length}
                 </summary>
                 <div className="mt-2 space-y-2">
-                  {sourceCitations.map((citation) => (
+                  {otherSourceCitations.map((citation) => (
                     <p key={String(citation.citation_id)} className="break-all">
                       材料版本 {String(citation.evidence_version_id)} · 第{" "}
                       {String(citation.physical_page_number)} 页 · 引用{" "}
                       {String(citation.citation_id)}
                     </p>
                   ))}
+                  {speechSourceCitations.length > 0 && (
+                    <SpeechCitationSources
+                      tenantId={version.tenant_id}
+                      matterId={version.matter_id}
+                      citations={speechSourceCitations}
+                    />
+                  )}
                   {sourceAuthorities.map((authority) => (
                     <p key={String(authority.version_id)} className="break-all">
                       法源版本 {String(authority.version_id)} · 审核{" "}

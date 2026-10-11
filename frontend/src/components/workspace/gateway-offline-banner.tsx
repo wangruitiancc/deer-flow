@@ -81,7 +81,7 @@ export function GatewayOfflineBanner({
 
       if (action.type === "apply-user") {
         authFailuresRef.current = 0;
-        applyUser(action.user);
+        await applyUser(action.user);
         return;
       }
       if (action.type === "delegate-refresh") {

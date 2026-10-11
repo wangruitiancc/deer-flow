@@ -12,17 +12,16 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
-  cancelMatterSpeechCapture,
-  createMatterSpeechCapture,
-  finishMatterSpeechCapture,
   fetchEvidenceContent,
-  getMatterSpeechCapture,
-  uploadMatterSpeechCaptureChunk,
   useCancelLawSpeechTranscription,
+  useCreateLawSpeechCitation,
   useCreateLawSpeechTranscription,
   useLawEvidence,
   useLawEvidenceVersions,
+  useLawCaseWorkbench,
+  useLawCaseWorkbenchEvents,
   useLawSpeechTranscription,
+  useLawSpeechCitations,
   useLawSpeechTranscriptions,
   useReviewLawSpeechTranscription,
   useUploadLawEvidence,
@@ -32,33 +31,25 @@ import {
   type SpeechTranscriptSpeaker,
 } from "@/core/law";
 
+import { useSpeechCapture } from "./use-speech-capture";
+
 type EditableSegment = SpeechTranscriptSegment & { separatorBefore: string };
 
-type CaptureChunk = { blob: Blob; sequenceNumber: number | null };
-type CaptureUiState =
-  | "idle"
-  | "recording"
-  | "paused"
-  | "upload_error"
-  | "stopping"
-  | "finalizing";
-
-type LiveCaptureController = {
-  id: string;
-  stream: MediaStream;
-  recorder: MediaRecorder;
-  maxChunkBytes: number;
-  maxTotalBytes: number;
-  nextSequenceNumber: number;
-  queue: CaptureChunk[];
-  queueBytes: number;
-  capturedBytes: number;
-  uploading: boolean;
-  stopped: boolean;
-  cancelled: boolean;
-  finalizing: boolean;
-  overflowed: boolean;
-};
+function editableTranscript(transcript: {
+  text: string;
+  segments: SpeechTranscriptSegment[];
+}) {
+  let previousEnd = 0;
+  const segments = transcript.segments.map((segment) => {
+    const separatorBefore = transcript.text.slice(
+      previousEnd,
+      segment.charStart,
+    );
+    previousEnd = segment.charEnd;
+    return { ...segment, separatorBefore };
+  });
+  return { segments, trailingText: transcript.text.slice(previousEnd) };
+}
 
 const REVIEW_ROLES: MatterMemberRole[] = ["owner", "lead", "lawyer"];
 const STATUS_LABEL: Record<string, string> = {
@@ -80,10 +71,14 @@ export function MatterSpeechPanel({
   tenantId,
   matterId,
   matterRole,
+  userId,
+  membershipId,
 }: {
   tenantId: string;
   matterId: string;
   matterRole: MatterMemberRole;
+  userId: string;
+  membershipId: string;
 }) {
   const canReview = REVIEW_ROLES.includes(matterRole);
   const evidence = useLawEvidence(tenantId, matterId);
@@ -97,6 +92,12 @@ export function MatterSpeechPanel({
     null,
   );
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const speechCitations = useLawSpeechCitations(
+    tenantId,
+    matterId,
+    selectedTaskId,
+  );
+  const createSpeechCitation = useCreateLawSpeechCitation(tenantId, matterId);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
@@ -106,23 +107,56 @@ export function MatterSpeechPanel({
     [],
   );
   const [trailingText, setTrailingText] = useState("");
-  const [captureState, setCaptureState] = useState<CaptureUiState>("idle");
-  const [captureError, setCaptureError] = useState<string | null>(null);
-  const [captureTitle, setCaptureTitle] = useState("");
-  const [capturePendingBytes, setCapturePendingBytes] = useState(0);
-  const [captureSupportedType, setCaptureSupportedType] = useState<
+  const [reviewedText, setReviewedText] = useState(false);
+  const [reviewedTimeRanges, setReviewedTimeRanges] = useState(false);
+  const [draftConflictVersionId, setDraftConflictVersionId] = useState<
     string | null
   >(null);
+  const [citationSelection, setCitationSelection] = useState<{
+    start: number;
+    end: number;
+  } | null>(null);
+  const draftTaskIdRef = useRef<string | null>(null);
+  const draftBaselineRef = useRef<{
+    versionId: string;
+    versionNumber: number;
+  } | null>(null);
+  const draftDirtyRef = useRef(false);
   const mediaRef = useRef<HTMLMediaElement | null>(null);
-  const captureRef = useRef<LiveCaptureController | null>(null);
   const acceptedTypes = transcriptions.data?.supported_media_types ?? [];
   const available = transcriptions.data?.transcription_available ?? false;
   const liveCaptureAvailable =
     transcriptions.data?.live_capture_available ?? false;
-  const liveCaptureTypes = useMemo(
-    () => transcriptions.data?.live_capture_media_types ?? [],
-    [transcriptions.data?.live_capture_media_types],
+  const captureWorkbench = useLawCaseWorkbench(
+    tenantId,
+    matterId,
+    liveCaptureAvailable,
   );
+  useLawCaseWorkbenchEvents(
+    tenantId,
+    matterId,
+    liveCaptureAvailable ? captureWorkbench.data?.revision : undefined,
+  );
+  const capture = useSpeechCapture({
+    tenantId,
+    matterId,
+    userId,
+    membershipId,
+    available: liveCaptureAvailable,
+    onCompleted: (session) => {
+      void evidence.refetch();
+      void transcriptions.refetch();
+      if (session.evidence_item_id) setSelectedItemId(session.evidence_item_id);
+      if (session.evidence_version_id)
+        setSelectedVersionId(session.evidence_version_id);
+      if (session.transcription_task_id)
+        setSelectedTaskId(session.transcription_task_id);
+    },
+  });
+  const captureState = capture.state;
+  const captureError = capture.error;
+  const captureTitle = capture.title;
+  const captureSupported = capture.supported;
   const versions = useLawEvidenceVersions(tenantId, matterId, selectedItemId);
   const selectedVersion = versions.data?.find(
     (version) => version.id === selectedVersionId,
@@ -141,370 +175,6 @@ export function MatterSpeechPanel({
   const selectableEvidence = useMemo(
     () => evidence.data?.filter((item) => item.status === "active") ?? [],
     [evidence.data],
-  );
-
-  useEffect(() => {
-    if (
-      !liveCaptureAvailable ||
-      typeof window === "undefined" ||
-      !navigator.mediaDevices?.getUserMedia ||
-      typeof window.MediaRecorder === "undefined"
-    ) {
-      setCaptureSupportedType(null);
-      return;
-    }
-    const preferred = ["audio/webm", "audio/mp4", "audio/ogg", "audio/wav"];
-    setCaptureSupportedType(
-      preferred.find(
-        (mediaType) =>
-          liveCaptureTypes.includes(mediaType) &&
-          window.MediaRecorder.isTypeSupported(mediaType),
-      ) ?? null,
-    );
-  }, [liveCaptureAvailable, liveCaptureTypes]);
-
-  const stopCaptureTracks = (controller: LiveCaptureController) => {
-    controller.stream.getTracks().forEach((track) => track.stop());
-  };
-
-  const cancelCapture = async (controller = captureRef.current) => {
-    if (!controller) return;
-    controller.cancelled = true;
-    controller.queue.length = 0;
-    controller.queueBytes = 0;
-    setCapturePendingBytes(0);
-    if (controller.recorder.state !== "inactive") {
-      controller.recorder.stop();
-    }
-    stopCaptureTracks(controller);
-    captureRef.current = null;
-    setCaptureState("idle");
-    try {
-      await cancelMatterSpeechCapture(tenantId, matterId, controller.id);
-    } catch (error) {
-      setCaptureError(
-        error instanceof Error
-          ? `录音已在本机停止；服务器清理将在会话到期时重试。${error.message}`
-          : "录音已在本机停止；服务器清理将在会话到期时重试。",
-      );
-    }
-  };
-
-  const finalizeCapture = async (controller: LiveCaptureController) => {
-    if (
-      controller.finalizing ||
-      controller.cancelled ||
-      controller.overflowed
-    ) {
-      return;
-    }
-    controller.finalizing = true;
-    setCaptureState("finalizing");
-    try {
-      const receipt = await finishMatterSpeechCapture(
-        tenantId,
-        matterId,
-        controller.id,
-        controller.nextSequenceNumber - 1,
-      );
-      if (
-        receipt.status !== "completed" ||
-        !receipt.evidence_item ||
-        !receipt.evidence_version
-      ) {
-        captureRef.current = null;
-        stopCaptureTracks(controller);
-        setCapturePendingBytes(0);
-        setCaptureState("idle");
-        setCaptureError(
-          receipt.status === "failed"
-            ? "录音未通过恶意文件扫描或完整性检查，未登记为案件材料；服务器正在清理暂存分片。"
-            : `录音会话已结束（${receipt.status}），未登记为案件材料。`,
-        );
-        return;
-      }
-      await evidence.refetch();
-      setSelectedItemId(receipt.evidence_item.id);
-      setSelectedVersionId(receipt.evidence_version.id);
-      try {
-        const created = await createTask.mutateAsync({
-          evidenceItemId: receipt.evidence_item.id,
-          evidenceVersionId: receipt.evidence_version.id,
-        });
-        setSelectedTaskId(created.id);
-      } catch (error) {
-        setCaptureError(
-          error instanceof Error
-            ? `录音已保存并通过扫描，但启动转写失败：${error.message}`
-            : "录音已保存并通过扫描，但启动转写失败。",
-        );
-      }
-      await transcriptions.refetch();
-      captureRef.current = null;
-      stopCaptureTracks(controller);
-      setCapturePendingBytes(0);
-      setCaptureState("idle");
-    } catch (error) {
-      controller.finalizing = false;
-      setCaptureState("upload_error");
-      setCaptureError(
-        error instanceof Error ? error.message : "无法完成录音保存。",
-      );
-    }
-  };
-
-  const drainCaptureQueue = async (controller: LiveCaptureController) => {
-    if (controller.uploading || controller.cancelled || controller.overflowed) {
-      return;
-    }
-    controller.uploading = true;
-    let failed = false;
-    try {
-      while (controller.queue.length > 0 && !controller.cancelled) {
-        const queued = controller.queue[0];
-        if (!queued) break;
-        queued.sequenceNumber ??= controller.nextSequenceNumber;
-        const sequenceNumber = queued.sequenceNumber;
-        let digest: ArrayBuffer;
-        try {
-          digest = await crypto.subtle.digest(
-            "SHA-256",
-            await queued.blob.arrayBuffer(),
-          );
-        } catch {
-          failed = true;
-          if (controller.recorder.state === "recording") {
-            controller.recorder.pause();
-          }
-          setCaptureState("upload_error");
-          setCaptureError(
-            "无法为录音分片计算完整性摘要，请检查浏览器安全上下文后重试。",
-          );
-          break;
-        }
-        const sha256 = Array.from(new Uint8Array(digest))
-          .map((value) => value.toString(16).padStart(2, "0"))
-          .join("");
-        try {
-          const receipt = await uploadMatterSpeechCaptureChunk(
-            tenantId,
-            matterId,
-            controller.id,
-            sequenceNumber,
-            queued.blob,
-            sha256,
-          );
-          if (
-            receipt.accepted_sequence_number !== sequenceNumber ||
-            receipt.next_sequence_number < sequenceNumber + 1
-          ) {
-            throw new Error("服务器没有确认当前录音分片。");
-          }
-          controller.nextSequenceNumber = receipt.next_sequence_number;
-          controller.queue.shift();
-          controller.queueBytes -= queued.blob.size;
-          setCapturePendingBytes(controller.queueBytes);
-        } catch (error) {
-          failed = true;
-          if (controller.recorder.state === "recording") {
-            controller.recorder.pause();
-          }
-          setCaptureState("upload_error");
-          setCaptureError(
-            error instanceof Error
-              ? `录音已暂停，未确认的分片保留在当前页面内存，可重试上传。${error.message}`
-              : "录音已暂停，未确认的分片保留在当前页面内存，可重试上传。",
-          );
-          break;
-        }
-      }
-    } finally {
-      controller.uploading = false;
-      if (
-        !failed &&
-        !controller.cancelled &&
-        controller.queueBytes < 4 * 1024 * 1024
-      ) {
-        if (!controller.stopped && controller.recorder.state === "paused") {
-          controller.recorder.resume();
-          setCaptureState("recording");
-        }
-        if (controller.stopped && controller.queue.length === 0) {
-          void finalizeCapture(controller);
-        }
-      }
-    }
-  };
-
-  const retryCaptureUpload = async () => {
-    const controller = captureRef.current;
-    if (!controller || controller.cancelled) return;
-    setCaptureError(null);
-    try {
-      const remote = await getMatterSpeechCapture(
-        tenantId,
-        matterId,
-        controller.id,
-      );
-      if (remote.status === "completed") {
-        controller.stopped = true;
-        controller.queue.length = 0;
-        controller.queueBytes = 0;
-        controller.nextSequenceNumber = remote.next_sequence_number;
-        await finalizeCapture(controller);
-        return;
-      }
-      if (remote.status !== "open") {
-        throw new Error("录音会话已关闭，无法继续上传。");
-      }
-      while (
-        controller.queue[0]?.sequenceNumber !== null &&
-        controller.queue[0]?.sequenceNumber !== undefined &&
-        controller.queue[0].sequenceNumber < remote.next_sequence_number
-      ) {
-        const accepted = controller.queue.shift();
-        if (accepted) controller.queueBytes -= accepted.blob.size;
-      }
-      controller.nextSequenceNumber = remote.next_sequence_number;
-      setCapturePendingBytes(controller.queueBytes);
-      setCaptureState(controller.stopped ? "stopping" : "recording");
-      await drainCaptureQueue(controller);
-      if (
-        !controller.stopped &&
-        controller.recorder.state === "paused" &&
-        !controller.uploading &&
-        controller.queue.length === 0
-      ) {
-        controller.recorder.resume();
-        setCaptureState("recording");
-      }
-    } catch (error) {
-      setCaptureState("upload_error");
-      setCaptureError(
-        error instanceof Error ? error.message : "无法恢复录音上传。",
-      );
-    }
-  };
-
-  const startCapture = async () => {
-    if (!captureSupportedType) return;
-    setCaptureError(null);
-    setActionError(null);
-    let stream: MediaStream | null = null;
-    let createdId: string | null = null;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const session = await createMatterSpeechCapture(tenantId, matterId, {
-        title: captureTitle.trim() || "案件实时录音",
-        media_type: captureSupportedType,
-      });
-      createdId = session.id;
-      const recorder = new MediaRecorder(stream, {
-        mimeType: captureSupportedType,
-      });
-      const controller: LiveCaptureController = {
-        id: session.id,
-        stream,
-        recorder,
-        maxChunkBytes: session.max_chunk_bytes,
-        maxTotalBytes: session.max_total_bytes,
-        nextSequenceNumber: session.next_sequence_number,
-        queue: [],
-        queueBytes: 0,
-        capturedBytes: 0,
-        uploading: false,
-        stopped: false,
-        cancelled: false,
-        finalizing: false,
-        overflowed: false,
-      };
-      captureRef.current = controller;
-      recorder.addEventListener("dataavailable", (event: BlobEvent) => {
-        if (controller.cancelled || !event.data.size) return;
-        controller.capturedBytes += event.data.size;
-        if (controller.capturedBytes > controller.maxTotalBytes) {
-          controller.overflowed = true;
-          setCaptureError("录音已达到服务器大小上限，已停止并取消本次录音。");
-          setCaptureState("upload_error");
-          if (recorder.state !== "inactive") recorder.stop();
-          void cancelCapture(controller);
-          return;
-        }
-        for (
-          let offset = 0;
-          offset < event.data.size;
-          offset += controller.maxChunkBytes
-        ) {
-          const blob = event.data.slice(
-            offset,
-            Math.min(offset + controller.maxChunkBytes, event.data.size),
-            "application/octet-stream",
-          );
-          controller.queue.push({ blob, sequenceNumber: null });
-          controller.queueBytes += blob.size;
-        }
-        setCapturePendingBytes(controller.queueBytes);
-        if (
-          controller.queueBytes >= 8 * 1024 * 1024 &&
-          recorder.state === "recording"
-        ) {
-          recorder.pause();
-          setCaptureState("paused");
-        }
-        void drainCaptureQueue(controller);
-      });
-      recorder.addEventListener("stop", () => {
-        controller.stopped = true;
-        setCaptureState("stopping");
-        void drainCaptureQueue(controller);
-      });
-      recorder.addEventListener("error", () => {
-        setCaptureError(
-          "浏览器录音发生错误；请重试上传已确认的分片或取消本次录音。",
-        );
-        setCaptureState("upload_error");
-      });
-      recorder.start(1000);
-      setCapturePendingBytes(0);
-      setCaptureState("recording");
-    } catch (error) {
-      stream?.getTracks().forEach((track) => track.stop());
-      captureRef.current = null;
-      setCaptureState("idle");
-      if (createdId) {
-        void cancelMatterSpeechCapture(tenantId, matterId, createdId).catch(
-          () => undefined,
-        );
-      }
-      setCaptureError(
-        error instanceof Error
-          ? `无法开始麦克风录音：${error.message}`
-          : "无法开始麦克风录音。",
-      );
-    }
-  };
-
-  const stopCapture = () => {
-    const controller = captureRef.current;
-    if (!controller || controller.recorder.state === "inactive") return;
-    setCaptureState("stopping");
-    controller.recorder.stop();
-  };
-
-  useEffect(
-    () => () => {
-      const controller = captureRef.current;
-      if (!controller) return;
-      controller.cancelled = true;
-      controller.queue.length = 0;
-      stopCaptureTracks(controller);
-      if (controller.recorder.state !== "inactive") controller.recorder.stop();
-      void cancelMatterSpeechCapture(tenantId, matterId, controller.id).catch(
-        () => undefined,
-      );
-      captureRef.current = null;
-    },
-    [matterId, tenantId],
   );
 
   useEffect(() => {
@@ -544,20 +214,41 @@ export function MatterSpeechPanel({
   }, [matterId, taskEvidenceItemId, taskEvidenceVersionId, tenantId]);
 
   useEffect(() => {
-    if (!latestTranscript || !latestVersionId) return;
-    let previousEnd = 0;
-    const editable = latestTranscript.segments.map((segment) => {
-      const separatorBefore = latestTranscript.text.slice(
-        previousEnd,
-        segment.charStart,
-      );
-      previousEnd = segment.charEnd;
-      return { ...segment, separatorBefore };
-    });
-    setDraftSegments(editable);
+    if (draftTaskIdRef.current !== (task?.id ?? null)) {
+      draftTaskIdRef.current = task?.id ?? null;
+      draftBaselineRef.current = null;
+      draftDirtyRef.current = false;
+      setDraftConflictVersionId(null);
+      setDraftSegments([]);
+      setDraftSpeakers([]);
+      setTrailingText("");
+      setReviewedText(false);
+      setReviewedTimeRanges(false);
+    }
+    if (!latestTranscript || !latestVersionId || !latestVersion) return;
+    const baseline = draftBaselineRef.current;
+    if (
+      baseline?.versionId === latestVersionId ||
+      (baseline && latestVersion.version_number < baseline.versionNumber)
+    )
+      return;
+    if (baseline && draftDirtyRef.current) {
+      setDraftConflictVersionId(latestVersionId);
+      return;
+    }
+    const editable = editableTranscript(latestTranscript);
+    setDraftSegments(editable.segments);
     setDraftSpeakers(latestTranscript.speakers ?? []);
-    setTrailingText(latestTranscript.text.slice(previousEnd));
-  }, [latestVersionId, latestTranscript]);
+    setTrailingText(editable.trailingText);
+    draftBaselineRef.current = {
+      versionId: latestVersionId,
+      versionNumber: latestVersion.version_number,
+    };
+    draftDirtyRef.current = false;
+    setDraftConflictVersionId(null);
+    setReviewedText(false);
+    setReviewedTimeRanges(false);
+  }, [latestVersion, latestVersionId, latestTranscript, task?.id]);
 
   const uploadAudio = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -613,6 +304,12 @@ export function MatterSpeechPanel({
 
   const saveReview = async () => {
     if (!task || !latestVersion || !latestTranscript) return;
+    if (!reviewedText || !reviewedTimeRanges) {
+      setActionError(
+        "保存前请分别确认文字内容和每段时间范围已对照原音频复核。",
+      );
+      return;
+    }
     setActionError(null);
     let text = "";
     const segments = draftSegments.map((segment) => {
@@ -630,15 +327,25 @@ export function MatterSpeechPanel({
     });
     text += trailingText;
     try {
-      await reviewTask.mutateAsync({
+      const receipt = await reviewTask.mutateAsync({
         taskId: task.id,
         input: {
           expected_version: latestVersion.version_number,
           text,
           segments,
           speakers: draftSpeakers,
+          reviewed_text: reviewedText,
+          reviewed_time_ranges: reviewedTimeRanges,
         },
       });
+      draftBaselineRef.current = {
+        versionId: receipt.version.id,
+        versionNumber: receipt.version.version_number,
+      };
+      draftDirtyRef.current = false;
+      setDraftConflictVersionId(null);
+      setReviewedText(false);
+      setReviewedTimeRanges(false);
     } catch (error) {
       setActionError(
         error instanceof Error ? error.message : "无法保存律师校对版本。",
@@ -647,11 +354,54 @@ export function MatterSpeechPanel({
   };
 
   const changeSegment = (index: number, patch: Partial<EditableSegment>) => {
+    draftDirtyRef.current = true;
     setDraftSegments((current) =>
       current.map((segment, currentIndex) =>
         currentIndex === index ? { ...segment, ...patch } : segment,
       ),
     );
+  };
+
+  const discardReviewDraft = () => {
+    if (!latestTranscript || !latestVersion) return;
+    const editable = editableTranscript(latestTranscript);
+    setDraftSegments(editable.segments);
+    setDraftSpeakers(latestTranscript.speakers ?? []);
+    setTrailingText(editable.trailingText);
+    draftBaselineRef.current = {
+      versionId: latestVersion.id,
+      versionNumber: latestVersion.version_number,
+    };
+    draftDirtyRef.current = false;
+    setDraftConflictVersionId(null);
+    setReviewedText(false);
+    setReviewedTimeRanges(false);
+  };
+
+  const createCitation = async () => {
+    if (!task || !latestVersion || !citationSelection) return;
+    setActionError(null);
+    try {
+      await createSpeechCitation.mutateAsync({
+        taskId: task.id,
+        input: {
+          transcript_version_id: latestVersion.id,
+          start_character: citationSelection.start,
+          end_character: citationSelection.end,
+        },
+      });
+      setCitationSelection(null);
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : "无法创建录音时间引用。",
+      );
+    }
+  };
+
+  const jumpToAudio = (startMs: number) => {
+    if (!mediaRef.current) return;
+    mediaRef.current.currentTime = startMs / 1000;
+    void mediaRef.current.play();
   };
 
   return (
@@ -696,16 +446,17 @@ export function MatterSpeechPanel({
               <div>
                 <h4 className="text-sm font-medium">案件实时录音</h4>
                 <p className="text-muted-foreground mt-1 text-xs">
-                  浏览器仅在本页面内暂存未确认分片；确认后直传律所服务器对象存储。保存前完成恶意文件扫描。
+                  麦克风仅在你点击后开启。浏览器以 16 kHz 单声道 PCM
+                  采集；分片先加密保存到本机，服务器确认后删除本机副本。刷新后只补传已保存分片，不会自动重新启麦。
                 </p>
               </div>
-              {captureSupportedType ? (
+              {captureSupported ? (
                 <>
                   <label className="block max-w-xl space-y-1 text-sm">
                     <span>录音名称</span>
                     <input
                       value={captureTitle}
-                      onChange={(event) => setCaptureTitle(event.target.value)}
+                      onChange={(event) => capture.setTitle(event.target.value)}
                       maxLength={240}
                       disabled={captureState !== "idle"}
                       placeholder="例如：2026 年 10 月 3 日庭审录音"
@@ -714,69 +465,111 @@ export function MatterSpeechPanel({
                   </label>
                   <div className="flex flex-wrap items-center gap-2">
                     {captureState === "idle" ? (
-                      <Button type="button" onClick={() => void startCapture()}>
+                      <Button
+                        type="button"
+                        onClick={() => void capture.start()}
+                      >
                         <MicIcon />
                         开始麦克风录音
                       </Button>
                     ) : (
                       <>
+                        {captureState === "starting" && (
+                          <>
+                            <Button type="button" disabled variant="outline">
+                              <MicIcon />
+                              正在准备麦克风…
+                            </Button>
+                            <Button
+                              type="button"
+                              onClick={() => void capture.cancel()}
+                              variant="outline"
+                            >
+                              <XCircleIcon />
+                              取消启动
+                            </Button>
+                          </>
+                        )}
                         {(captureState === "recording" ||
-                          captureState === "paused") && (
+                          capture.captureActive) && (
                           <Button
                             type="button"
-                            onClick={stopCapture}
+                            onClick={() => void capture.stop()}
                             variant="outline"
                           >
                             <AudioLinesIcon />
                             停止并保存
                           </Button>
                         )}
-                        {captureState === "upload_error" && (
+                        {(captureState === "upload_error" ||
+                          captureState === "offline_buffering" ||
+                          captureState === "interrupted") && (
                           <Button
                             type="button"
-                            onClick={() => void retryCaptureUpload()}
+                            onClick={() => void capture.retry()}
                             variant="outline"
                           >
                             <RefreshCwIcon />
-                            重试上传
+                            补传并继续保存
                           </Button>
                         )}
-                        <Button
-                          type="button"
-                          onClick={() => void cancelCapture()}
-                          variant="outline"
-                        >
-                          <XCircleIcon />
-                          取消录音
-                        </Button>
+                        {captureState !== "starting" &&
+                          captureState !== "revoked" && (
+                            <Button
+                              type="button"
+                              onClick={() => void capture.cancel()}
+                              variant="outline"
+                            >
+                              <XCircleIcon />
+                              取消录音
+                            </Button>
+                          )}
                       </>
+                    )}
+                    {captureState === "starting" && (
+                      <span role="status" className="text-sm">
+                        正在准备 16 kHz 录音…
+                      </span>
                     )}
                     {captureState === "recording" && (
                       <span role="status" className="text-sm">
-                        正在录音并上传已完成分片
+                        正在采集；本机保存、服务器确认和识别进度分开显示
                       </span>
                     )}
-                    {captureState === "paused" && (
+                    {captureState === "offline_buffering" && (
                       <span role="status" className="text-sm">
-                        上传队列较长，录音已暂时暂停
+                        网络不可用；采集内容保留在加密本机暂存中
                       </span>
                     )}
                     {captureState === "stopping" && (
                       <span role="status" className="text-sm">
-                        正在上传最后分片
+                        麦克风已停止，正在提交最后一片本机数据
                       </span>
                     )}
                     {captureState === "finalizing" && (
                       <span role="status" className="text-sm">
-                        正在扫描并登记案件原件
+                        正在完整扫描原件并排入正式转写；实时预览仍是临时稿
+                      </span>
+                    )}
+                    {captureState === "interrupted" && (
+                      <span role="status" className="text-sm">
+                        正在恢复持久保存的分片，不会自动启麦
                       </span>
                     )}
                     {captureState === "upload_error" && (
                       <span role="status" className="text-sm">
-                        上传暂停，待处理分片 {capturePendingBytes} 字节
+                        上传或本机暂存遇到问题；未确认数据没有被当作服务器已保存
                       </span>
                     )}
                   </div>
+                  <p className="text-muted-foreground text-xs">
+                    已采集 {Math.floor(capture.capturedSamples / 16_000)} 秒 ·
+                    本机已保存 {Math.floor(capture.localSavedSamples / 16_000)}{" "}
+                    秒 · 服务器已确认{" "}
+                    {Math.floor(capture.serverConfirmedSamples / 16_000)} 秒 ·
+                    已识别预览 {Math.floor(capture.recognizedSamples / 16_000)}{" "}
+                    秒
+                  </p>
                   {captureError && (
                     <p role="alert" className="text-destructive text-sm">
                       {captureError}
@@ -785,8 +578,50 @@ export function MatterSpeechPanel({
                 </>
               ) : (
                 <p className="text-muted-foreground text-sm">
-                  当前浏览器没有支持的录音格式或麦克风接口。
+                  {captureError ??
+                    "当前浏览器无法建立受支持的 16 kHz 录音能力；麦克风入口已关闭，可继续使用文件上传。"}
                 </p>
+              )}
+              {capture.serverRecoverable.length > 0 && (
+                <section
+                  aria-label="服务器可恢复录音"
+                  className="space-y-2 rounded border p-3"
+                >
+                  <p className="text-sm">
+                    另一个浏览器可能仍在录音。这里只保存服务器已确认的部分；请确认原录音已经中断后再操作。
+                  </p>
+                  {capture.serverRecoverable.map((item) => (
+                    <Button
+                      key={item.id}
+                      type="button"
+                      variant="outline"
+                      disabled={captureState !== "idle"}
+                      onClick={() => void capture.recoverServerCapture(item.id)}
+                    >
+                      确认录音已中断，保存服务器录音 · {item.title}
+                    </Button>
+                  ))}
+                </section>
+              )}
+              {capture.previewWindows.length > 0 && (
+                <div
+                  className="space-y-2 rounded border p-3"
+                  aria-label="录音临时识别预览"
+                >
+                  <p className="text-xs font-medium">
+                    机器预览 · 未审核，不可引用
+                  </p>
+                  {capture.previewWindows.map((window) => (
+                    <div key={window.window_id} className="text-sm">
+                      <span className="text-muted-foreground mr-2 text-xs">
+                        {Math.floor(window.start_sample / 16_000)}–
+                        {Math.floor(window.end_sample / 16_000)} 秒
+                      </span>
+                      {window.transcript?.text ??
+                        "本窗口没有可显示的识别文字。"}
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           )}
@@ -969,6 +804,18 @@ export function MatterSpeechPanel({
                   {mediaError}
                 </p>
               )}
+              {detail.data?.task.processing_deferred_reason ===
+                "tenant_data_exit_frozen" && (
+                <p role="status" className="rounded-md border p-3 text-sm">
+                  案件正在进行数据退出冻结，语音识别暂缓；解除冻结后工作进程会自动恢复。
+                </p>
+              )}
+              {detail.data?.task.processing_deferred_reason ===
+                "write_gate_unavailable" && (
+                <p role="status" className="rounded-md border p-3 text-sm">
+                  当前无法确认案件写入门禁，语音识别已暂停；服务恢复后会重新检查。
+                </p>
+              )}
               {mediaUrl &&
                 (task.media_type.startsWith("video/") ? (
                   <video
@@ -1007,7 +854,11 @@ export function MatterSpeechPanel({
                           type="button"
                           size="sm"
                           onClick={() => void saveReview()}
-                          disabled={reviewTask.isPending}
+                          disabled={
+                            reviewTask.isPending ||
+                            !reviewedText ||
+                            !reviewedTimeRanges
+                          }
                         >
                           {reviewTask.isPending && (
                             <LoaderCircleIcon className="animate-spin" />
@@ -1016,21 +867,129 @@ export function MatterSpeechPanel({
                         </Button>
                       )}
                   </div>
+                  {draftConflictVersionId && (
+                    <div
+                      role="alert"
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/50 p-3 text-sm"
+                    >
+                      <span>
+                        该转写已有新版本；当前未保存草稿已保留。比较后可选择载入新版本。
+                      </span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={discardReviewDraft}
+                      >
+                        放弃草稿并载入版本 {latestVersion.version_number}
+                      </Button>
+                    </div>
+                  )}
+                  {task.status === "reviewed" &&
+                    latestVersion.origin === "lawyer_review" &&
+                    latestTranscript.offsetUnit === "utf16" && (
+                      <section
+                        className="space-y-2 rounded-md border p-3"
+                        aria-label="录音时间引用"
+                      >
+                        <div>
+                          <h5 className="text-sm font-medium">
+                            固定版本录音引用
+                          </h5>
+                          <p className="text-muted-foreground text-xs">
+                            选择已复核原文中的文字，创建的引用固定绑定当前转写版本和原音频时间范围。
+                          </p>
+                        </div>
+                        <textarea
+                          aria-label="选择要引用的已复核转写文字"
+                          readOnly
+                          value={latestTranscript.text}
+                          rows={Math.min(
+                            8,
+                            Math.max(
+                              3,
+                              Math.ceil(latestTranscript.text.length / 90),
+                            ),
+                          )}
+                          onSelect={(event) => {
+                            const input = event.currentTarget;
+                            setCitationSelection(
+                              input.selectionEnd > input.selectionStart
+                                ? {
+                                    start: input.selectionStart,
+                                    end: input.selectionEnd,
+                                  }
+                                : null,
+                            );
+                          }}
+                          className="bg-background w-full rounded-md border px-3 py-2 text-sm"
+                        />
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={
+                            !citationSelection || createSpeechCitation.isPending
+                          }
+                          onClick={() => void createCitation()}
+                        >
+                          {createSpeechCitation.isPending && (
+                            <LoaderCircleIcon className="animate-spin" />
+                          )}
+                          创建所选文字的时间引用
+                        </Button>
+                        {speechCitations.data &&
+                          speechCitations.data.length > 0 && (
+                            <ul
+                              className="space-y-1 text-xs"
+                              aria-label="已创建的录音引用"
+                            >
+                              {speechCitations.data.map((citation) => (
+                                <li
+                                  key={citation.id}
+                                  className="flex flex-wrap items-center gap-2"
+                                >
+                                  <button
+                                    type="button"
+                                    className="text-primary underline"
+                                    onClick={() =>
+                                      jumpToAudio(
+                                        citation.audio_locator.start_ms,
+                                      )
+                                    }
+                                    disabled={
+                                      citation.source_state === "unavailable"
+                                    }
+                                  >
+                                    {citation.quote_preview ?? "已保存引用"} ·{" "}
+                                    {citation.audio_locator.start_ms}–
+                                    {citation.audio_locator.end_ms} ms
+                                  </button>
+                                  <span className="text-muted-foreground">
+                                    v
+                                    {citation.transcript_version_id ===
+                                    latestVersion.id
+                                      ? latestVersion.version_number
+                                      : "历史"}{" "}
+                                    · {citation.lineage_state}
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                      </section>
+                    )}
                   <div className="max-h-80 space-y-2 overflow-auto rounded-md border p-3">
                     {draftSegments.map((segment, index) => (
                       <div
                         key={`${segment.charStart}-${index}`}
-                        className="grid gap-2 sm:grid-cols-[95px_1fr]"
+                        className="grid gap-2 sm:grid-cols-[95px_1fr_150px]"
                       >
                         <button
                           type="button"
                           className="text-primary h-fit text-left text-xs underline"
                           onClick={() => {
-                            if (mediaRef.current) {
-                              mediaRef.current.currentTime =
-                                segment.startMs / 1000;
-                              void mediaRef.current.play();
-                            }
+                            jumpToAudio(segment.startMs);
                           }}
                         >
                           {Math.floor(segment.startMs / 1000)}s –{" "}
@@ -1057,6 +1016,58 @@ export function MatterSpeechPanel({
                             {segment.text}
                           </p>
                         )}
+                        <div className="grid grid-cols-2 gap-1">
+                          <label className="text-muted-foreground text-[10px]">
+                            起始 ms
+                            <input
+                              type="number"
+                              min={0}
+                              max={latestTranscript.durationMs}
+                              value={segment.startMs}
+                              disabled={
+                                !canReview ||
+                                !["awaiting_review", "reviewed"].includes(
+                                  task.status,
+                                )
+                              }
+                              aria-label={`校对片段 ${index + 1} 起始时间毫秒`}
+                              onChange={(event) =>
+                                changeSegment(index, {
+                                  startMs: Math.max(
+                                    0,
+                                    Number(event.target.value) || 0,
+                                  ),
+                                })
+                              }
+                              className="bg-background w-full rounded border px-1 py-1 text-xs"
+                            />
+                          </label>
+                          <label className="text-muted-foreground text-[10px]">
+                            结束 ms
+                            <input
+                              type="number"
+                              min={0}
+                              max={latestTranscript.durationMs}
+                              value={segment.endMs}
+                              disabled={
+                                !canReview ||
+                                !["awaiting_review", "reviewed"].includes(
+                                  task.status,
+                                )
+                              }
+                              aria-label={`校对片段 ${index + 1} 结束时间毫秒`}
+                              onChange={(event) =>
+                                changeSegment(index, {
+                                  endMs: Math.max(
+                                    0,
+                                    Number(event.target.value) || 0,
+                                  ),
+                                })
+                              }
+                              className="bg-background w-full rounded border px-1 py-1 text-xs"
+                            />
+                          </label>
+                        </div>
                       </div>
                     ))}
                     {draftSegments.length === 0 && (
@@ -1082,15 +1093,16 @@ export function MatterSpeechPanel({
                               )
                             }
                             aria-label={`说话人 ${index + 1} 名称`}
-                            onChange={(event) =>
+                            onChange={(event) => {
+                              draftDirtyRef.current = true;
                               setDraftSpeakers((current) =>
                                 current.map((value) =>
                                   value.id === speaker.id
                                     ? { ...value, label: event.target.value }
                                     : value,
                                 ),
-                              )
-                            }
+                              );
+                            }}
                             className="bg-background w-36 rounded-md border px-2 py-1"
                           />
                         </label>
@@ -1105,6 +1117,50 @@ export function MatterSpeechPanel({
                       ? ` 模型提示：${latestTranscript.warnings.join("、")}`
                       : ""}
                   </p>
+                  {canReview &&
+                    ["awaiting_review", "reviewed"].includes(task.status) && (
+                      <>
+                        <label className="block space-y-1 text-sm">
+                          <span>未分配到识别片段的尾部文字</span>
+                          <textarea
+                            value={trailingText}
+                            onChange={(event) => {
+                              draftDirtyRef.current = true;
+                              setTrailingText(event.target.value);
+                            }}
+                            rows={2}
+                            className="bg-background w-full rounded-md border px-3 py-2"
+                          />
+                        </label>
+                        <fieldset className="space-y-2 rounded-md border p-3 text-sm">
+                          <legend className="px-1 font-medium">
+                            保存前复核确认
+                          </legend>
+                          <label className="flex items-start gap-2">
+                            <input
+                              type="checkbox"
+                              checked={reviewedText}
+                              onChange={(event) =>
+                                setReviewedText(event.target.checked)
+                              }
+                            />
+                            <span>我已逐段核对转写文字和匿名说话人标签。</span>
+                          </label>
+                          <label className="flex items-start gap-2">
+                            <input
+                              type="checkbox"
+                              checked={reviewedTimeRanges}
+                              onChange={(event) =>
+                                setReviewedTimeRanges(event.target.checked)
+                              }
+                            />
+                            <span>
+                              我已对照原音频核对并修正每段时间范围；仅改文字不会清除时间估算提示。
+                            </span>
+                          </label>
+                        </fieldset>
+                      </>
+                    )}
                 </div>
               ) : task.status === "failed" ? (
                 <p role="alert" className="text-destructive text-sm">
