@@ -603,6 +603,11 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
       ),
     )
     .toBe(0);
+  const resumeServerCaptureButton = page.getByRole("button", {
+    name: `确认录音已中断，保存服务器录音 · ${evictedCaptureTitle}`,
+  });
+  await expect(resumeServerCaptureButton).toBeVisible({ timeout: 20_000 });
+  await resumeServerCaptureButton.click();
   const evictedCaptureFinishPath = `${speechPath}/live-captures/${evictedCapture!.id}/finish`;
   await expect
     .poll(() => forwarded.includes(`POST ${evictedCaptureFinishPath}`), {
