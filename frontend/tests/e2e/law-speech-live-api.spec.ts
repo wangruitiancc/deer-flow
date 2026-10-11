@@ -339,6 +339,50 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
   try {
     await expect.poll(() => heldOldPreviewRevision, { timeout: 5_000 }).toBe(1);
     await expect.poll(() => secondWindowChunkHeld, { timeout: 10_000 }).toBe(true);
+
+    // Keep one unacknowledged local chunk while a second tab opens. It must
+    // respect the active tab's per-identity Web Lock and perform no write.
+    const secondPage = await page.context().newPage();
+    let secondTabCaptureWrites = 0;
+    secondPage.on("request", (request) => {
+      const path = new URL(request.url()).pathname;
+      if (
+        path.includes(`${speechPath}/live-captures/`) &&
+        ((request.method() === "PUT" && path.includes("/chunks/")) ||
+          (request.method() === "POST" && path.endsWith("/finish")))
+      )
+        secondTabCaptureWrites += 1;
+    });
+    mockLangGraphAPI(secondPage, {
+      threads: [
+        {
+          thread_id: threadId,
+          title: "Synthetic live API capture",
+          artifacts: [],
+          messages: [{ type: "ai", id: "w11-live-api-thread-second-tab", content: "Synthetic browser/API acceptance only." }],
+        },
+      ],
+    });
+    await secondPage.goto(page.url());
+    await expect(
+      secondPage.getByRole("heading", { name: "庭审录音与语音转写" }),
+    ).toBeVisible();
+    await expect
+      .poll(() =>
+        secondPage.evaluate(
+          () =>
+            (window as typeof window & { __w11GetUserMediaCalls?: number })
+              .__w11GetUserMediaCalls ?? 0,
+        ),
+      )
+      .toBe(0);
+    await expect
+      .poll(async () => (await readSpeechOutboxCounts(secondPage)).chunks)
+      .toBeGreaterThan(0);
+    await secondPage.waitForTimeout(1_200);
+    expect(secondTabCaptureWrites).toBe(0);
+    await secondPage.close();
+
     releaseSecondWindowChunk();
     await expect(previewWindows).toHaveCount(1, { timeout: 10_000 });
     await expect.poll(() => newerPreviewRevisionSeen, { timeout: 30_000 }).toBe(true);
