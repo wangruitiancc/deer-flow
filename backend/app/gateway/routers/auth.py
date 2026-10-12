@@ -778,7 +778,6 @@ async def register(request: Request, response: Response, body: RegisterRequest):
             ).model_dump(),
         )
 
-    created = True
     try:
         user = await get_local_provider().create_user(email=email, password=body.password, system_role="user")
     except ValueError:
@@ -802,7 +801,6 @@ async def register(request: Request, response: Response, body: RegisterRequest):
                 ).model_dump(),
                 headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
             ) from None
-        created = False
 
     if invitation_handler is not None:
         try:
@@ -833,7 +831,6 @@ async def register(request: Request, response: Response, body: RegisterRequest):
 
     response.headers["Cache-Control"] = "no-store"
     response.headers["Referrer-Policy"] = "no-referrer"
-    response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
     token = create_access_token(str(user.id), token_version=user.token_version)
     _set_session_cookie(response, token, request, remember_me=body.remember_me)
 

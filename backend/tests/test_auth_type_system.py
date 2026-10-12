@@ -738,7 +738,7 @@ def test_invitation_registration_can_retry_after_account_creation(monkeypatch):
 
     assert interrupted.status_code == 503
     assert interrupted.headers["cache-control"] == "no-store"
-    assert retried.status_code == 200
+    assert retried.status_code == 201
     assert handler.claim_attempts == 2
 
 
