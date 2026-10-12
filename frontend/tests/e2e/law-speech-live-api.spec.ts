@@ -13,9 +13,13 @@ const threadId = "50000000-0000-4000-8000-000000000091";
 const membershipId = "20000000-0000-4000-8000-000000000091";
 const realAsr = process.env.W11_LIVE_API_REAL_ASR === "1";
 
-function reportCaptureOutcome(browserName: string, outcome: "recorded" | "unsupported"): void {
+function reportCaptureOutcome(
+  browserName: string,
+  outcome: "recorded" | "unsupported",
+  details: Record<string, unknown> = {},
+): void {
   const path = process.env.W11_LIVE_API_OUTCOME_FILE;
-  if (path) appendFileSync(path, `${JSON.stringify({ browserName, outcome })}\n`, "utf8");
+  if (path) appendFileSync(path, `${JSON.stringify({ browserName, outcome, ...details })}\n`, "utf8");
 }
 
 function readSpeechOutboxCounts(page: Page): Promise<{ sessions: number; chunks: number }> {
@@ -54,7 +58,7 @@ function readSpeechOutboxCounts(page: Page): Promise<{ sessions: number; chunks:
 
 test("live HTTP capture succeeds or browser startup fails closed", async ({ page, browserName }) => {
   test.skip(!apiBase || !tenantId || !matterId || !apiUserId, "requires the isolated W11 live API pytest harness");
-  test.setTimeout(110_000);
+  test.setTimeout(150_000);
   const matterBase = `/api/law/tenants/${tenantId}/matters/${matterId}`;
   const speechPath = `${matterBase}/speech-transcriptions`;
   const forwarded: string[] = [];
@@ -65,6 +69,7 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
   let caseWorkbenchEventsStarted = false;
   let firstChunkUploadPaused = false;
   let offlineChunkRetryAttempts = 0;
+  let offlineBufferEvidence: { durationMs: number; bufferedChunks: number; retryAttempts: number } | null = null;
   let firstChunkAcceptedByApi = false;
   let failFirstChunkUploadOffline = false;
   let releaseFirstChunkUpload!: () => void;
@@ -336,12 +341,26 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
     await expect.poll(async () => (await readSpeechOutboxCounts(page)).chunks).toBeGreaterThan(0);
     expect(firstChunkAcceptedByApi).toBe(false);
     expect(firstCaptureFinishSeen).toBe(false);
-    await page.waitForTimeout(300);
+    const disconnectedAt = Date.now();
+    await page.context().setOffline(true);
+    await page.waitForTimeout(15_000);
+    const offlineOutbox = await readSpeechOutboxCounts(page);
+    expect(offlineOutbox.chunks).toBeGreaterThan(5);
+    const offlineDurationMs = Date.now() - disconnectedAt;
+    expect(offlineDurationMs).toBeGreaterThanOrEqual(15_000);
+    expect(firstChunkAcceptedByApi).toBe(false);
+    expect(firstCaptureFinishSeen).toBe(false);
     expect(offlineChunkRetryAttempts).toBe(0);
+    offlineBufferEvidence = {
+      durationMs: offlineDurationMs,
+      bufferedChunks: offlineOutbox.chunks,
+      retryAttempts: offlineChunkRetryAttempts,
+    };
   } finally {
     releaseFirstChunkUpload();
   }
   failFirstChunkUploadOffline = false;
+  await page.context().setOffline(false);
   await page.evaluate(() =>
     (window as typeof window & { __w11SetOnline?: (value: boolean) => void }).__w11SetOnline?.(true),
   );
@@ -724,5 +743,5 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
   const restored = await page.request.post(`${apiBase}/__test/restore-matter-access`);
   expect(restored.status()).toBe(204);
   await page.close();
-  reportCaptureOutcome(browserName, "recorded");
+  reportCaptureOutcome(browserName, "recorded", offlineBufferEvidence ?? {});
 });
