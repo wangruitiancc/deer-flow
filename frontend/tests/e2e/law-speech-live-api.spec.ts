@@ -64,6 +64,7 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
   let suppressCapturePreview = false;
   let caseWorkbenchEventsStarted = false;
   let firstChunkUploadPaused = false;
+  let offlineChunkRetryAttempts = 0;
   let firstChunkAcceptedByApi = false;
   let failFirstChunkUploadOffline = false;
   let releaseFirstChunkUpload!: () => void;
@@ -196,10 +197,15 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
     const chunkMatch = new RegExp(`^${speechPath}/live-captures/[0-9a-f-]{36}/chunks/(\\d+)$`).exec(
       url.pathname,
     );
-    if (request.method() === "PUT" && chunkMatch?.[1] === "0" && !firstChunkUploadPaused) {
-      firstChunkUploadPaused = true;
-      await firstChunkUploadGate;
-      if (failFirstChunkUploadOffline) return route.abort("internetdisconnected");
+    if (request.method() === "PUT" && chunkMatch?.[1] === "0") {
+      if (!firstChunkUploadPaused) {
+        firstChunkUploadPaused = true;
+        await firstChunkUploadGate;
+        if (failFirstChunkUploadOffline) return route.abort("internetdisconnected");
+      } else if (failFirstChunkUploadOffline) {
+        offlineChunkRetryAttempts += 1;
+        return route.abort("internetdisconnected");
+      }
     }
     if (request.method() === "PUT" && chunkMatch?.[1] === "5" && !secondWindowChunkReleased) {
       secondWindowChunkHeld = true;
@@ -330,9 +336,12 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
     await expect.poll(async () => (await readSpeechOutboxCounts(page)).chunks).toBeGreaterThan(0);
     expect(firstChunkAcceptedByApi).toBe(false);
     expect(firstCaptureFinishSeen).toBe(false);
+    await page.waitForTimeout(300);
+    expect(offlineChunkRetryAttempts).toBe(0);
   } finally {
     releaseFirstChunkUpload();
   }
+  failFirstChunkUploadOffline = false;
   await page.evaluate(() =>
     (window as typeof window & { __w11SetOnline?: (value: boolean) => void }).__w11SetOnline?.(true),
   );

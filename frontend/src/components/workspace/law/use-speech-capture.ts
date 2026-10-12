@@ -963,6 +963,13 @@ export function useSpeechCapture({
     (controller: CaptureController, reconcile = false): Promise<void> => {
       if (controller.cancelled || !controller.session.captureId)
         return Promise.resolve();
+      if (!navigator.onLine) {
+        // An in-flight request can fail after new PCM has already queued
+        // another drain. Preserve the outbox and wait for the online event.
+        controller.drainAgain = false;
+        if (!controller.stopped) setState("offline_buffering");
+        return Promise.resolve();
+      }
       if (controller.uploadPromise) {
         controller.drainAgain = true;
         return controller.uploadPromise;
@@ -1032,6 +1039,7 @@ export function useSpeechCapture({
         } finally {
           const shouldDrainAgain =
             controller.drainAgain &&
+            navigator.onLine &&
             !controller.cancelled &&
             controllerRef.current === controller;
           controller.drainAgain = false;
