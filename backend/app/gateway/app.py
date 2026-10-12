@@ -346,6 +346,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # Must run AFTER langgraph_runtime so app.state.store is available for thread migration
         await _ensure_admin_user(app)
 
+        # Password reset delivery uses the shared auth database so queued mail
+        # survives Gateway restarts and can be claimed safely by another worker.
+        from app.gateway.auth.config import get_auth_config
+        from app.gateway.auth.password_reset import PasswordResetMailService
+        from app.gateway.deps import get_local_provider
+
+        password_reset_service = PasswordResetMailService(get_local_provider().repository, get_auth_config())
+        app.state.password_reset_mail_service = password_reset_service
+        await password_reset_service.start()
+
         # Start IM channel service if any channels are configured
         try:
             from app.channels.service import start_channel_service
@@ -482,6 +492,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             # same transition before SIGTERM so endpoint propagation has a
             # configurable drain window.
             mark_gateway_not_ready(app)
+
+        if getattr(app.state, "password_reset_mail_service", None) is not None:
+            try:
+                await app.state.password_reset_mail_service.stop()
+            except Exception:
+                logger.exception("Failed to stop password reset mail outbox worker")
 
         try:
             await auth.close_oidc_service()

@@ -9,7 +9,7 @@ import time
 import urllib.parse
 from ipaddress import ip_address, ip_network
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from starlette.responses import JSONResponse, RedirectResponse
@@ -50,7 +50,7 @@ from app.gateway.auth.oidc_state import (
     get_state_cookie,
     set_state_cookie,
 )
-from app.gateway.auth.password_reset import allow_password_reset_request, send_password_reset_email
+from app.gateway.auth.password_reset import allow_password_reset_request, encrypt_password_reset_token
 from app.gateway.auth.pat import PAT_MAX_NAME_LENGTH
 from app.gateway.auth.session_cookie import ACCESS_TOKEN_COOKIE_NAME, SESSION_PERSISTENCE_COOKIE_NAME, set_session_cookie
 from app.gateway.auth.session_cookie_state import SKIP_AUTH_CSRF_COOKIE_STATE_ATTR
@@ -243,12 +243,7 @@ async def _require_mfa_challenge(request: Request, response: Response, expected_
         _clear_mfa_challenge_cookie(response, request)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="MFA challenge is invalid or expired")
     user = await get_local_provider().get_user(challenge.sub)
-    if (
-        user is None
-        or user.system_role != "admin"
-        or user.token_version != challenge.ver
-        or user.mfa_challenge_id != challenge.jti
-    ):
+    if user is None or user.system_role != "admin" or user.token_version != challenge.ver or user.mfa_challenge_id != challenge.jti:
         _clear_mfa_challenge_cookie(response, request)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="MFA challenge is invalid or expired")
     return challenge, user
@@ -532,9 +527,7 @@ async def login_local(
             except MFAConfigurationError as exc:
                 logger.error("Admin MFA setup is unavailable because its encryption key is misconfigured")
                 raise HTTPException(status_code=503, detail="Administrator MFA is not configured") from exc
-        challenge_token, challenge_id = create_mfa_challenge(
-            str(user.id), user.token_version, mode=mode, remember_me=remember_me
-        )
+        challenge_token, challenge_id = create_mfa_challenge(str(user.id), user.token_version, mode=mode, remember_me=remember_me)
         if not await get_local_provider().set_mfa_challenge(str(user.id), user.token_version, challenge_id):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account changed during login")
         response.delete_cookie(ACCESS_TOKEN_COOKIE_NAME, path="/")
@@ -602,9 +595,7 @@ async def confirm_admin_mfa_setup(request: Request, response: Response, body: MF
         logger.error("Admin MFA setup confirmation failed because its secret could not be decrypted")
         raise HTTPException(status_code=503, detail="Administrator MFA is unavailable") from exc
     counter = matching_totp_counter(secret, body.code, last_counter=user.mfa_last_counter)
-    if counter is None or not await get_local_provider().confirm_mfa_setup(
-        str(user.id), user.token_version, challenge.jti, counter
-    ):
+    if counter is None or not await get_local_provider().confirm_mfa_setup(str(user.id), user.token_version, challenge.jti, counter):
         await _record_login_failure(client_ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authenticator code is invalid")
     _record_login_success(client_ip)
@@ -637,9 +628,7 @@ async def verify_admin_mfa(request: Request, response: Response, body: MFAInput)
     else:
         normalized = "".join(character for character in body.code.upper() if character.isalnum())
         if len(normalized) == 24:
-            accepted = await provider.consume_mfa_recovery_code(
-                str(user.id), user.token_version, challenge.jti, hash_recovery_code(body.code)
-            )
+            accepted = await provider.consume_mfa_recovery_code(str(user.id), user.token_version, challenge.jti, hash_recovery_code(body.code))
     if not accepted:
         await _record_login_failure(client_ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authenticator or recovery code is invalid")
@@ -657,18 +646,33 @@ async def password_reset_status(response: Response):
 
 
 @router.post("/password-reset/request", response_model=MessageResponse, status_code=status.HTTP_202_ACCEPTED)
-async def request_password_reset(request: Request, response: Response, background_tasks: BackgroundTasks, body: PasswordResetRequest):
-    """Send a short-lived reset link when mail is configured and the account is local."""
+async def request_password_reset(request: Request, response: Response, body: PasswordResetRequest):
+    """Queue a short-lived reset link when mail is configured and the account is local."""
     config = get_auth_config()
     response.headers["Cache-Control"] = "no-store"
     response.headers["Referrer-Policy"] = "no-referrer"
 
-    if config.password_reset_enabled and allow_password_reset_request(_get_client_ip(request), str(body.email)):
-        provider = get_local_provider()
-        user = await provider.get_user_by_email(str(body.email))
-        if user is not None and user.password_hash is not None:
-            token = create_password_reset_token(str(user.id), user.token_version)
-            background_tasks.add_task(send_password_reset_email, config, user.email, token)
+    if config.password_reset_enabled:
+        try:
+            provider = get_local_provider()
+            allowed = await allow_password_reset_request(provider.repository, _get_client_ip(request), str(body.email))
+            if allowed:
+                user = await provider.get_user_by_email(str(body.email))
+                if user is not None and user.password_hash is not None:
+                    token = create_password_reset_token(str(user.id), user.token_version)
+                    payload = decode_password_reset_token(token)
+                    if payload is not None:
+                        await provider.enqueue_password_reset_mail(
+                            user_id=str(user.id),
+                            token_version=user.token_version,
+                            recipient=user.email,
+                            token_ciphertext=encrypt_password_reset_token(config, token),
+                            expires_at=payload.exp,
+                        )
+        except Exception:
+            # Shared limiter or auth-store failures must not turn into an
+            # unthrottled account lookup or an alternate enumeration signal.
+            logger.warning("Password reset request was not queued because auth storage was unavailable")
 
     return MessageResponse(message="If this account can receive password reset email, a link will arrive shortly.")
 

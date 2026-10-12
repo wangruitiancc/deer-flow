@@ -48,7 +48,7 @@ from deerflow.persistence.migrations._helpers import _normalize_default
 asyncio_test = pytest.mark.asyncio
 
 
-HEAD = "0020_admin_mfa"
+HEAD = "0022_password_reset_rate_limits"
 BASELINE = "0001_baseline"
 
 

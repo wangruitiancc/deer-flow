@@ -2,26 +2,26 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import logging
 import smtplib
 import ssl
-import threading
-import time
-from collections import deque
+from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 
+from cryptography.fernet import Fernet, InvalidToken
+
 from app.gateway.auth.config import AuthConfig, get_auth_config
+from app.gateway.auth.jwt import decode_password_reset_token
+from app.gateway.auth.repositories.base import UserRepository
 
 logger = logging.getLogger(__name__)
 
 _WINDOW_SECONDS = 15 * 60
 _IP_LIMIT = 5
 _EMAIL_LIMIT = 3
-_MAX_KEYS = 20_000
-_attempts: dict[str, deque[float]] = {}
-_attempts_lock = threading.Lock()
 
 
 def _opaque_key(kind: str, value: str) -> str:
@@ -30,39 +30,44 @@ def _opaque_key(kind: str, value: str) -> str:
     return f"{kind}:{digest}"
 
 
-def allow_password_reset_request(client_ip: str, email: str) -> bool:
-    """Limit reset requests by source IP and normalized account address.
+def password_reset_request_buckets(client_ip: str, email: str) -> dict[str, int]:
+    """Return only keyed digests for the two shared request buckets."""
+    return {
+        _opaque_key("ip", client_ip): _IP_LIMIT,
+        _opaque_key("email", email): _EMAIL_LIMIT,
+    }
 
-    The in-process throttle is a baseline defense. Multi-worker production
-    deployments must also apply a shared edge rate limit to these endpoints.
-    Only HMAC digests are retained in memory; addresses and tokens are not
-    written to logs or persistent storage.
+
+async def allow_password_reset_request(repository: UserRepository, client_ip: str, email: str, *, now: datetime | None = None) -> bool:
+    """Atomically enforce shared IP and normalized-account windows.
+
+    Only HMAC digests cross the repository boundary; failure to reach the
+    durable store propagates so the public route can fail closed.
     """
-    now = time.monotonic()
-    keys = (
-        (_opaque_key("ip", client_ip), _IP_LIMIT),
-        (_opaque_key("email", email), _EMAIL_LIMIT),
+    current = now or datetime.now(UTC)
+    buckets = password_reset_request_buckets(client_ip, email)
+    return await repository.consume_password_reset_rate_limits(
+        buckets=buckets,
+        now=current,
+        window_start=current - timedelta(seconds=_WINDOW_SECONDS),
+        expires_at=current + timedelta(seconds=_WINDOW_SECONDS),
     )
-    with _attempts_lock:
-        if len(_attempts) > _MAX_KEYS:
-            cutoff = now - _WINDOW_SECONDS
-            for key in [key for key, values in _attempts.items() if not values or values[-1] <= cutoff]:
-                _attempts.pop(key, None)
 
-        for key, limit in keys:
-            attempts = _attempts.setdefault(key, deque())
-            while attempts and attempts[0] <= now - _WINDOW_SECONDS:
-                attempts.popleft()
-            if len(attempts) >= limit:
-                return False
 
-        for key, _ in keys:
-            _attempts[key].append(now)
-        return True
+def encrypt_password_reset_token(config: AuthConfig, token: str) -> str:
+    """Encrypt a reset token before it enters durable storage."""
+    if not config.password_reset_encryption_key:
+        raise ValueError("Password reset encryption is not configured")
+    return Fernet(config.password_reset_encryption_key.encode("ascii")).encrypt(token.encode("utf-8")).decode("ascii")
 
 
 def send_password_reset_email(config: AuthConfig, email: str, token: str) -> None:
-    """Deliver one reset link over operator-configured, verified-TLS SMTP."""
+    """Deliver one reset link over operator-configured, verified-TLS SMTP.
+
+    SMTP failures intentionally propagate so the outbox worker can retry only
+    explicit 4xx responses. Transport errors can happen after DATA and are
+    terminal to avoid resending a message the server may already have accepted.
+    """
     if not config.password_reset_enabled:
         return
 
@@ -72,11 +77,7 @@ def send_password_reset_email(config: AuthConfig, email: str, token: str) -> Non
     message["Subject"] = "Reset your Matrix-Law password"
     message["From"] = str(config.password_reset_from_email)
     message["To"] = email
-    message.set_content(
-        "A password reset was requested for this account.\n\n"
-        f"Open this link within 20 minutes to choose a new password:\n{reset_url}\n\n"
-        "If you did not request this, you can ignore this message."
-    )
+    message.set_content(f"A password reset was requested for this account.\n\nOpen this link within 20 minutes to choose a new password:\n{reset_url}\n\nIf you did not request this, you can ignore this message.")
 
     context = ssl.create_default_context()
     try:
@@ -101,11 +102,100 @@ def send_password_reset_email(config: AuthConfig, email: str, token: str) -> Non
                 _authenticate_if_configured(server, config)
                 server.send_message(message)
     except (OSError, smtplib.SMTPException):
-        # SMTP exceptions may include recipient/server data. Keep logs free of
-        # user addresses, tokens, server responses, and credential details.
-        logger.warning("Password reset email delivery failed")
+        raise
 
 
 def _authenticate_if_configured(server: smtplib.SMTP, config: AuthConfig) -> None:
     if config.password_reset_smtp_username and config.password_reset_smtp_password:
         server.login(config.password_reset_smtp_username, config.password_reset_smtp_password)
+
+
+class PasswordResetMailService:
+    """Durable outbox poller; a claimed ambiguous SMTP attempt is never resent."""
+
+    MAX_ATTEMPTS = 3
+    POLL_SECONDS = 1.0
+    STALE_SECONDS = 90
+
+    def __init__(self, repository: UserRepository, config: AuthConfig):
+        self.repository = repository
+        self.config = config
+        self._task: asyncio.Task[None] | None = None
+        self._stopping = asyncio.Event()
+
+    async def start(self) -> None:
+        if not self.config.password_reset_enabled:
+            await self.repository.purge_password_reset_mail()
+            return
+        # A row left in "sending" after process death is erased by claim; it
+        # must never be interpreted as permission to replay SMTP DATA.
+        self._task = asyncio.create_task(self._run(), name="password-reset-mail-outbox")
+
+    async def stop(self) -> None:
+        self._stopping.set()
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+
+    async def run_once(self, *, now: datetime | None = None) -> bool:
+        """Deliver at most one due message; exposed for deterministic tests."""
+        if not self.config.password_reset_enabled:
+            await self.repository.purge_password_reset_mail()
+            return False
+        current = now or datetime.now(UTC)
+        row = await self.repository.claim_password_reset_mail(
+            now=current,
+            stale_after=current - timedelta(seconds=self.STALE_SECONDS),
+        )
+        if row is None:
+            return False
+        try:
+            if row["purpose"] != "password_reset" or row["expires_at"].replace(tzinfo=row["expires_at"].tzinfo or UTC) <= current:
+                await self.repository.finish_password_reset_mail(row["id"])
+                return True
+            if not row["recipient"] or not row["token_ciphertext"]:
+                await self.repository.finish_password_reset_mail(row["id"])
+                return True
+            token = Fernet(self.config.password_reset_encryption_key.encode("ascii")).decrypt(row["token_ciphertext"].encode("ascii")).decode("utf-8")
+            payload = decode_password_reset_token(token)
+            if payload is None or payload.sub != row["user_id"] or payload.ver != row["token_version"]:
+                await self.repository.finish_password_reset_mail(row["id"])
+                return True
+            user = await self.repository.get_user_by_id(row["user_id"])
+            if user is None or user.password_hash is None or user.token_version != row["token_version"]:
+                await self.repository.finish_password_reset_mail(row["id"])
+                return True
+            await asyncio.to_thread(send_password_reset_email, self.config, row["recipient"], token)
+        except smtplib.SMTPResponseException as exc:
+            if 400 <= int(exc.smtp_code) < 500:
+                delay = min(60, 2 ** max(0, int(row["attempt_count"]) - 1))
+                await self.repository.retry_password_reset_mail(row["id"], next_attempt_at=current + timedelta(seconds=delay), max_attempts=self.MAX_ATTEMPTS)
+            else:
+                await self.repository.finish_password_reset_mail(row["id"])
+            logger.warning("Password reset email was rejected by SMTP; response omitted")
+        except (OSError, smtplib.SMTPException, InvalidToken, UnicodeError, ValueError):
+            # Includes disconnects after DATA, where delivery is ambiguous.
+            await self.repository.finish_password_reset_mail(row["id"])
+            logger.warning("Password reset email delivery ended without a definite retryable rejection")
+        except Exception:
+            await self.repository.finish_password_reset_mail(row["id"])
+            logger.exception("Password reset outbox processing failed")
+        else:
+            await self.repository.finish_password_reset_mail(row["id"])
+        return True
+
+    async def _run(self) -> None:
+        while not self._stopping.is_set():
+            try:
+                processed = await self.run_once()
+            except Exception:
+                logger.exception("Password reset outbox poll failed")
+                processed = False
+            if not processed:
+                try:
+                    await asyncio.wait_for(self._stopping.wait(), timeout=self.POLL_SECONDS)
+                except TimeoutError:
+                    pass
