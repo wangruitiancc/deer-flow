@@ -10,15 +10,17 @@ import {
   type LegalGraph,
 } from "@/core/law/legal-graph";
 
-const contract = JSON.parse(
-  readFileSync(
-    resolve(
+const matrixLawSourceRoot = process.env.MATRIX_LAW_SOURCE_ROOT;
+const contractPath = matrixLawSourceRoot
+  ? resolve(
+      matrixLawSourceRoot,
+      "extensions/matrix-law-extension/matrix_law_extension/contracts/legal_graph_v1.examples.json",
+    )
+  : resolve(
       __dirname,
       "../../../../../backend/extensions/sources/matrix-law-extension/matrix_law_extension/contracts/legal_graph_v1.examples.json",
-    ),
-    "utf-8",
-  ),
-) as {
+    );
+const contract = JSON.parse(readFileSync(contractPath, "utf-8")) as {
   base: LegalGraph;
   invalid: { name: string; path: (string | number)[]; value: unknown }[];
   valid_dates: string[];

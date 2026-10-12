@@ -9,13 +9,24 @@ import type {
   MatterMemoryCollection,
   MatterMemoryDecisionReceipt,
   MatterDeadline,
+  MatterDeadlineCandidateDraft,
+  MatterDeadlineAgendaCursor,
+  MatterDeadlineAgendaPage,
+  MatterDeadlineNotificationCapabilities,
+  MatterDeadlineCandidate,
+  MatterDeadlineRuleCatalog,
+  CalculateMatterDeadlineCandidateInput,
   MatterDeadlineEvent,
   MatterDeadlineRecipient,
   MatterNotificationOutboxItem,
+  MatterNotificationIncident,
+  ClaimMatterNotificationIncidentInput,
+  CloseMatterNotificationIncidentInput,
   CreateMatterDeadlineInput,
   ConfirmMatterDeadlineInput,
   RescheduleMatterDeadlineInput,
   TransitionMatterDeadlineInput,
+  HandoffMatterDeadlineInput,
   SpeechTranscriptionCollection,
   SpeechTranscriptionDetail,
   SpeechTranscriptionTask,
@@ -50,6 +61,9 @@ import type {
   MatterLegalHoldEvent,
   SetMatterLegalHoldInput,
   MatterMember,
+  MatterMemberCandidate,
+  CreateMatterMemberInput,
+  UpdateMatterMemberInput,
   MatterThread,
   Membership,
   OcrCitation,
@@ -961,6 +975,56 @@ export async function listMatterMembers(
   return data.items;
 }
 
+export async function listMatterMemberCandidates(
+  tenantId: string,
+  matterId: string,
+  signal?: AbortSignal,
+): Promise<MatterMemberCandidate[]> {
+  const data = await requestLaw<{ items: MatterMemberCandidate[] }>(
+    `/tenants/${encodeURIComponent(tenantId)}/matters/${encodeURIComponent(matterId)}/member-candidates`,
+    signal ? { signal, cache: "no-store" } : { cache: "no-store" },
+    "Failed to load eligible case members.",
+  );
+  return data.items;
+}
+
+export async function createMatterMember(
+  tenantId: string,
+  matterId: string,
+  input: CreateMatterMemberInput,
+  idempotencyKey = globalThis.crypto.randomUUID(),
+): Promise<MatterMember> {
+  const init = jsonRequest("POST", input);
+  const data = await requestLaw<{ member: MatterMember }>(
+    `/tenants/${encodeURIComponent(tenantId)}/matters/${encodeURIComponent(matterId)}/members`,
+    {
+      ...init,
+      headers: { ...init.headers, "Idempotency-Key": idempotencyKey },
+    },
+    "Failed to grant case access.",
+  );
+  return data.member;
+}
+
+export async function updateMatterMember(
+  tenantId: string,
+  matterId: string,
+  memberId: string,
+  input: UpdateMatterMemberInput,
+  idempotencyKey = globalThis.crypto.randomUUID(),
+): Promise<MatterMember> {
+  const init = jsonRequest("PATCH", input);
+  const data = await requestLaw<{ member: MatterMember }>(
+    `/tenants/${encodeURIComponent(tenantId)}/matters/${encodeURIComponent(matterId)}/members/${encodeURIComponent(memberId)}`,
+    {
+      ...init,
+      headers: { ...init.headers, "Idempotency-Key": idempotencyKey },
+    },
+    "Failed to update case access.",
+  );
+  return data.member;
+}
+
 export async function listMatterThreads(
   tenantId: string,
   matterId: string,
@@ -1720,6 +1784,71 @@ export async function listMatterDeadlines(
   return data.items;
 }
 
+export async function listMatterDeadlineCandidateDrafts(
+  tenantId: string,
+  matterId: string,
+  signal?: AbortSignal,
+): Promise<MatterDeadlineCandidateDraft[]> {
+  const data = await requestLaw<{ items: MatterDeadlineCandidateDraft[] }>(
+    `/tenants/${encodeURIComponent(tenantId)}/matters/${encodeURIComponent(matterId)}/deadline-candidate-drafts?limit=100`,
+    { signal, cache: "no-store" },
+    "无法读取待补资料的期限候选。",
+  );
+  return data.items;
+}
+
+export async function listMyMatterDeadlineAgenda(
+  tenantId: string,
+  cursor: MatterDeadlineAgendaCursor | null,
+  signal?: AbortSignal,
+): Promise<MatterDeadlineAgendaPage> {
+  const query = new URLSearchParams({ limit: "50" });
+  if (cursor) {
+    query.set("after_due_at", cursor.after_due_at);
+    query.set("after_id", cursor.after_id);
+  }
+  return requestLaw<MatterDeadlineAgendaPage>(
+    `/tenants/${encodeURIComponent(tenantId)}/my-deadline-agenda?${query.toString()}`,
+    { signal, cache: "no-store" },
+    "无法读取我的期限日程。",
+  );
+}
+
+export async function getMatterDeadlineNotificationCapabilities(
+  tenantId: string,
+  signal?: AbortSignal,
+): Promise<MatterDeadlineNotificationCapabilities> {
+  return requestLaw<MatterDeadlineNotificationCapabilities>(
+    `/tenants/${encodeURIComponent(tenantId)}/deadline-notification-capabilities`,
+    { signal, cache: "no-store" },
+    "无法读取期限通知渠道状态。",
+  );
+}
+
+export async function getMatterDeadlineRules(
+  tenantId: string,
+  matterId: string,
+  signal?: AbortSignal,
+): Promise<MatterDeadlineRuleCatalog> {
+  return requestLaw<MatterDeadlineRuleCatalog>(
+    `/tenants/${encodeURIComponent(tenantId)}/matters/${encodeURIComponent(matterId)}/deadline-rules`,
+    { signal, cache: "no-store" },
+    "无法读取期限规则审核状态。",
+  );
+}
+
+export async function calculateMatterDeadlineCandidate(
+  tenantId: string,
+  matterId: string,
+  input: CalculateMatterDeadlineCandidateInput,
+): Promise<MatterDeadlineCandidate> {
+  return requestLaw<MatterDeadlineCandidate>(
+    `/tenants/${encodeURIComponent(tenantId)}/matters/${encodeURIComponent(matterId)}/deadline-candidates/calculate`,
+    jsonRequest("POST", input),
+    "无法试算期限候选日期。",
+  );
+}
+
 function matterSpeechTranscriptionsPath(
   tenantId: string,
   matterId: string,
@@ -2057,6 +2186,19 @@ export async function transitionMatterDeadline(
   );
 }
 
+export async function handoffMatterDeadlineResponsibility(
+  tenantId: string,
+  matterId: string,
+  deadlineId: string,
+  input: HandoffMatterDeadlineInput,
+): Promise<MatterDeadline> {
+  return requestLaw<MatterDeadline>(
+    `${matterDeadlinesPath(tenantId, matterId)}/${encodeURIComponent(deadlineId)}/handoff`,
+    idempotencyRequest(input),
+    "无法完成期限责任交接。请刷新后核对案件成员和期限版本。",
+  );
+}
+
 export async function listMatterDeadlineEvents(
   tenantId: string,
   matterId: string,
@@ -2093,6 +2235,52 @@ export async function markMatterNotificationRead(
     `/tenants/${encodeURIComponent(tenantId)}/matters/${encodeURIComponent(matterId)}/notifications/outbox/${encodeURIComponent(notificationId)}/read`,
     jsonRequest("POST", {}),
     "无法更新提醒的已读状态。",
+  );
+}
+
+function matterNotificationIncidentsPath(
+  tenantId: string,
+  matterId: string,
+): string {
+  return `/tenants/${encodeURIComponent(tenantId)}/matters/${encodeURIComponent(matterId)}/notification-incidents`;
+}
+
+export async function listMatterNotificationIncidents(
+  tenantId: string,
+  matterId: string,
+  signal?: AbortSignal,
+): Promise<MatterNotificationIncident[]> {
+  const data = await requestLaw<{ items: MatterNotificationIncident[] }>(
+    `${matterNotificationIncidentsPath(tenantId, matterId)}?limit=100`,
+    { signal, cache: "no-store" },
+    "无法读取期限异常处置事项。",
+  );
+  return data.items;
+}
+
+export async function claimMatterNotificationIncident(
+  tenantId: string,
+  matterId: string,
+  incidentId: string,
+  input: ClaimMatterNotificationIncidentInput,
+): Promise<MatterNotificationIncident> {
+  return requestLaw<MatterNotificationIncident>(
+    `${matterNotificationIncidentsPath(tenantId, matterId)}/${encodeURIComponent(incidentId)}/claim`,
+    jsonRequest("POST", input),
+    "无法认领期限异常事项。请刷新后核对事项状态。",
+  );
+}
+
+export async function closeMatterNotificationIncident(
+  tenantId: string,
+  matterId: string,
+  incidentId: string,
+  input: CloseMatterNotificationIncidentInput,
+): Promise<MatterNotificationIncident> {
+  return requestLaw<MatterNotificationIncident>(
+    `${matterNotificationIncidentsPath(tenantId, matterId)}/${encodeURIComponent(incidentId)}/close`,
+    jsonRequest("POST", input),
+    "无法关闭期限异常事项。请刷新后核对事项状态。",
   );
 }
 

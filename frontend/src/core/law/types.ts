@@ -357,10 +357,29 @@ export interface MatterMember {
   matter_id: string;
   membership_id: string;
   role: MatterMemberRole;
-  status: string;
+  status: MatterMemberStatus;
   version: number;
   created_at: string;
   updated_at: string;
+}
+
+export type MatterMemberStatus = "active" | "suspended" | "removed";
+
+export interface MatterMemberCandidate {
+  membership_id: string;
+  display_name: string | null;
+  tenant_role: "owner" | "admin" | "member";
+}
+
+export interface CreateMatterMemberInput {
+  membership_id: string;
+  role: MatterMemberRole;
+}
+
+export interface UpdateMatterMemberInput {
+  role: MatterMemberRole;
+  status: MatterMemberStatus;
+  expected_version: number;
 }
 
 export interface MatterThread {
@@ -1232,7 +1251,10 @@ export type MatterDeadlineOrigin =
   | "agent_candidate"
   | "lawyer_entry"
   | "imported";
-export type MatterNotificationChannel = "in_app" | "email" | "wecom";
+export type MatterNotificationChannel = "in_app" | "email";
+export type MatterNotificationOutboxChannel =
+  | MatterNotificationChannel
+  | "wecom";
 export type MatterNotificationStatus =
   | "pending"
   | "sending"
@@ -1249,19 +1271,97 @@ export interface MatterDeadline {
   origin: MatterDeadlineOrigin;
   state: MatterDeadlineState;
   local_due_at: string;
+  due_precision?: "date_only" | "instant" | null;
+  legal_due_date?: string | null;
+  due_time_semantics?:
+    | "internal_reminder_schedule_anchor_not_court_time"
+    | "explicit_local_time"
+    | "legacy_unknown";
   timezone_name: string;
   fold: 0 | 1 | null;
   due_at: string;
   basis_note: string;
   rule_version: string;
   source_refs: string[];
+  source_refs_trust?: "legacy_unverified" | "not_provided";
+  source_bindings_state?: "verified" | "missing" | "legacy_unverified" | "review_required";
   calculation: Record<string, unknown>;
+  source_bindings?: Array<Record<string, unknown>> | null;
+  reminder_plan?: Record<string, unknown> | null;
+  primary_responsible_membership_id?: string | null;
+  responsibility_state?: "unassigned" | "assigned" | "pending_handoff" | null;
   created_by_membership_id: string;
   confirmed_by_membership_id: string | null;
   confirmed_at: string | null;
   version: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface MatterDeadlineCandidateDraft {
+  id: string;
+  kind: MatterDeadlineKind;
+  title: string;
+  rule_id: string;
+  rule_version: string;
+  calendar_version: string;
+  facts: Record<string, unknown>;
+  missing_information: string[];
+  calculation: Record<string, unknown>;
+  source_bindings: Array<Record<string, unknown>>;
+  status: "needs_information";
+  version: number;
+  created_by_membership_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MatterDeadlineAgendaItem {
+  id: string;
+  tenant_id: string;
+  matter_id: string;
+  matter_title: string;
+  case_number: string | null;
+  kind: MatterDeadlineKind;
+  title: string;
+  state: "confirmed";
+  local_due_at: string;
+  due_precision?: "date_only" | "instant" | null;
+  legal_due_date?: string | null;
+  due_time_semantics?:
+    | "internal_reminder_schedule_anchor_not_court_time"
+    | "explicit_local_time"
+    | "legacy_unknown";
+  timezone_name: string;
+  due_at: string;
+  primary_responsible_membership_id: string | null;
+  responsibility_state: "assigned" | "pending_handoff" | "unassigned" | null;
+  version: number;
+}
+
+export interface MatterDeadlineAgendaCursor {
+  after_due_at: string;
+  after_id: string;
+}
+
+export interface MatterDeadlineAgendaPage {
+  items: MatterDeadlineAgendaItem[];
+  next_cursor: MatterDeadlineAgendaCursor | null;
+}
+
+export interface MatterDeadlineChannelCapability {
+  selectable: boolean;
+  dispatch_active: boolean;
+  disabled_reason: "dispatch_paused" | "email_not_configured" | "not_implemented" | null;
+  dispatch_state: "active" | "paused" | "unavailable";
+}
+
+export interface MatterDeadlineNotificationCapabilities {
+  channels: {
+    in_app: MatterDeadlineChannelCapability;
+    email: MatterDeadlineChannelCapability;
+    wecom: MatterDeadlineChannelCapability;
+  };
 }
 
 export interface MatterDeadlineRecipient {
@@ -1274,10 +1374,118 @@ export interface MatterDeadlineEvent {
   id: string;
   deadline_id: string;
   sequence_number: number;
-  event_type: MatterDeadlineState | "rescheduled";
+  event_type:
+    | MatterDeadlineState
+    | "rescheduled"
+    | "responsibility_pending"
+    | "responsibility_handoff";
   event: Record<string, unknown>;
   actor_membership_id: string;
   created_at: string;
+}
+
+export interface CalculateMatterDeadlineCandidateInput {
+  rule: Record<string, unknown>;
+  source_bindings?: MatterDeadlineSourceBinding[];
+}
+
+export interface MatterDeadlineSourceBinding {
+  source_kind: "evidence_version" | "project_artifact_version";
+  version_id: string;
+  version_number: number;
+  locator: {
+    page_number?: number;
+    paragraph_number?: number;
+    start_offset?: number;
+    end_offset?: number;
+    anchor?: string;
+  };
+}
+
+export interface MatterDeadlineCandidateTrace {
+  anchor_date: string;
+  counted_dates: string[];
+  unadjusted_due_date: string;
+  adjustment: string;
+  adjustment_days: number;
+  candidate_due_date: string;
+}
+
+export interface MatterDeadlineRegisteredCandidateTrace {
+  anchor_fact: string;
+  anchor_date: string;
+  duration: number;
+  unit: "days" | "months" | "years";
+  unadjusted_due_date: string;
+  final_day_adjustment_days: number;
+  candidate_due_date: string;
+}
+
+interface MatterDeadlineCandidateBase {
+  mode: "candidate_only";
+  candidate_due_date: string;
+  rule_id: string;
+  rule_version: string;
+  source_refs: string[];
+  source_bindings?: MatterDeadlineSourceBinding[];
+  requires_lawyer_confirmation: true;
+}
+
+export interface MatterDeadlineArithmeticCandidate
+  extends MatterDeadlineCandidateBase {
+  duration_days: number;
+  counting_basis: "calendar_days" | "business_days";
+  include_anchor: boolean;
+  weekend_days: number[];
+  holidays: string[];
+  adjustment: "none" | "next_business_day" | "previous_business_day";
+  trace: MatterDeadlineCandidateTrace;
+}
+
+export interface MatterDeadlineRegisteredCandidate
+  extends MatterDeadlineCandidateBase {
+  approval_status: "pending_lawyer_review" | "approved";
+  date_precision: "date_only";
+  calendar_id: string;
+  calendar_version: string;
+  calendar_approval_status: "pending_lawyer_review" | "approved";
+  calendar_source_ref: string;
+  trace: MatterDeadlineRegisteredCandidateTrace;
+}
+
+export type MatterDeadlineCandidate =
+  | MatterDeadlineArithmeticCandidate
+  | MatterDeadlineRegisteredCandidate;
+
+export interface MatterDeadlineRuleSpec {
+  rule_id: string;
+  version: string;
+  title: string;
+  approval_status: "pending_lawyer_review" | "approved" | "retired";
+  legal_sources: Array<{ url: string; article: string }>;
+  required_facts: string[];
+  manual_review_conditions: string[];
+  effective_from: string;
+  effective_through: string | null;
+  summary: string;
+}
+
+export interface MatterDeadlineCalendarSpec {
+  calendar_id: string;
+  version: string;
+  jurisdiction: string;
+  approval_status: "pending_lawyer_review" | "approved";
+  coverage_from: string;
+  coverage_through: string;
+  source_ref: string;
+  source_note: string;
+  test_only: boolean;
+}
+
+export interface MatterDeadlineRuleCatalog {
+  rules: MatterDeadlineRuleSpec[];
+  calendars: MatterDeadlineCalendarSpec[];
+  unreviewed_preview_enabled: boolean;
 }
 
 export interface MatterNotificationOutboxItem {
@@ -1285,11 +1493,69 @@ export interface MatterNotificationOutboxItem {
   deadline_id: string;
   deadline_version: number;
   recipient_membership_id: string;
-  channel: MatterNotificationChannel;
+  channel: MatterNotificationOutboxChannel;
   scheduled_at: string;
   status: MatterNotificationStatus;
   sent_at: string | null;
+  attempt_count: number;
+  next_attempt_at: string | null;
+  failure_code:
+    | "smtp_temporary"
+    | "smtp_permanent"
+    | "smtp_delivery_unknown"
+    | "recipient_unavailable"
+    | null;
   read_at: string | null;
+  attempts?: MatterNotificationAttempt[];
+}
+
+export interface MatterNotificationAttempt {
+  attempt_number: number;
+  started_at: string;
+  finished_at: string | null;
+  outcome:
+    | "in_progress"
+    | "channel_accepted"
+    | "retryable_failure"
+    | "permanent_failure"
+    | "outcome_unknown"
+    | "cancelled_before_submission";
+  failure_code: MatterNotificationOutboxItem["failure_code"];
+}
+
+export type MatterNotificationIncidentType =
+  | "delivery_failure"
+  | "delivery_unknown"
+  | "retry_exhausted"
+  | "owner_missing"
+  | "handoff_pending"
+  | "deadline_overdue"
+  | "dispatch_stalled";
+
+export interface MatterNotificationIncident {
+  id: string;
+  deadline_id: string;
+  notification_id: string | null;
+  incident_type: MatterNotificationIncidentType;
+  urgency: "normal" | "urgent";
+  status: "open" | "claimed" | "closed";
+  failure_code: MatterNotificationOutboxItem["failure_code"];
+  detected_at: string;
+  claimed_by_membership_id: string | null;
+  claimed_at: string | null;
+  resolution_note: string | null;
+  closed_at: string | null;
+  version: number;
+  updated_at: string;
+}
+
+export interface ClaimMatterNotificationIncidentInput {
+  expected_version: number;
+}
+
+export interface CloseMatterNotificationIncidentInput {
+  expected_version: number;
+  resolution_note: string;
 }
 
 export interface CreateMatterDeadlineInput {
@@ -1297,38 +1563,56 @@ export interface CreateMatterDeadlineInput {
   title: string;
   origin: MatterDeadlineOrigin;
   local_due_at: string;
+  due_precision?: "date_only" | "instant";
+  legal_due_date?: string | null;
   timezone_name: string;
   fold?: 0 | 1 | null;
   basis_note: string;
   rule_version: string;
   source_refs: string[];
+  source_bindings?: MatterDeadlineSourceBinding[];
   calculation: Record<string, unknown>;
 }
 
 export interface ConfirmMatterDeadlineInput {
   expected_version: number;
+  primary_responsible_membership_id: string;
   recipient_membership_ids: string[];
   reminder_offsets_minutes: number[];
+  reminder_time_local?: string | null;
+  reminder_fold?: 0 | 1 | null;
   channels: MatterNotificationChannel[];
 }
 
 export interface RescheduleMatterDeadlineInput {
   expected_version: number;
+  primary_responsible_membership_id: string;
   local_due_at: string;
+  due_precision?: "date_only" | "instant" | null;
+  legal_due_date?: string | null;
   timezone_name: string;
   fold?: 0 | 1 | null;
   basis_note: string;
   rule_version: string;
   source_refs: string[];
+  source_bindings?: MatterDeadlineSourceBinding[];
   calculation: Record<string, unknown>;
   change_note: string;
   recipient_membership_ids: string[];
   reminder_offsets_minutes: number[];
+  reminder_time_local?: string | null;
+  reminder_fold?: 0 | 1 | null;
   channels: MatterNotificationChannel[];
 }
 
 export interface TransitionMatterDeadlineInput {
   expected_version: number;
+  change_note: string;
+}
+
+export interface HandoffMatterDeadlineInput {
+  expected_version: number;
+  new_primary_responsible_membership_id: string;
   change_note: string;
 }
 
