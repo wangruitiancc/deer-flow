@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { appendFileSync } from "node:fs";
 
 import { expect, test, type Page, type Route } from "@playwright/test";
 
@@ -11,6 +12,11 @@ const apiUserId = process.env.W11_LIVE_USER_ID;
 const threadId = "50000000-0000-4000-8000-000000000091";
 const membershipId = "20000000-0000-4000-8000-000000000091";
 const realAsr = process.env.W11_LIVE_API_REAL_ASR === "1";
+
+function reportCaptureOutcome(browserName: string, outcome: "recorded" | "unsupported"): void {
+  const path = process.env.W11_LIVE_API_OUTCOME_FILE;
+  if (path) appendFileSync(path, `${JSON.stringify({ browserName, outcome })}\n`, "utf8");
+}
 
 function readSpeechOutboxCounts(page: Page): Promise<{ sessions: number; chunks: number }> {
   return page.evaluate(
@@ -306,6 +312,8 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
       ),
     ).toBe(false);
     expect(await readSpeechOutboxCounts(page)).toEqual({ sessions: 0, chunks: 0 });
+    await page.close();
+    reportCaptureOutcome(browserName, "unsupported");
     return;
   }
   await expect(captureProgress).toBeVisible();
@@ -706,4 +714,6 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
   expect(forwarded.some((item) => item.endsWith(`${matterBase}/case-workbench/events`))).toBe(true);
   const restored = await page.request.post(`${apiBase}/__test/restore-matter-access`);
   expect(restored.status()).toBe(204);
+  await page.close();
+  reportCaptureOutcome(browserName, "recorded");
 });
