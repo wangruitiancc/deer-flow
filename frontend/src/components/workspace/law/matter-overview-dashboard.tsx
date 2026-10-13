@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { MyMatterDeadlineAgenda } from "@/components/workspace/law/my-matter-deadline-agenda";
 import { useI18n } from "@/core/i18n/hooks";
 import {
   useLawCaseWorkbench,
@@ -261,6 +262,10 @@ export function MatterOverviewDashboard({
             />
           </div>
         </section>
+      )}
+
+      {view === "schedule" && (
+        <MyMatterDeadlineAgenda tenantId={matter.tenant_id} locale={locale} />
       )}
 
       <div
