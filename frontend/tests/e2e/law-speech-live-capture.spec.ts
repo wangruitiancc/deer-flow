@@ -206,6 +206,7 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
   let failNextCaptureCreate = false;
   let capacityBusyNextCaptureCreate = false;
   let capacityBusyCaptureCreateCount = 0;
+  let asrBusyNextCaptureCreate = false;
   let failedCreateIdempotencyKey: string | null = null;
   let failedCaptureCreateCount = 0;
   let refreshStarted = false;
@@ -477,6 +478,19 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
       );
     }
     if (path === capturePath && method === "POST") {
+      if (asrBusyNextCaptureCreate) {
+        asrBusyNextCaptureCreate = false;
+        return route.fulfill({
+          status: 409,
+          json: {
+            error: {
+              code: "SPEECH_ASR_BUSY",
+              message:
+                "Local speech recognition is finishing another task; try recording again shortly",
+            },
+          },
+        });
+      }
       if (capacityBusyNextCaptureCreate) {
         capacityBusyNextCaptureCreate = false;
         capacityBusyCaptureCreateCount += 1;
@@ -1780,6 +1794,33 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
   expect(createCount).toBe(capturesBeforeCapacityRejection + 1);
   expect(await readRecoverableCaptureCount(page)).toBe(0);
   expect(failedCreateIdempotencyKey).toBeNull();
+
+  asrBusyNextCaptureCreate = true;
+  const capturesBeforeAsrRejection = createCount;
+  await page.getByLabel("录音名称").fill("正式转写占用识别通道");
+  await page.getByRole("button", { name: /开始麦克风录音/ }).click();
+  await expect(
+    page.getByText("本地识别通道正在处理正式转写，请稍后再开始实时录音。"),
+  ).toBeVisible();
+  const asrRejectedResources = await page.evaluate(() => {
+    const target = window as typeof window & {
+      __w11AudioContexts?: AudioContext[];
+      __w11AudioTracks?: MediaStreamTrack[][];
+    };
+    return {
+      contextState: target.__w11AudioContexts?.at(-1)?.state,
+      trackStates: target.__w11AudioTracks
+        ?.at(-1)
+        ?.map((track) => track.readyState),
+    };
+  });
+  expect(asrRejectedResources.contextState).toBe("closed");
+  expect(asrRejectedResources.trackStates?.length).toBeGreaterThan(0);
+  expect(
+    asrRejectedResources.trackStates?.every((state) => state === "ended"),
+  ).toBe(true);
+  expect(createCount).toBe(capturesBeforeAsrRejection);
+  expect(await readRecoverableCaptureCount(page)).toBe(0);
 
   holdNextFinishResponse = true;
   await page.getByLabel("录音名称").fill("取消与迟到 finish 回包测试");

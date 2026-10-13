@@ -151,7 +151,20 @@ function isDenied(error: unknown): boolean {
   );
 }
 
+function isDefinitiveCaptureAdmissionRejection(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const response = error as { status?: unknown; code?: unknown };
+  return Number(response.status) === 409 && response.code === "SPEECH_ASR_BUSY";
+}
+
 function describeCaptureStartupError(error: unknown): string {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "SPEECH_ASR_BUSY"
+  )
+    return "本地识别通道正在处理正式转写，请稍后再开始实时录音。";
   if (
     typeof error === "object" &&
     error !== null &&
@@ -1286,7 +1299,20 @@ export function useSpeechCapture({
       }
       controllerRef.current = null;
       startLockRef.current = false;
-      if (!serverCaptureId && scope && local) {
+      const rejectedBeforeCreation =
+        !serverCaptureId && isDefinitiveCaptureAdmissionRejection(startError);
+      if (rejectedBeforeCreation && scope && local) {
+        await deleteLocalSpeechCapture(scope, local.localId).catch(
+          () => undefined,
+        );
+        if (sessionRef.current?.localId === local.localId)
+          sessionRef.current = null;
+        if (scopeRef.current === scope) scopeRef.current = null;
+        setCaptureId(null);
+        setCapturedSamples(0);
+        setLocalSavedSamples(0);
+        setServerConfirmedSamples(0);
+      } else if (!serverCaptureId && scope && local) {
         await updateLocalSpeechCapture(scope, {
           ...local,
           status: "interrupted",
@@ -1299,7 +1325,11 @@ export function useSpeechCapture({
         setSupported(false);
       if (isLocalSpeechCaptureStorageUnavailable(startError))
         setSupported(false);
-      setState(serverCaptureId || !local ? "idle" : "upload_error");
+      setState(
+        serverCaptureId || !local || rejectedBeforeCreation
+          ? "idle"
+          : "upload_error",
+      );
       setError(
         isLocalSpeechCaptureStorageUnavailable(startError)
           ? LOCAL_SPEECH_CAPTURE_STORAGE_UNAVAILABLE
