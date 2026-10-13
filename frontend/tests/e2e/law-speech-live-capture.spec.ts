@@ -204,6 +204,8 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
   let revokeNextChunk = false;
   let createCount = 0;
   let failNextCaptureCreate = false;
+  let capacityBusyNextCaptureCreate = false;
+  let capacityBusyCaptureCreateCount = 0;
   let failedCreateIdempotencyKey: string | null = null;
   let failedCaptureCreateCount = 0;
   let refreshStarted = false;
@@ -475,6 +477,22 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
       );
     }
     if (path === capturePath && method === "POST") {
+      if (capacityBusyNextCaptureCreate) {
+        capacityBusyNextCaptureCreate = false;
+        capacityBusyCaptureCreateCount += 1;
+        failedCreateIdempotencyKey =
+          request.headers()["idempotency-key"] ?? null;
+        return route.fulfill({
+          status: 409,
+          json: {
+            error: {
+              code: "SPEECH_CAPTURE_CAPACITY_BUSY",
+              message:
+                "Live recording capacity is busy; save existing recordings before starting another",
+            },
+          },
+        });
+      }
       if (failNextCaptureCreate) {
         failNextCaptureCreate = false;
         failedCaptureCreateCount += 1;
@@ -1723,6 +1741,46 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
   await expect(
     page.getByRole("button", { name: /开始麦克风录音/ }),
   ).toBeVisible();
+
+  capacityBusyNextCaptureCreate = true;
+  const capturesBeforeCapacityRejection = createCount;
+  await page.getByLabel("录音名称").fill("实时录音容量冲突");
+  await page.getByRole("button", { name: /开始麦克风录音/ }).click();
+  await expect(
+    page.getByText("实时录音容量正在使用，请先保存已有录音后重试。"),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /补传并继续保存/ }),
+  ).toBeVisible();
+  expect(capacityBusyCaptureCreateCount).toBe(1);
+  expect(createCount).toBe(capturesBeforeCapacityRejection);
+  expect(await readRecoverableCaptureCount(page)).toBe(1);
+  expect(await readPendingSequences(page)).toEqual([]);
+  const capacityRejectedResources = await page.evaluate(() => {
+    const target = window as typeof window & {
+      __w11AudioContexts?: AudioContext[];
+      __w11AudioTracks?: MediaStreamTrack[][];
+    };
+    return {
+      contextState: target.__w11AudioContexts?.at(-1)?.state,
+      trackStates: target.__w11AudioTracks
+        ?.at(-1)
+        ?.map((track) => track.readyState),
+    };
+  });
+  expect(capacityRejectedResources.contextState).toBe("closed");
+  expect(capacityRejectedResources.trackStates?.length).toBeGreaterThan(0);
+  expect(
+    capacityRejectedResources.trackStates?.every((state) => state === "ended"),
+  ).toBe(true);
+  await page.getByRole("button", { name: /补传并继续保存/ }).click();
+  await expect(
+    page.getByRole("button", { name: /开始麦克风录音/ }),
+  ).toBeVisible();
+  expect(createCount).toBe(capturesBeforeCapacityRejection + 1);
+  expect(await readRecoverableCaptureCount(page)).toBe(0);
+  expect(failedCreateIdempotencyKey).toBeNull();
+
   holdNextFinishResponse = true;
   await page.getByLabel("录音名称").fill("取消与迟到 finish 回包测试");
   await page.getByRole("button", { name: /开始麦克风录音/ }).click();
@@ -2535,14 +2593,12 @@ test("fails closed across browsers when the encrypted capture database cannot op
       };
     }
   });
-  await page
-    .context()
-    .route("**/api/**", (route) =>
-      route.fulfill({
-        status: 404,
-        json: { detail: "Unmocked test endpoint" },
-      }),
-    );
+  await page.context().route("**/api/**", (route) =>
+    route.fulfill({
+      status: 404,
+      json: { detail: "Unmocked test endpoint" },
+    }),
+  );
   mockLangGraphAPI(page, {
     threads: [
       {
