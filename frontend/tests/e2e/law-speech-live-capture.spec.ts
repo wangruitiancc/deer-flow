@@ -452,6 +452,9 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
     if (path.endsWith(`/matters/${matterId}`)) {
       return route.fulfill(response({ matter: { title: "合成庭审录音" } }));
     }
+    if (path.endsWith("/deadline-rules")) {
+      return route.fulfill(response({ rules: [], calendars: [] }));
+    }
     if (path === `${basePath}/evidence`) {
       return route.fulfill(response({ items: evidenceItems }));
     }
@@ -2294,6 +2297,9 @@ test("pauses recovery for a corrupted encrypted PCM chunk", async ({
     }
     if (path.endsWith(`/matters/${matterId}`))
       return route.fulfill(response({ matter: { title: "损坏缓存合成测试" } }));
+    if (path.endsWith("/deadline-rules")) {
+      return route.fulfill(response({ rules: [], calendars: [] }));
+    }
     if (path.endsWith("/speech-transcriptions") && method === "GET") {
       return route.fulfill(
         response({
@@ -2678,6 +2684,9 @@ test("fails closed across browsers when the encrypted capture database cannot op
       return route.fulfill(
         response({ matter: { title: "本机录音存储不可用测试" } }),
       );
+    }
+    if (path.endsWith("/deadline-rules")) {
+      return route.fulfill(response({ rules: [], calendars: [] }));
     }
     if (path === `${capturePath}` && method === "GET") {
       captureListReads += 1;

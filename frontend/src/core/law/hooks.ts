@@ -13,8 +13,11 @@ import {
   createCitation,
   decideMatterMemoryEntry,
   confirmMatterDeadline,
+  calculateMatterDeadlineCandidate,
+  getMatterDeadlineRules,
   rescheduleMatterDeadline,
   transitionMatterDeadline,
+  handoffMatterDeadlineResponsibility,
   createMatterDeadline,
   createMatter,
   createMatterConversation,
@@ -45,16 +48,25 @@ import {
   listCitations,
   listEvidence,
   listEvidenceVersions,
+  listMatterMemberCandidates,
   listMatterMembers,
   listMatters,
   listMatterThreads,
+  createMatterMember,
+  updateMatterMember,
   setMatterLegalHold,
   listMatterMemoryEntries,
   listMatterDeadlineEvents,
   listMatterDeadlineRecipients,
   listMatterDeadlines,
+  listMatterDeadlineCandidateDrafts,
+  listMyMatterDeadlineAgenda,
+  getMatterDeadlineNotificationCapabilities,
   listMatterNotificationOutbox,
   markMatterNotificationRead,
+  listMatterNotificationIncidents,
+  claimMatterNotificationIncident,
+  closeMatterNotificationIncident,
   listMatterSpeechTranscriptions,
   getMatterSpeechTranscription,
   createMatterSpeechTranscription,
@@ -107,13 +119,27 @@ import type {
   MatterMemoryCollection,
   MatterMemoryDecisionReceipt,
   MatterDeadline,
+  MatterDeadlineCandidateDraft,
+  MatterDeadlineAgendaCursor,
+  MatterDeadlineAgendaPage,
+  MatterDeadlineNotificationCapabilities,
+  MatterDeadlineRuleCatalog,
+  MatterDeadlineCandidate,
+  CalculateMatterDeadlineCandidateInput,
   MatterDeadlineEvent,
   MatterDeadlineRecipient,
   MatterNotificationOutboxItem,
+  MatterNotificationIncident,
+  ClaimMatterNotificationIncidentInput,
+  CloseMatterNotificationIncidentInput,
+  MatterMemberCandidate,
+  CreateMatterMemberInput,
+  UpdateMatterMemberInput,
   CreateMatterDeadlineInput,
   ConfirmMatterDeadlineInput,
   RescheduleMatterDeadlineInput,
   TransitionMatterDeadlineInput,
+  HandoffMatterDeadlineInput,
   SpeechTranscriptionCollection,
   SpeechTranscriptionDetail,
   ReviewSpeechTranscriptInput,
@@ -209,12 +235,22 @@ const lawKeys = {
     ["law", "matter-legal-hold", tenantId, matterId] as const,
   members: (tenantId: string, matterId: string) =>
     ["law", "matter-members", tenantId, matterId] as const,
+  memberCandidates: (tenantId: string, matterId: string) =>
+    ["law", "matter-member-candidates", tenantId, matterId] as const,
   threads: (tenantId: string, matterId: string) =>
     ["law", "matter-threads", tenantId, matterId] as const,
   matterMemory: (tenantId: string, matterId: string) =>
     ["law", "matter-memory", tenantId, matterId] as const,
   matterDeadlines: (tenantId: string, matterId: string) =>
     ["law", "matter-deadlines", tenantId, matterId] as const,
+  matterDeadlineCandidateDrafts: (tenantId: string, matterId: string) =>
+    ["law", "matter-deadline-candidate-drafts", tenantId, matterId] as const,
+  myDeadlineAgenda: (tenantId: string) =>
+    ["law", "my-deadline-agenda", tenantId] as const,
+  deadlineNotificationCapabilities: (tenantId: string) =>
+    ["law", "deadline-notification-capabilities", tenantId] as const,
+  matterDeadlineRules: (tenantId: string, matterId: string) =>
+    ["law", "matter-deadline-rules", tenantId, matterId] as const,
   matterDeadlineRecipients: (tenantId: string, matterId: string) =>
     ["law", "matter-deadline-recipients", tenantId, matterId] as const,
   matterDeadlineEvents: (
@@ -225,6 +261,8 @@ const lawKeys = {
     ["law", "matter-deadline-events", tenantId, matterId, deadlineId] as const,
   matterNotificationOutbox: (tenantId: string, matterId: string) =>
     ["law", "matter-notification-outbox", tenantId, matterId] as const,
+  matterNotificationIncidents: (tenantId: string, matterId: string) =>
+    ["law", "matter-notification-incidents", tenantId, matterId] as const,
   speechTranscriptions: (tenantId: string, matterId: string) =>
     ["law", "speech-transcriptions", tenantId, matterId] as const,
   speechTranscription: (tenantId: string, matterId: string, taskId: string) =>
@@ -835,6 +873,86 @@ export function useLawMatterMembers(
   });
 }
 
+export function useLawMatterMemberCandidates(
+  tenantId: string | null,
+  matterId: string | null,
+  enabled = true,
+) {
+  return useQuery<MatterMemberCandidate[]>({
+    queryKey: lawKeys.memberCandidates(tenantId ?? "", matterId ?? ""),
+    queryFn: () => listMatterMemberCandidates(tenantId!, matterId!),
+    enabled: Boolean(enabled && tenantId && matterId),
+    retry: false,
+  });
+}
+
+export function useCreateLawMatterMember(
+  tenantId: string | null,
+  matterId: string | null,
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      input,
+      idempotencyKey,
+    }: {
+      input: CreateMatterMemberInput;
+      idempotencyKey: string;
+    }) => createMatterMember(tenantId!, matterId!, input, idempotencyKey),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: lawKeys.members(tenantId!, matterId!),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: lawKeys.memberCandidates(tenantId!, matterId!),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: lawKeys.matterDeadlineRecipients(tenantId!, matterId!),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: lawKeys.myDeadlineAgenda(tenantId ?? ""),
+        }),
+      ]);
+    },
+  });
+}
+
+export function useUpdateLawMatterMember(
+  tenantId: string | null,
+  matterId: string | null,
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      memberId,
+      input,
+      idempotencyKey,
+    }: {
+      memberId: string;
+      input: UpdateMatterMemberInput;
+      idempotencyKey: string;
+    }) =>
+      updateMatterMember(tenantId!, matterId!, memberId, input, idempotencyKey),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: lawKeys.members(tenantId!, matterId!),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: lawKeys.memberCandidates(tenantId!, matterId!),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: lawKeys.matterDeadlineRecipients(tenantId!, matterId!),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: lawKeys.myDeadlineAgenda(tenantId ?? ""),
+        }),
+      ]);
+    },
+  });
+}
+
 export function useLawMatterThreads(
   tenantId: string | null,
   matterId: string | null,
@@ -886,6 +1004,60 @@ export function useLawMatterDeadlines(
   return useQuery<MatterDeadline[]>({
     queryKey: lawKeys.matterDeadlines(tenantId ?? "", matterId ?? ""),
     queryFn: ({ signal }) => listMatterDeadlines(tenantId!, matterId!, signal),
+    enabled: Boolean(tenantId && matterId),
+    retry: false,
+  });
+}
+
+export function useLawMatterDeadlineCandidateDrafts(
+  tenantId: string | null,
+  matterId: string | null,
+) {
+  return useQuery<MatterDeadlineCandidateDraft[]>({
+    queryKey: lawKeys.matterDeadlineCandidateDrafts(tenantId ?? "", matterId ?? ""),
+    queryFn: ({ signal }) => listMatterDeadlineCandidateDrafts(tenantId!, matterId!, signal),
+    enabled: Boolean(tenantId && matterId),
+    retry: false,
+  });
+}
+
+export function useLawMyDeadlineAgenda(tenantId: string | null) {
+  return useInfiniteQuery({
+    queryKey: lawKeys.myDeadlineAgenda(tenantId ?? ""),
+    queryFn: ({ pageParam, signal }) =>
+      listMyMatterDeadlineAgenda(
+        tenantId!,
+        pageParam,
+        signal,
+      ),
+    initialPageParam: null as MatterDeadlineAgendaCursor | null,
+    getNextPageParam: (lastPage: MatterDeadlineAgendaPage) =>
+      lastPage.next_cursor ?? undefined,
+    enabled: Boolean(tenantId),
+    retry: false,
+    refetchOnWindowFocus: true,
+  });
+}
+
+export function useLawDeadlineNotificationCapabilities(tenantId: string | null) {
+  return useQuery<MatterDeadlineNotificationCapabilities>({
+    queryKey: lawKeys.deadlineNotificationCapabilities(tenantId ?? ""),
+    queryFn: ({ signal }) =>
+      getMatterDeadlineNotificationCapabilities(tenantId!, signal),
+    enabled: Boolean(tenantId),
+    retry: false,
+    refetchOnWindowFocus: true,
+  });
+}
+
+export function useLawMatterDeadlineRules(
+  tenantId: string | null,
+  matterId: string | null,
+) {
+  return useQuery<MatterDeadlineRuleCatalog>({
+    queryKey: lawKeys.matterDeadlineRules(tenantId ?? "", matterId ?? ""),
+    queryFn: ({ signal }) =>
+      getMatterDeadlineRules(tenantId!, matterId!, signal),
     enabled: Boolean(tenantId && matterId),
     retry: false,
   });
@@ -947,6 +1119,68 @@ export function useMarkLawMatterNotificationRead(
     onSuccess: async () =>
       queryClient.invalidateQueries({
         queryKey: lawKeys.matterNotificationOutbox(
+          tenantId ?? "",
+          matterId ?? "",
+        ),
+      }),
+  });
+}
+
+export function useLawMatterNotificationIncidents(
+  tenantId: string | null,
+  matterId: string | null,
+  enabled: boolean,
+) {
+  return useQuery<MatterNotificationIncident[]>({
+    queryKey: lawKeys.matterNotificationIncidents(
+      tenantId ?? "",
+      matterId ?? "",
+    ),
+    queryFn: ({ signal }) =>
+      listMatterNotificationIncidents(tenantId!, matterId!, signal),
+    enabled: Boolean(enabled && tenantId && matterId),
+    retry: false,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useClaimLawMatterNotificationIncident(
+  tenantId: string | null,
+  matterId: string | null,
+) {
+  const queryClient = useQueryClient();
+  return useMutation<
+    MatterNotificationIncident,
+    Error,
+    { incidentId: string; input: ClaimMatterNotificationIncidentInput }
+  >({
+    mutationFn: ({ incidentId, input }) =>
+      claimMatterNotificationIncident(tenantId!, matterId!, incidentId, input),
+    onSuccess: async () =>
+      queryClient.invalidateQueries({
+        queryKey: lawKeys.matterNotificationIncidents(
+          tenantId ?? "",
+          matterId ?? "",
+        ),
+      }),
+  });
+}
+
+export function useCloseLawMatterNotificationIncident(
+  tenantId: string | null,
+  matterId: string | null,
+) {
+  const queryClient = useQueryClient();
+  return useMutation<
+    MatterNotificationIncident,
+    Error,
+    { incidentId: string; input: CloseMatterNotificationIncidentInput }
+  >({
+    mutationFn: ({ incidentId, input }) =>
+      closeMatterNotificationIncident(tenantId!, matterId!, incidentId, input),
+    onSuccess: async () =>
+      queryClient.invalidateQueries({
+        queryKey: lawKeys.matterNotificationIncidents(
           tenantId ?? "",
           matterId ?? "",
         ),
@@ -1093,7 +1327,28 @@ export function useCreateLawMatterDeadline(
   const key = lawKeys.matterDeadlines(tenantId ?? "", matterId ?? "");
   return useMutation<MatterDeadline, Error, CreateMatterDeadlineInput>({
     mutationFn: (input) => createMatterDeadline(tenantId!, matterId!, input),
-    onSuccess: async () => queryClient.invalidateQueries({ queryKey: key }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: key }),
+        queryClient.invalidateQueries({
+          queryKey: lawKeys.myDeadlineAgenda(tenantId ?? ""),
+        }),
+      ]);
+    },
+  });
+}
+
+export function useCalculateLawMatterDeadlineCandidate(
+  tenantId: string | null,
+  matterId: string | null,
+) {
+  return useMutation<
+    MatterDeadlineCandidate,
+    Error,
+    CalculateMatterDeadlineCandidateInput
+  >({
+    mutationFn: (input) =>
+      calculateMatterDeadlineCandidate(tenantId!, matterId!, input),
   });
 }
 
@@ -1127,6 +1382,9 @@ export function useConfirmLawMatterDeadline(
             variables.deadlineId,
           ),
         }),
+        queryClient.invalidateQueries({
+          queryKey: lawKeys.myDeadlineAgenda(tenantId ?? ""),
+        }),
       ]);
     },
   });
@@ -1154,6 +1412,9 @@ function useDeadlineMutationInvalidation(
           matterId ?? "",
           deadlineId,
         ),
+      }),
+      queryClient.invalidateQueries({
+        queryKey: lawKeys.myDeadlineAgenda(tenantId ?? ""),
       }),
     ]);
   };
@@ -1195,6 +1456,27 @@ export function useTransitionLawMatterDeadline(
         matterId!,
         deadlineId,
         targetState,
+        input,
+      ),
+    onSuccess: async (_deadline, variables) => invalidate(variables.deadlineId),
+  });
+}
+
+export function useHandoffLawMatterDeadline(
+  tenantId: string | null,
+  matterId: string | null,
+) {
+  const invalidate = useDeadlineMutationInvalidation(tenantId, matterId);
+  return useMutation<
+    MatterDeadline,
+    Error,
+    { deadlineId: string; input: HandoffMatterDeadlineInput }
+  >({
+    mutationFn: ({ deadlineId, input }) =>
+      handoffMatterDeadlineResponsibility(
+        tenantId!,
+        matterId!,
+        deadlineId,
         input,
       ),
     onSuccess: async (_deadline, variables) => invalidate(variables.deadlineId),
