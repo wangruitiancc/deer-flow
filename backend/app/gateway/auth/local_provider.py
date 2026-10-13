@@ -1,6 +1,7 @@
 """Local email/password authentication provider."""
 
 import logging
+from datetime import datetime
 
 from app.gateway.auth.models import User
 from app.gateway.auth.password import hash_password_async, needs_rehash, verify_password_async
@@ -20,6 +21,11 @@ class LocalAuthProvider(AuthProvider):
             repository: UserRepository implementation (SQLite)
         """
         self._repo = repository
+
+    @property
+    def repository(self) -> UserRepository:
+        """Expose the same durable auth repository to auth-owned services."""
+        return self._repo
 
     async def authenticate(self, credentials: dict) -> User | None:
         """Authenticate with email and password.
@@ -103,6 +109,23 @@ class LocalAuthProvider(AuthProvider):
         """Hash and atomically apply a password reset once."""
         password_hash = await hash_password_async(new_password)
         return await self._repo.set_password_if_token_version(user_id, expected_version, password_hash)
+
+    async def enqueue_password_reset_mail(self, *, user_id: str, token_version: int, recipient: str, token_ciphertext: str, expires_at: datetime) -> bool:
+        return await self._repo.enqueue_password_reset_mail(
+            user_id=user_id,
+            token_version=token_version,
+            recipient=recipient,
+            token_ciphertext=token_ciphertext,
+            expires_at=expires_at,
+        )
+
+    async def consume_password_reset_rate_limits(self, *, buckets: dict[str, int], now: datetime, window_start: datetime, expires_at: datetime) -> bool:
+        return await self._repo.consume_password_reset_rate_limits(
+            buckets=buckets,
+            now=now,
+            window_start=window_start,
+            expires_at=expires_at,
+        )
 
     async def set_mfa_challenge(self, user_id: str, expected_version: int, challenge_id: str) -> bool:
         return await self._repo.set_mfa_challenge(user_id, expected_version, challenge_id)

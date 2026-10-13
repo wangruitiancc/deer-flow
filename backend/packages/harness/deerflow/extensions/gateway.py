@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from deerflow_extension_api import BackgroundWorkerMetrics, ExtensionRuntimeDeps
@@ -586,6 +586,7 @@ async def start_services(
     app_config: Any,
     session_factory: Any | None,
     *,
+    ensure_owner_bootstrap_identity: Any | None = None,
     worker_metrics: BackgroundWorkerMetrics | None = None,
     attempted_services: list[tuple[str, Any]] | None = None,
 ) -> list[Diagnostic]:
@@ -616,7 +617,14 @@ async def start_services(
             attempted_services.append(entry)
         cancellation_count = _cancellation_count()
         try:
-            await service.start(deps)
+            service_deps = deps
+            trusted_owner_bootstrap_sources = {"matrix-law", "matrix_law_extension:install"}
+            if source in trusted_owner_bootstrap_sources and getattr(service, "requires_owner_bootstrap_identity", False) is True:
+                service_deps = replace(
+                    deps,
+                    ensure_owner_bootstrap_identity=ensure_owner_bootstrap_identity,
+                )
+            await service.start(service_deps)
         except asyncio.CancelledError:
             if _cancellation_count() > cancellation_count:
                 raise

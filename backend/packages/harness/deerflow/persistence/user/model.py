@@ -98,3 +98,32 @@ class UserMFARecoveryCodeRow(Base):
 
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     code_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+
+class PasswordResetOutboxRow(Base):
+    """Encrypted, short-lived reset mail work shared by Gateway workers."""
+
+    __tablename__ = "password_reset_outbox"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    recipient: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    token_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued", server_default="queued")
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PasswordResetRateLimitRow(Base):
+    """Shared fixed-window limiter counters keyed only by keyed digests."""
+
+    __tablename__ = "password_reset_rate_limits"
+
+    bucket_key: Mapped[str] = mapped_column(String(70), primary_key=True)
+    window_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    request_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

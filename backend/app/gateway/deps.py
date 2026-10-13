@@ -515,6 +515,7 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
                 extensions,
                 config,
                 sf,
+                ensure_owner_bootstrap_identity=_extension_ensure_owner_bootstrap_identity,
                 worker_metrics=getattr(app.state, "gateway_metrics_registry", None),
                 attempted_services=attempted_services,
             )
@@ -782,6 +783,15 @@ def get_local_provider() -> LocalAuthProvider:
 
         _cached_local_provider = LocalAuthProvider(repository=_cached_repo)
     return _cached_local_provider
+
+
+async def _extension_ensure_owner_bootstrap_identity(email: str, password: str) -> Any | None:
+    """Create the owner identity or prove control of its existing local account."""
+    provider = get_local_provider()
+    try:
+        return await provider.create_user(email=email, password=password, system_role="user")
+    except ValueError:
+        return await provider.authenticate({"email": email, "password": password})
 
 
 def get_pat_repo(request: Request):

@@ -39,6 +39,7 @@ class AuthConfig(BaseModel):
     password_reset_smtp_port: int | None = Field(default=None, ge=1, le=65535)
     password_reset_smtp_username: str | None = Field(default=None)
     password_reset_smtp_password: str | None = Field(default=None)
+    password_reset_encryption_key: str | None = Field(default=None, min_length=1)
     password_reset_from_email: EmailStr | None = Field(default=None)
     password_reset_public_base_url: str | None = Field(default=None)
     password_reset_smtp_security: Literal["starttls", "ssl"] = "starttls"
@@ -53,6 +54,7 @@ class AuthConfig(BaseModel):
                 self.password_reset_smtp_port,
                 self.password_reset_smtp_username,
                 self.password_reset_smtp_password,
+                self.password_reset_encryption_key,
                 self.password_reset_from_email,
                 self.password_reset_public_base_url,
             )
@@ -69,6 +71,14 @@ class AuthConfig(BaseModel):
             raise ValueError("Password reset mail requires SMTP host, sender, and public base URL")
         if bool(self.password_reset_smtp_username) != bool(self.password_reset_smtp_password):
             raise ValueError("Password reset SMTP username and password must be configured together")
+        if not self.password_reset_encryption_key:
+            raise ValueError("Password reset mail requires AUTH_PASSWORD_RESET_ENCRYPTION_KEY")
+        try:
+            from cryptography.fernet import Fernet
+
+            Fernet(self.password_reset_encryption_key.encode("ascii"))
+        except (ImportError, UnicodeEncodeError, ValueError) as exc:
+            raise ValueError("AUTH_PASSWORD_RESET_ENCRYPTION_KEY must be a valid Fernet key") from exc
 
         parsed = urlsplit(self.password_reset_public_base_url or "")
         local_http = parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
@@ -81,7 +91,7 @@ class AuthConfig(BaseModel):
     @property
     def password_reset_enabled(self) -> bool:
         """Whether all required mail and public-link settings are present."""
-        return bool(self.password_reset_smtp_host and self.password_reset_from_email and self.password_reset_public_base_url)
+        return bool(self.password_reset_smtp_host and self.password_reset_from_email and self.password_reset_public_base_url and self.password_reset_encryption_key)
 
     @property
     def password_reset_smtp_effective_port(self) -> int:
@@ -144,6 +154,7 @@ def get_auth_config() -> AuthConfig:
             password_reset_smtp_port=_optional_env("AUTH_PASSWORD_RESET_SMTP_PORT"),
             password_reset_smtp_username=_optional_env("AUTH_PASSWORD_RESET_SMTP_USERNAME"),
             password_reset_smtp_password=_optional_env("AUTH_PASSWORD_RESET_SMTP_PASSWORD"),
+            password_reset_encryption_key=_optional_env("AUTH_PASSWORD_RESET_ENCRYPTION_KEY"),
             password_reset_from_email=_optional_env("AUTH_PASSWORD_RESET_FROM_EMAIL"),
             password_reset_public_base_url=_optional_env("AUTH_PASSWORD_RESET_PUBLIC_BASE_URL"),
             password_reset_smtp_security=(_optional_env("AUTH_PASSWORD_RESET_SMTP_SECURITY") or "starttls").lower(),
