@@ -228,6 +228,7 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({
       url.pathname.startsWith(`${speechPath}/`) ||
       url.pathname === `${matterBase}/evidence` ||
       url.pathname.startsWith(`${matterBase}/evidence/`) ||
+      url.pathname === `${matterBase}/deadline-rules` ||
       url.pathname === `${matterBase}/case-workbench` ||
       url.pathname.startsWith(`${matterBase}/case-workbench/`);
     if (!shouldForward) return route.fallback();

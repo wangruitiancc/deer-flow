@@ -555,6 +555,9 @@ class ExtensionRuntimeDeps:
     worker_metrics: BackgroundWorkerMetrics | None = None
     # Trusted host path for reviewed lifecycle adapters; never model/client input.
     workspace_root: Path | None = None
+    # Single owner-bootstrap identity operation. The host injects it only into
+    # the trusted Matrix Law bootstrap service, never into other extensions.
+    ensure_owner_bootstrap_identity: Callable[[str, str], Awaitable[Any | None]] | None = None
 
 
 class ExtensionService(Protocol):

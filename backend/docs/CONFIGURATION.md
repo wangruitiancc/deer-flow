@@ -847,11 +847,13 @@ models:
 
 See [Password recovery](PASSWORD_RESET.md) for the complete setup and API. The
 feature stays disabled unless `AUTH_PASSWORD_RESET_SMTP_HOST`,
-`AUTH_PASSWORD_RESET_FROM_EMAIL`, and `AUTH_PASSWORD_RESET_PUBLIC_BASE_URL` are
+`AUTH_PASSWORD_RESET_FROM_EMAIL`, `AUTH_PASSWORD_RESET_PUBLIC_BASE_URL`, and
+`AUTH_PASSWORD_RESET_ENCRYPTION_KEY` are
 set. The public URL must use HTTPS outside loopback development. Optional
 `AUTH_PASSWORD_RESET_SMTP_PORT`, `AUTH_PASSWORD_RESET_SMTP_USERNAME`,
 `AUTH_PASSWORD_RESET_SMTP_PASSWORD`, and `AUTH_PASSWORD_RESET_SMTP_SECURITY`
-select the transport; username and password must be supplied together.
+select the transport; username and password must be supplied together. Keep
+the Fernet encryption key independent from the JWT signing secret.
 
 ## Configuration Location
 

@@ -12,16 +12,24 @@ construct this after ``init_engine_from_config()`` has run.
 
 from __future__ import annotations
 
-from datetime import UTC
-from uuid import UUID
+from datetime import UTC, datetime
+from uuid import UUID, uuid4
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import and_, case, delete, exists, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.gateway.auth.models import User
 from app.gateway.auth.repositories.base import UserNotFoundError, UserRepository
-from deerflow.persistence.user.model import OAUTH_IDENTITY_INDEX_NAME, UserMFARecoveryCodeRow, UserRow
+from deerflow.persistence.user.model import (
+    OAUTH_IDENTITY_INDEX_NAME,
+    PasswordResetOutboxRow,
+    PasswordResetRateLimitRow,
+    UserMFARecoveryCodeRow,
+    UserRow,
+)
 
 # ``email`` is ``mapped_column(unique=True, index=True)``, which SQLAlchemy
 # (and 0001_baseline) realise as a single UNIQUE INDEX -- not a named UNIQUE
@@ -312,13 +320,160 @@ class SQLiteUserRepository(UserRepository):
             await session.commit()
             return result.rowcount == 1
 
+    async def enqueue_password_reset_mail(self, *, user_id: str, token_version: int, recipient: str, token_ciphertext: str, expires_at: datetime) -> bool:
+        async with self._sf() as session:
+            current = select(UserRow.id).where(
+                UserRow.id == user_id,
+                UserRow.token_version == token_version,
+                UserRow.password_hash.is_not(None),
+            )
+            if await session.scalar(current) is None:
+                return False
+            session.add(
+                PasswordResetOutboxRow(
+                    id=str(uuid4()),
+                    user_id=user_id,
+                    token_version=token_version,
+                    purpose="password_reset",
+                    expires_at=expires_at,
+                    recipient=recipient,
+                    token_ciphertext=token_ciphertext,
+                    status="queued",
+                    attempt_count=0,
+                    next_attempt_at=datetime.now(UTC),
+                )
+            )
+            await session.commit()
+            return True
+
+    async def claim_password_reset_mail(self, *, now: datetime, stale_after: datetime) -> dict | None:
+        async with self._sf() as session:
+            # A worker that died while SMTP was in progress may have reached
+            # DATA. Erase that row instead of risking a duplicate delivery.
+            valid_user = exists(
+                select(UserRow.id).where(
+                    UserRow.id == PasswordResetOutboxRow.user_id,
+                    UserRow.token_version == PasswordResetOutboxRow.token_version,
+                    UserRow.password_hash.is_not(None),
+                )
+            )
+            await session.execute(
+                delete(PasswordResetOutboxRow).where(
+                    or_(
+                        PasswordResetOutboxRow.expires_at <= now,
+                        and_(PasswordResetOutboxRow.status == "sending", PasswordResetOutboxRow.claimed_at <= stale_after),
+                        ~valid_user,
+                        PasswordResetOutboxRow.purpose != "password_reset",
+                    )
+                )
+            )
+            candidate = (
+                select(PasswordResetOutboxRow.id)
+                .where(
+                    PasswordResetOutboxRow.status == "queued",
+                    PasswordResetOutboxRow.next_attempt_at <= now,
+                    PasswordResetOutboxRow.expires_at > now,
+                    PasswordResetOutboxRow.recipient.is_not(None),
+                    PasswordResetOutboxRow.token_ciphertext.is_not(None),
+                    valid_user,
+                    PasswordResetOutboxRow.purpose == "password_reset",
+                )
+                .order_by(PasswordResetOutboxRow.next_attempt_at, PasswordResetOutboxRow.id)
+                .limit(1)
+                .scalar_subquery()
+            )
+            claimed = await session.execute(
+                update(PasswordResetOutboxRow)
+                .where(PasswordResetOutboxRow.id == candidate, PasswordResetOutboxRow.status == "queued")
+                .values(status="sending", attempt_count=PasswordResetOutboxRow.attempt_count + 1, claimed_at=now)
+                .returning(
+                    PasswordResetOutboxRow.id,
+                    PasswordResetOutboxRow.user_id,
+                    PasswordResetOutboxRow.token_version,
+                    PasswordResetOutboxRow.purpose,
+                    PasswordResetOutboxRow.expires_at,
+                    PasswordResetOutboxRow.recipient,
+                    PasswordResetOutboxRow.token_ciphertext,
+                    PasswordResetOutboxRow.attempt_count,
+                )
+            )
+            row = claimed.mappings().first()
+            await session.commit()
+            return dict(row) if row is not None else None
+
+    async def finish_password_reset_mail(self, mail_id: str) -> None:
+        async with self._sf() as session:
+            await session.execute(delete(PasswordResetOutboxRow).where(PasswordResetOutboxRow.id == mail_id))
+            await session.commit()
+
+    async def retry_password_reset_mail(self, mail_id: str, *, next_attempt_at: datetime, max_attempts: int) -> None:
+        async with self._sf() as session:
+            result = await session.execute(
+                update(PasswordResetOutboxRow)
+                .where(PasswordResetOutboxRow.id == mail_id, PasswordResetOutboxRow.status == "sending")
+                .values(status="queued", claimed_at=None, next_attempt_at=next_attempt_at)
+                .returning(PasswordResetOutboxRow.attempt_count, PasswordResetOutboxRow.expires_at)
+            )
+            row = result.first()
+            expires_at = row.expires_at.replace(tzinfo=row.expires_at.tzinfo or UTC) if row is not None else None
+            if row is not None and (row.attempt_count >= max_attempts or expires_at <= next_attempt_at):
+                await session.execute(delete(PasswordResetOutboxRow).where(PasswordResetOutboxRow.id == mail_id))
+            await session.commit()
+
+    async def purge_password_reset_mail(self) -> None:
+        async with self._sf() as session:
+            await session.execute(delete(PasswordResetOutboxRow))
+            await session.commit()
+
+    async def consume_password_reset_rate_limits(
+        self,
+        *,
+        buckets: dict[str, int],
+        now: datetime,
+        window_start: datetime,
+        expires_at: datetime,
+    ) -> bool:
+        """Atomically increment each keyed bucket in the shared auth store."""
+        async with self._sf() as session:
+            dialect = session.get_bind().dialect.name
+            if dialect == "sqlite":
+                insert = sqlite_insert
+            elif dialect == "postgresql":
+                insert = pg_insert
+            else:
+                raise RuntimeError("Shared password-reset rate limits require SQLite or PostgreSQL")
+
+            await session.execute(delete(PasswordResetRateLimitRow).where(PasswordResetRateLimitRow.expires_at <= now))
+            counts: dict[str, int] = {}
+            for bucket_key, limit in sorted(buckets.items()):
+                expired = PasswordResetRateLimitRow.window_started_at <= window_start
+                statement = (
+                    insert(PasswordResetRateLimitRow)
+                    .values(
+                        bucket_key=bucket_key,
+                        window_started_at=now,
+                        request_count=1,
+                        expires_at=expires_at,
+                    )
+                    .on_conflict_do_update(
+                        index_elements=[PasswordResetRateLimitRow.bucket_key],
+                        set_={
+                            "window_started_at": case((expired, now), else_=PasswordResetRateLimitRow.window_started_at),
+                            "request_count": case((expired, 1), else_=PasswordResetRateLimitRow.request_count + 1),
+                            "expires_at": expires_at,
+                        },
+                    )
+                    .returning(PasswordResetRateLimitRow.request_count)
+                )
+                count = await session.scalar(statement)
+                if count is None:
+                    raise RuntimeError("Shared password-reset rate limit counter was not returned")
+                counts[bucket_key] = int(count)
+            await session.commit()
+            return all(counts[key] <= limit for key, limit in buckets.items())
+
     async def set_mfa_challenge(self, user_id: str, expected_version: int, challenge_id: str) -> bool:
-        stmt = (
-            update(UserRow)
-            .where(UserRow.id == user_id, UserRow.token_version == expected_version, UserRow.system_role == "admin")
-            .values(mfa_challenge_id=challenge_id)
-            .execution_options(synchronize_session=False)
-        )
+        stmt = update(UserRow).where(UserRow.id == user_id, UserRow.token_version == expected_version, UserRow.system_role == "admin").values(mfa_challenge_id=challenge_id).execution_options(synchronize_session=False)
         async with self._sf() as session:
             result = await session.execute(stmt)
             await session.commit()
@@ -369,11 +524,7 @@ class SQLiteUserRepository(UserRepository):
         )
         async with self._sf() as session:
             async with session.begin():
-                code_count = await session.scalar(
-                    select(func.count())
-                    .select_from(UserMFARecoveryCodeRow)
-                    .where(UserMFARecoveryCodeRow.user_id == user_id)
-                )
+                code_count = await session.scalar(select(func.count()).select_from(UserMFARecoveryCodeRow).where(UserMFARecoveryCodeRow.user_id == user_id))
                 if not code_count or code_count < 5:
                     return False
                 result = await session.execute(stmt)
@@ -415,10 +566,7 @@ class SQLiteUserRepository(UserRepository):
                     )
                     if await session.scalar(user_stmt) is None:
                         return False
-                    consumed = await session.execute(
-                        delete(UserMFARecoveryCodeRow)
-                        .where(UserMFARecoveryCodeRow.user_id == user_id, UserMFARecoveryCodeRow.code_hash == code_hash)
-                    )
+                    consumed = await session.execute(delete(UserMFARecoveryCodeRow).where(UserMFARecoveryCodeRow.user_id == user_id, UserMFARecoveryCodeRow.code_hash == code_hash))
                     if consumed.rowcount != 1:
                         return False
                     updated = await session.execute(

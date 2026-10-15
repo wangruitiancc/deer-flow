@@ -283,6 +283,14 @@ workers. MFA has no supported audited reset command yet; production rollout
 remains blocked on a rehearsed recovery and key-rotation procedure. See
 `docs/ADMIN_MFA.md`.
 
+Password-reset delivery is a separate auth-owned durable outbox in the shared
+database. Persist only encrypted reset tokens, bound to the user, token version,
+purpose, and expiry. Claim before SMTP; retry only explicit transient 4xx
+responses. Erase uncertain in-flight attempts rather than replaying potentially
+accepted SMTP DATA. SMTP credentials and the Fernet key are separate settings;
+request limiting is also shared in that auth database and stores only keyed
+digests. Invitation and W12 notification mail stay independently gated.
+
 ## Code Style
 
 - Uses `ruff` for linting and formatting

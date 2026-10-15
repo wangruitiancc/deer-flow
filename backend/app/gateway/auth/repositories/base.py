@@ -1,6 +1,7 @@
 """User repository interface for abstracting database operations."""
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 
 from app.gateway.auth.models import User
 
@@ -91,6 +92,43 @@ class UserRepository(ABC):
         updated. Implementations must perform the version check and increment
         atomically so two redemptions of one reset token cannot both succeed.
         """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def enqueue_password_reset_mail(self, *, user_id: str, token_version: int, recipient: str, token_ciphertext: str, expires_at: datetime) -> bool:
+        """Persist mail only while the addressed local account/version is current."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def claim_password_reset_mail(self, *, now: datetime, stale_after: datetime) -> dict | None:
+        """Atomically claim one due row; stale in-flight rows are erased, never resent."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def finish_password_reset_mail(self, mail_id: str) -> None:
+        """Erase a delivered or terminal outbox row."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def retry_password_reset_mail(self, mail_id: str, *, next_attempt_at: datetime, max_attempts: int) -> None:
+        """Requeue only a definite temporary SMTP rejection; otherwise erase."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def purge_password_reset_mail(self) -> None:
+        """Erase pending reset mail when delivery is disabled."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def consume_password_reset_rate_limits(
+        self,
+        *,
+        buckets: dict[str, int],
+        now: datetime,
+        window_start: datetime,
+        expires_at: datetime,
+    ) -> bool:
+        """Atomically increment keyed buckets and report whether every limit passes."""
         raise NotImplementedError
 
     @abstractmethod

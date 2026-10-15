@@ -420,5 +420,6 @@ def test_extension_service_contract_is_public_and_defaults_to_noop():
     assert deps.app_store is None
     assert deps.session_factory is None
     assert deps.worker_metrics is None
+    assert deps.ensure_owner_bootstrap_identity is None
     assert asyncio.run(ExtensionService.start(_Bare(), deps)) is None
     assert asyncio.run(ExtensionService.stop(_Bare())) is None
