@@ -60,6 +60,22 @@ describe("persistent activity rail", () => {
     fireEvent.click(screen.getByRole("button", { name: /^设置$/ }));
     expect(mocks.openSettings).toHaveBeenCalledWith("appearance");
   });
+  it("opens the case tree from the folder shortcut without leaving the current conversation", () => {
+    mount(false);
+    const projects = screen.getByRole("button", { name: "案件与会话" });
+    expect(projects.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(projects);
+    expect(projects.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      screen.getByRole("group", { name: "工作区入口" }).contains(projects),
+    ).toBe(true);
+    expect(screen.getByRole("group", { name: "能力与管理" })).toBeDefined();
+    expect(
+      screen
+        .getByRole("link", { name: "法律工作" })
+        .getAttribute("aria-current"),
+    ).toBeNull();
+  });
   it("does not show firm management for ordinary members", () => {
     mount(true);
     expect(screen.queryByRole("link", { name: "律所管理后台" })).toBeNull();

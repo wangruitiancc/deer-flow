@@ -326,6 +326,12 @@ and collapses off-canvas independently. Existing numeric tree-width preferences
 remain valid. Keep toggle/settings/account controls in the rail and a close
 control inside the mobile drawer. Separator coordinates include the rail offset. Keep generated `ui/` primitives unchanged.
 
+The rail groups home/case-tree/search separately from capabilities/administration.
+Its folder button only opens the existing case tree; it must not navigate away or
+create a conversation. The brand link remains the legal home entry, with an adjacent
+workspace dropdown for existing routes/settings. Both management entries use the
+existing membership-role visibility rule; backend authorization remains authoritative.
+
 The tree's primary New conversation action uses the existing create-and-bind mutation,
 never a generic unbound chat. Without a selected matter, ask for an authorized project.
 Key the mutation control by tenant/matter; guard duplicate clicks and discard late UI

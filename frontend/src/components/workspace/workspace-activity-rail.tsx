@@ -2,6 +2,7 @@
 
 import {
   Building2Icon,
+  FolderOpenIcon,
   GaugeIcon,
   HomeIcon,
   SearchIcon,
@@ -24,7 +25,7 @@ import { useSettingsDialog } from "./settings";
 import { WorkspaceNavMenu } from "./workspace-nav-menu";
 
 export function WorkspaceActivityRail({ onSearch }: { onSearch?: () => void }) {
-  const { open, openMobile, isMobile } = useSidebar();
+  const { open, openMobile, isMobile, setOpen, setOpenMobile } = useSidebar();
   const expanded = isMobile ? openMobile : open;
   const pathname = usePathname();
   const { openSettings } = useSettingsDialog();
@@ -39,7 +40,7 @@ export function WorkspaceActivityRail({ onSearch }: { onSearch?: () => void }) {
       href: "/workspace/law",
       label: "法律工作",
       icon: HomeIcon,
-      active: !capability,
+      active: pathname === "/workspace/law" && !capability,
     },
     {
       href: "/workspace/law/capabilities",
@@ -73,8 +74,72 @@ export function WorkspaceActivityRail({ onSearch }: { onSearch?: () => void }) {
           <TooltipContent side="right">{toggleLabel}</TooltipContent>
         </Tooltip>
       </div>
-      <div className="flex flex-col items-center gap-1 pt-1">
-        {links.map(({ href, label, icon: Icon, active }) => (
+      <div role="group" aria-label="工作区入口" className="law-rail-group">
+        {links.slice(0, 1).map(({ href, label, icon: Icon, active }) => (
+          <Tooltip key={href}>
+            <TooltipTrigger asChild>
+              <Button
+                asChild
+                variant="ghost"
+                size="icon"
+                className={cn(
+                  "text-muted-foreground size-9 rounded-lg",
+                  active && "bg-sidebar-accent text-sidebar-accent-foreground",
+                )}
+              >
+                <Link
+                  href={href}
+                  aria-label={label}
+                  aria-current={active ? "page" : undefined}
+                >
+                  <Icon className="size-[18px]" strokeWidth={1.7} />
+                </Link>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">{label}</TooltipContent>
+          </Tooltip>
+        ))}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className={cn(
+                "text-muted-foreground size-9 rounded-lg",
+                expanded && "bg-sidebar-accent text-sidebar-accent-foreground",
+              )}
+              aria-label="案件与会话"
+              aria-expanded={expanded}
+              onClick={() => {
+                if (isMobile) setOpenMobile(true);
+                else setOpen(true);
+              }}
+            >
+              <FolderOpenIcon className="size-[18px]" strokeWidth={1.7} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="right">案件与会话</TooltipContent>
+        </Tooltip>
+        {onSearch && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="text-muted-foreground size-9 rounded-lg"
+                aria-label="展开并搜索案件"
+                onClick={onSearch}
+              >
+                <SearchIcon className="size-[18px]" strokeWidth={1.7} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">搜索案件</TooltipContent>
+          </Tooltip>
+        )}
+      </div>
+      <div role="separator" className="law-rail-divider" />
+      <div role="group" aria-label="能力与管理" className="law-rail-group">
+        {links.slice(1).map(({ href, label, icon: Icon, active }) => (
           <Tooltip key={href}>
             <TooltipTrigger asChild>
               <Button
@@ -99,22 +164,6 @@ export function WorkspaceActivityRail({ onSearch }: { onSearch?: () => void }) {
           </Tooltip>
         ))}
       </div>
-      {onSearch && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="text-muted-foreground mt-1 size-9 rounded-lg"
-              aria-label="展开并搜索案件"
-              onClick={onSearch}
-            >
-              <SearchIcon className="size-[18px]" strokeWidth={1.7} />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="right">搜索案件</TooltipContent>
-        </Tooltip>
-      )}
       <div className="mt-auto flex flex-col items-center gap-2 pb-2">
         <Tooltip>
           <TooltipTrigger asChild>

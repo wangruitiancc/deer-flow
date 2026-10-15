@@ -24,6 +24,10 @@ Agent、会话、工具、Skill、文件和右侧成果框架，不移植旧桌�
 底层仍可使用 subagent、sandbox、模型适配、受控工具和流式执行，但这些只是法律 Agent 的内部
 实现能力，不能绕过法律工作准入，也不构成面向其他业务的能力承诺。
 
+工作台左侧采用常驻图标栏与独立案件树：收起案件树后，展开按钮、案件与会话、搜索、设置及
+登录头像仍可使用。品牌旁的工作区菜单提供法律工作、能力用量和设置入口；律所后台按成员角色显示。
+中间保留会话，文档校对、录音转写、图谱及文书分别在右侧页签中处理。
+
 托管 PostgreSQL 部署将 `database.auto_migrate` 设为 `false`：Gateway lifespan 只读核对 DeerFlow、LangGraph
 schema 是否到当前版本；缺表或版本落后时拒绝启动。发布运维必须先显式运行租户迁移 one-shot，覆盖 ORM、LangGraph
 checkpointer/store、法律扩展和 runtime role，再启动 Gateway。开发及本机容器模拟仍可在显式准备阶段执行迁移。

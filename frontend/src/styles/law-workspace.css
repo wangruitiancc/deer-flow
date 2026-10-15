@@ -697,6 +697,20 @@
 .law-activity-rail > div:last-child > [data-sidebar="menu"] {
   width: 36px;
 }
+.law-rail-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding-top: 4px;
+}
+.law-rail-divider {
+  width: 24px;
+  height: 1px;
+  flex-shrink: 0;
+  margin: 12px 0 8px;
+  background: var(--sidebar-border);
+}
 @media (min-width: 768px) {
   .law-workbench .law-navigation-panel {
     left: 48px;

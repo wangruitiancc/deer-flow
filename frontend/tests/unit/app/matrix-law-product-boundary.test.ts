@@ -65,7 +65,10 @@ describe("Matrix-Law product boundary", () => {
     expect(sidebar).not.toContain("RecentChatList");
     expect(sidebar).not.toContain("WorkspaceNavChatList");
     expect(sidebar).toContain("LegalProjectTree");
-    expect(header.match(/href="\/workspace\/law"/g)).toHaveLength(1);
+    // The brand and its workspace menu lead to the same legal entry.
+    expect(header.match(/href="\/workspace\/law"/g)).toHaveLength(2);
+    expect(header).toContain('aria-label="Matrix Law · 法律工作"');
+    expect(header).toContain('aria-label="工作区菜单"');
     expect(header).not.toContain("/workspace/chats/new");
     expect(palette).not.toContain("/workspace/chats/new");
     expect(chatPage).not.toContain("/workspace/chats/new");
