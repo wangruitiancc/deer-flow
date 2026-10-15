@@ -58,6 +58,9 @@ only successful matching thread/tenant contexts whose matter remains in the
 current accessible list. An authorization error must hide stale rows. It is a
 read-only navigation shortcut; deletion still belongs to the bound project tree.
 History opens the existing sidebar and focuses this group without leaving chat.
+Load the recent-list component only once matter metadata is ready, through the
+parent's lazy/Suspense boundary; retain the same authorization checks and full
+list functionality rather than increasing the route's initial asset budget.
 
 The native `ArtifactFileDetail` toolbar hosts `law/SaveProjectArtifact`, keyed by thread and path so
 switching files cannot carry over a draft save target. It uses the trusted thread context, displays the

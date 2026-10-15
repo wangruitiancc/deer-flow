@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -77,7 +77,12 @@ import { cn } from "@/lib/utils";
 
 import { LegalProjectTreeSkeleton } from "./legal-project-tree-skeleton";
 import { NewMatterConversationButton } from "./new-matter-conversation-button";
-import { RecentLegalConversations } from "./recent-legal-conversations";
+
+const RecentLegalConversations = lazy(() =>
+  import("./recent-legal-conversations").then((module) => ({
+    default: module.RecentLegalConversations,
+  })),
+);
 
 const COPY = {
   "en-US": {
@@ -658,13 +663,15 @@ export function LegalProjectTree({
       </SidebarGroup>
 
       {selectedTenantId && mattersQuery.isSuccess && !searchQuery && (
-        <RecentLegalConversations
-          key={selectedTenantId}
-          tenantId={selectedTenantId}
-          matters={mattersQuery.data}
-          activeThreadId={activeThreadId}
-          focusRequest={recentRequest}
-        />
+        <Suspense fallback={<LegalProjectTreeSkeleton />}>
+          <RecentLegalConversations
+            key={selectedTenantId}
+            tenantId={selectedTenantId}
+            matters={mattersQuery.data}
+            activeThreadId={activeThreadId}
+            focusRequest={recentRequest}
+          />
+        </Suspense>
       )}
       <SidebarGroup className="min-h-0 flex-1 pt-1 group-data-[collapsible=icon]:hidden">
         <SidebarGroupLabel>{copy.projects}</SidebarGroupLabel>
