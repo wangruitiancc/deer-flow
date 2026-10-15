@@ -16,6 +16,17 @@ const versionId = "70000000-0000-4000-8000-000000000021";
 const taskId = "80000000-0000-4000-8000-000000000021";
 const now = "2026-10-06T00:00:00Z";
 
+async function openSpeechWorkspace(page: Page) {
+  await page.getByRole("button", { name: /artifacts/i }).click();
+  await page.getByRole("tab", { name: /^录音 \/ 实时转写/ }).click();
+}
+
+async function openRecordingView(page: Page) {
+  await openSpeechWorkspace(page);
+  await expect(page.getByLabel("录音名称")).toBeEnabled();
+  await page.getByRole("button", { name: "录音", exact: true }).click();
+}
+
 function response(data: unknown, status = 200) {
   return {
     status,
@@ -905,6 +916,7 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
   });
 
   await page.goto(`/workspace/chats/${threadId}`);
+  await openSpeechWorkspace(page);
   await page.getByRole("button", { name: /artifacts/i }).click();
   await expect(
     page.getByRole("heading", { name: "庭审录音与语音转写" }),
@@ -916,6 +928,7 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
   await expect(
     page.getByRole("button", { name: /开始麦克风录音/ }),
   ).toBeVisible();
+  await openRecordingView(page);
   await page.getByLabel("录音名称").fill("合成浏览器录音");
   await page.getByRole("button", { name: /开始麦克风录音/ }).click();
   const startCaptureButton = page.getByRole("button", {
@@ -941,6 +954,7 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
         ),
       ),
     ).toBe(0);
+    await page.getByRole("button", { name: "文件转写", exact: true }).click();
     await expect(page.getByLabel("音视频原件")).toBeVisible();
     test.info().annotations.push({
       type: "browser-audio-capability",
@@ -963,6 +977,7 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
         .isVisible()
         .catch(() => false),
     ).toBe(false);
+    await page.getByRole("button", { name: "文件转写", exact: true }).click();
     await expect(page.getByLabel("音视频原件")).toBeVisible();
     test.info().annotations.push({
       type: "browser-audio-test-fixture",
@@ -1011,6 +1026,7 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
     await page.getByRole("button", { name: /取消启动/ }).click();
     await expect(startCaptureButton).toBeVisible();
     expect(createCount).toBe(0);
+    await page.getByRole("button", { name: "文件转写", exact: true }).click();
     await expect(page.getByLabel("音视频原件")).toBeVisible();
     test.info().annotations.push({
       type: "browser-audio-device",
@@ -1021,6 +1037,7 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
   }
   if (!(await captureProgress.isVisible().catch(() => false))) {
     expect(createCount).toBe(0);
+    await page.getByRole("button", { name: "文件转写", exact: true }).click();
     await expect(page.getByLabel("音视频原件")).toBeVisible();
     const captureErrorText =
       (await captureFailure.allTextContents()).join(" | ") ||
@@ -1079,6 +1096,7 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
     ],
   });
   await secondPage.goto(`/workspace/chats/${threadId}`);
+  await openSpeechWorkspace(secondPage);
   await secondPage.getByRole("button", { name: /artifacts/i }).click();
   await expect(
     secondPage.getByRole("heading", { name: "庭审录音与语音转写" }),
@@ -1129,7 +1147,10 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
     ).__w11HoldChunkTransaction = true;
   });
   try {
-    await page.getByRole("button", { name: /停止并保存/ }).click();
+    await page
+      .getByLabel("庭审录音与语音转写", { exact: true })
+      .getByRole("button", { name: /停止并保存/ })
+      .click();
     await expect
       .poll(() =>
         page.evaluate(
@@ -1201,6 +1222,7 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
   allowRecoveryUploads = true;
   refreshStarted = true;
   await page.reload();
+  await openSpeechWorkspace(page);
   await expect(
     page.getByRole("heading", { name: "庭审录音与语音转写" }),
   ).toBeVisible();
@@ -1269,6 +1291,9 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
       }),
     });
   await page.route("**/api/v1/auth/me", sameIdentityMeRoute);
+  await page
+    .getByRole("button", { name: "编辑文字与时间", exact: true })
+    .click();
   const reviewSegment = page.getByLabel("校对片段 1", { exact: true });
   await expect(reviewSegment).toHaveValue("初始机器稿。");
   await reviewSegment.fill("律师未保存的草稿。");
@@ -1306,7 +1331,7 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
     page.locator('[role="alert"]').filter({ hasText: "该转写已有新版本" }),
   ).toContainText("该转写已有新版本；当前未保存草稿已保留。");
   await expect(reviewSegment).toHaveValue("律师未保存的草稿。");
-  await expect(page.getByText("机器初稿 · 未人工复核")).toBeVisible();
+  await expect(page.getByText("当前校对草稿 · 尚未保存")).toBeVisible();
   await page.unroute("**/api/v1/auth/me", sameIdentityMeRoute);
 
   const delayedPermissionPage = await page.context().newPage();
@@ -1352,12 +1377,14 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
     };
   });
   await delayedPermissionPage.goto(`/workspace/chats/${threadId}`);
+  await openSpeechWorkspace(delayedPermissionPage);
   await delayedPermissionPage
     .getByRole("button", { name: /artifacts/i })
     .click();
   await expect(
     delayedPermissionPage.getByRole("heading", { name: "庭审录音与语音转写" }),
   ).toBeVisible();
+  await openRecordingView(delayedPermissionPage);
   await delayedPermissionPage.getByLabel("录音名称").fill("迟到权限音轨测试");
   await delayedPermissionPage
     .getByRole("button", { name: /开始麦克风录音/ })
@@ -1371,7 +1398,9 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
       ),
     )
     .toBe(true);
-  await delayedPermissionPage.getByRole("link", { name: "Legal work" }).click();
+  await delayedPermissionPage
+    .getByRole("link", { name: "法律工作", exact: true })
+    .click();
   await expect(
     delayedPermissionPage.getByRole("heading", { name: "庭审录音与语音转写" }),
   ).toHaveCount(0);
@@ -1395,6 +1424,7 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
     .toEqual(["ended"]);
   expect(createCount).toBe(1);
   await delayedPermissionPage.close();
+  await openRecordingView(page);
 
   await expect(
     page.getByRole("button", { name: /开始麦克风录音/ }),
@@ -1424,6 +1454,7 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
       page.getByRole("button", { name: /开始麦克风录音/ }),
     ).toBeVisible();
     expect(createCount).toBe(1);
+    await page.getByRole("button", { name: "文件转写", exact: true }).click();
     await expect(page.getByLabel("音视频原件")).toBeVisible();
     test.info().annotations.push({
       type: "browser-audio-device",
@@ -1434,6 +1465,7 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
   }
   if (!(await microphoneDenialMessage.isVisible().catch(() => false))) {
     expect(createCount).toBe(1);
+    await page.getByRole("button", { name: "文件转写", exact: true }).click();
     await expect(page.getByLabel("音视频原件")).toBeVisible();
     test.info().annotations.push({
       type: "browser-audio-capability",
@@ -1676,6 +1708,7 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
   expect(createCount).toBe(4);
   expect(chunks).toHaveLength(0);
   await page.reload();
+  await openSpeechWorkspace(page);
   await expect(
     page.getByRole("heading", { name: "庭审录音与语音转写" }),
   ).toBeVisible();
@@ -1749,6 +1782,7 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
   expect(migratedPendingBytes).toBe(777);
 
   await page.reload();
+  await openSpeechWorkspace(page);
   await expect(
     page.getByRole("heading", { name: "庭审录音与语音转写" }),
   ).toBeVisible();
@@ -1758,6 +1792,7 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
 
   capacityBusyNextCaptureCreate = true;
   const capturesBeforeCapacityRejection = createCount;
+  await openRecordingView(page);
   await page.getByLabel("录音名称").fill("实时录音容量冲突");
   await page.getByRole("button", { name: /开始麦克风录音/ }).click();
   await expect(
@@ -1797,10 +1832,11 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
 
   asrBusyNextCaptureCreate = true;
   const capturesBeforeAsrRejection = createCount;
+  await openRecordingView(page);
   await page.getByLabel("录音名称").fill("正式转写占用识别通道");
   await page.getByRole("button", { name: /开始麦克风录音/ }).click();
   await expect(
-    page.getByText("本地识别通道正在处理正式转写，请稍后再开始实时录音。"),
+    page.getByText("本地识别通道暂被占用，请稍后再开始实时录音。"),
   ).toBeVisible();
   const asrRejectedResources = await page.evaluate(() => {
     const target = window as typeof window & {
@@ -1823,12 +1859,16 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
   expect(await readRecoverableCaptureCount(page)).toBe(0);
 
   holdNextFinishResponse = true;
+  await openRecordingView(page);
   await page.getByLabel("录音名称").fill("取消与迟到 finish 回包测试");
   await page.getByRole("button", { name: /开始麦克风录音/ }).click();
   await expect
     .poll(() => chunks.length, { timeout: 10_000 })
     .toBeGreaterThan(0);
-  await page.getByRole("button", { name: /停止并保存/ }).click();
+  await page
+    .getByLabel("庭审录音与语音转写", { exact: true })
+    .getByRole("button", { name: /停止并保存/ })
+    .click();
   await expect
     .poll(() => finishResponseStarted, { timeout: 10_000 })
     .toBe(true);
@@ -1856,6 +1896,7 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
   expect(await readPendingSequences(page)).toEqual([]);
 
   holdSequenceZeroAck = true;
+  await openRecordingView(page);
   await page.getByLabel("录音名称").fill("取消时上传回执仍在途");
   await page.getByRole("button", { name: /开始麦克风录音/ }).click();
   await expect
@@ -1893,6 +1934,7 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
   expect(await readRecoverableCaptureCount(page)).toBe(0);
   expect(await readPendingSequences(page)).toEqual([]);
 
+  await openRecordingView(page);
   await page.getByLabel("录音名称").fill("取消时摘要仍在计算");
   await page.getByRole("button", { name: /开始麦克风录音/ }).click();
   await expect(
@@ -1942,6 +1984,7 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
   expect(chunks).toEqual([]);
   expect(finishRequested).toBe(false);
 
+  await openRecordingView(page);
   await page.getByLabel("录音名称").fill("同源配额耗尽测试");
   await page.getByRole("button", { name: /开始麦克风录音/ }).click();
   await expect(
@@ -2023,6 +2066,7 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
       get: () => false,
     });
   });
+  await openRecordingView(page);
   await page.getByLabel("录音名称").fill("断网补传后切换账号");
   await page.getByRole("button", { name: /开始麦克风录音/ }).click();
   await expect(
@@ -2096,6 +2140,7 @@ test("recovers encrypted PCM after refresh and clears it on revoked access", asy
   );
   await page.unroute("**/api/v1/auth/me", identitySwitchRoute);
 
+  await openRecordingView(page);
   await page.getByLabel("录音名称").fill("退出登录时清理待传录音");
   await page.getByRole("button", { name: /开始麦克风录音/ }).click();
   await expect(
@@ -2375,10 +2420,12 @@ test("pauses recovery for a corrupted encrypted PCM chunk", async ({
   });
 
   await page.goto(`/workspace/chats/${corruptThreadId}`);
+  await openSpeechWorkspace(page);
   await page.getByRole("button", { name: /artifacts/i }).click();
   await expect(
     page.getByRole("heading", { name: "庭审录音与语音转写" }),
   ).toBeVisible();
+  await openRecordingView(page);
   await page.getByLabel("录音名称").fill("损坏缓存合成测试");
   await page.getByRole("button", { name: /开始麦克风录音/ }).click();
   await expect(
@@ -2387,8 +2434,15 @@ test("pauses recovery for a corrupted encrypted PCM chunk", async ({
   await expect
     .poll(() => readPendingSequences(page), { timeout: 10_000 })
     .toContain(0);
-  await expect(page.getByRole("button", { name: /停止并保存/ })).toBeVisible();
-  await page.getByRole("button", { name: /停止并保存/ }).click();
+  await expect(
+    page
+      .getByLabel("庭审录音与语音转写", { exact: true })
+      .getByRole("button", { name: /停止并保存/ }),
+  ).toBeVisible();
+  await page
+    .getByLabel("庭审录音与语音转写", { exact: true })
+    .getByRole("button", { name: /停止并保存/ })
+    .click();
   await expect(
     page.getByText(
       "已采集内容已加密保存到本机；联网并重新打开案件后会补传并完成保存。",
@@ -2451,6 +2505,7 @@ test("pauses recovery for a corrupted encrypted PCM chunk", async ({
     0,
   );
   await page.reload();
+  await openSpeechWorkspace(page);
   await expect(
     page.getByText(
       "本机录音加密暂存无法解密或完整性校验失败；已暂停补传，暂存未自动删除。请联系管理员处理。",
@@ -2517,6 +2572,7 @@ test("pauses recovery for a corrupted encrypted PCM chunk", async ({
     });
   });
   await page.reload();
+  await openSpeechWorkspace(page);
   await expect(
     page.getByText(
       "浏览器本机加密录音暂存无法打开；麦克风录音已关闭，未确认内容不会被当作已保存。请检查浏览器存储后重试。",
@@ -2716,6 +2772,7 @@ test("fails closed across browsers when the encrypted capture database cannot op
   });
 
   await page.goto(`/workspace/chats/${unavailableThreadId}`);
+  await openSpeechWorkspace(page);
   await page.getByRole("button", { name: /artifacts/i }).click();
   await expect(
     page.getByRole("heading", { name: "庭审录音与语音转写" }),
@@ -2728,6 +2785,7 @@ test("fails closed across browsers when the encrypted capture database cannot op
   await expect(
     page.getByRole("button", { name: /开始麦克风录音/ }),
   ).toHaveCount(0);
+  await page.getByRole("button", { name: "文件转写", exact: true }).click();
   await expect(page.getByLabel("音视频原件")).toBeVisible();
   getUserMediaCalls = await page.evaluate(() =>
     Number(sessionStorage.getItem("w11-storage-open-media-calls") ?? "0"),

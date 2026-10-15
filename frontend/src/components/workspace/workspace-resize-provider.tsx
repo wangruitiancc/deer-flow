@@ -12,7 +12,7 @@ import {
 import { SidebarProvider, useSidebar } from "@/components/ui/sidebar";
 
 const WIDTH_KEY = "matrix-law:sidebar-width:v1";
-const DEFAULT_WIDTH = 256;
+const DEFAULT_WIDTH = 216;
 export function clampSidebarWidth(width: number, viewportWidth: number) {
   return Math.min(
     Math.max(160, width),
@@ -57,7 +57,7 @@ export function WorkspaceResizeProvider({
   return (
     <SidebarProvider
       defaultOpen={defaultOpen}
-      className="h-screen overflow-hidden [&_[data-slot=sidebar-container]]:transition-none [&_[data-slot=sidebar-gap]]:transition-none"
+      className="law-workbench h-screen overflow-hidden [&_[data-slot=sidebar-container]]:transition-none [&_[data-slot=sidebar-gap]]:transition-none"
       style={{ "--sidebar-width": `${renderedWidth}px` } as CSSProperties}
     >
       {children}
@@ -88,20 +88,20 @@ function SidebarResizeHandle({
       aria-valuenow={Math.round(width)}
       tabIndex={0}
       className="hover:bg-primary/30 focus-visible:bg-primary/30 fixed inset-y-0 z-30 hidden w-2 -translate-x-1/2 cursor-col-resize touch-none items-center justify-center outline-none md:flex"
-      style={{ left: width }}
+      style={{ left: width + 48 }}
       onDoubleClick={() => change(DEFAULT_WIDTH)}
       onPointerDown={(event) => {
         if (event.button !== 0) return;
         event.preventDefault();
         drag.current = {
           pointerId: event.pointerId,
-          offset: event.clientX - width,
+          offset: event.clientX - width - 48,
         };
         event.currentTarget.setPointerCapture(event.pointerId);
       }}
       onPointerMove={(event) => {
         if (drag.current?.pointerId === event.pointerId)
-          change(event.clientX - drag.current.offset);
+          change(event.clientX - drag.current.offset - 48);
       }}
       onPointerUp={(event) => {
         if (drag.current?.pointerId === event.pointerId) {

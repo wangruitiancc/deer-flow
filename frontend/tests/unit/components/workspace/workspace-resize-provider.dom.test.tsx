@@ -74,6 +74,6 @@ describe("workspace left separator", () => {
     fireEvent(window, new Event("resize"));
     expect(handle.getAttribute("aria-valuenow")).toBe("290");
     fireEvent.doubleClick(handle);
-    expect(handle.getAttribute("aria-valuenow")).toBe("256");
+    expect(handle.getAttribute("aria-valuenow")).toBe("216");
   });
 });

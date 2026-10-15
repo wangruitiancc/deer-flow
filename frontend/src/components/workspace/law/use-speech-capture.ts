@@ -164,7 +164,7 @@ function describeCaptureStartupError(error: unknown): string {
     "code" in error &&
     error.code === "SPEECH_ASR_BUSY"
   )
-    return "本地识别通道正在处理正式转写，请稍后再开始实时录音。";
+    return "本地识别通道暂被占用，请稍后再开始实时录音。";
   if (
     typeof error === "object" &&
     error !== null &&

@@ -190,7 +190,28 @@ export function MatterOverviewDashboard({
     );
   }
 
-  if (query.isError || !data) {
+  const requiredCounts = [
+    "evidence_items",
+    "derived_artifacts",
+    "clean_scanned_current_materials",
+    "pending_document_reviews",
+    "overdue_confirmed_deadlines",
+    "confirmed_deadlines_next_7_days",
+    "confirmed_internal_tasks",
+    "completed_internal_tasks",
+    "proposed_deadlines",
+  ] as const;
+  const completeOverview =
+    data?.statistics &&
+    data.matter &&
+    requiredCounts.every(
+      (key) =>
+        Number.isSafeInteger(data.statistics[key]) && data.statistics[key] >= 0,
+    ) &&
+    Array.isArray(data.statistics.current_artifacts) &&
+    Array.isArray(data.upcoming_deadlines) &&
+    Array.isArray(data.recent_activity);
+  if (query.isError || !data || !completeOverview) {
     return (
       <Card role="alert">
         <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-6">

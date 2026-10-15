@@ -104,6 +104,8 @@ docker compose -f docker/docker-compose.matrix-law-phase10j.yaml down -v
 
 ## 当前验收边界
 
+律师会话右侧工作区正在按 UI 标准 v1 接入：文档校对、录音／实时转写、案情图谱、文书撰写采用独立功能页签，日程、法律依据和记忆由“＋”打开。主强调色统一为灰蓝，账号头像包含设置与退出，外观支持手动、系统或按所选城市日出日落切换。本轮为源码与本地合成界面验证，尚未发布到云端；详细范围见 `frontend/design-qa.md` 与配套 Matrix Law 设计记录。
+
 本地自动化、隔离 PostgreSQL、生产镜像和容器安全合同可以在本仓库验证。接入真实案件前仍必须在
 目标环境完成 OIDC/SSO、KMS/KES、对象存储、私有 OCR、真实法律金标、渗透、生产等价负载、
 Prometheus/Alertmanager、Kubernetes 多副本与跨机灾备验收。

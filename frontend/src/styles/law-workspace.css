@@ -1,0 +1,656 @@
+/* Matrix Law UI v1. Shared geometry, scoped to the authenticated workbench. */
+.law-workbench {
+  --background: #fafbf9;
+  --foreground: #252c2b;
+  --card: #ffffff;
+  --card-foreground: #252c2b;
+  --popover: #ffffff;
+  --popover-foreground: #252c2b;
+  --primary: #52677f;
+  --primary-foreground: #ffffff;
+  --secondary: #eceff3;
+  --secondary-foreground: #252c2b;
+  --muted: #f2f3f0;
+  --muted-foreground: #6e7871;
+  --accent: #e8edf4;
+  --accent-foreground: #485e77;
+  --border: #e3e7e1;
+  --input: #d3d9e1;
+  --ring: #52677f;
+  --sidebar: #f2f3f0;
+  --sidebar-foreground: #252c2b;
+  --sidebar-accent: #e2e8f0;
+  --sidebar-accent-foreground: #252c2b;
+  --sidebar-border: #e3e7e1;
+  --sidebar-width-icon: 52px;
+  --law-header: 44px;
+  --law-toolbar: 42px;
+  --law-control: 28px;
+  --law-footer: 44px;
+  --law-player: 48px;
+  --law-status: 27px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 13px;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+}
+.dark .law-workbench {
+  --background: #1d2226;
+  --foreground: #dce2df;
+  --card: #21272b;
+  --card-foreground: #dce2df;
+  --popover: #262d31;
+  --popover-foreground: #dce2df;
+  --primary: #9bafc8;
+  --primary-foreground: #17212e;
+  --secondary: #2b3437;
+  --secondary-foreground: #dce2df;
+  --muted: #191f23;
+  --muted-foreground: #99a39f;
+  --accent: #2a3544;
+  --accent-foreground: #bdcce0;
+  --border: #30393e;
+  --input: #465262;
+  --ring: #9bafc8;
+  --sidebar: #181e22;
+  --sidebar-foreground: #dce2df;
+  --sidebar-accent: #303c4b;
+  --sidebar-accent-foreground: #dce2df;
+  --sidebar-border: #30393e;
+}
+.law-workspace-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--background);
+}
+.law-workspace-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 var(--law-header, 44px);
+  min-width: 0;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+.law-workspace-tablist {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.law-workspace-tablist::-webkit-scrollbar {
+  display: none;
+}
+.law-workspace-tab {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--muted-foreground);
+  position: relative;
+}
+.law-workspace-tab:hover {
+  background: var(--muted);
+}
+.law-workspace-tab.is-active {
+  background: var(--card);
+  border-color: var(--border);
+  color: var(--foreground);
+}
+.law-workspace-tab.is-active::after {
+  position: absolute;
+  bottom: -1px;
+  left: 10px;
+  right: 10px;
+  height: 1px;
+  content: "";
+  background: var(--primary);
+}
+.law-workspace-tab [role="tab"] {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 4px 0 10px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.law-workspace-shell svg {
+  stroke-width: 1.5;
+}
+.law-workspace-tabs svg,
+.law-workspace-toolbar > svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.law-workspace-tab-close {
+  position: relative;
+  width: 22px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  border-radius: 4px;
+  margin-right: 3px;
+}
+.law-workspace-tab-close svg {
+  width: 12px;
+  height: 12px;
+  opacity: 0;
+}
+.law-workspace-tab:hover .law-workspace-tab-close svg,
+.law-workspace-tab:focus-within .law-workspace-tab-close svg,
+.law-workspace-tab.is-active .law-workspace-tab-close:not(.has-draft) svg {
+  opacity: 0.6;
+}
+.law-workspace-tab-close.has-draft span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--primary);
+  position: absolute;
+}
+.law-workspace-tab:hover .has-draft span,
+.law-workspace-tab:focus-within .has-draft span {
+  display: none;
+}
+.law-workspace-tab-close:hover {
+  background: var(--secondary);
+}
+.law-workspace-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 5px;
+  color: var(--muted-foreground);
+}
+.law-workspace-icon svg {
+  width: 14px;
+  height: 14px;
+}
+.law-workspace-icon:hover {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+.law-workspace-shell button:focus-visible,
+.law-workspace-shell select:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.law-function-panel,
+.law-function-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.law-function-panel[hidden],
+.law-function-body > [hidden],
+.law-resource-panel[hidden] {
+  display: none !important;
+}
+.law-workspace-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 var(--law-toolbar, 42px);
+  min-width: 0;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+.law-resource-picker {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 58%;
+}
+.law-resource-picker > svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.law-resource-picker select {
+  width: 100%;
+  min-width: 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 22px 4px 8px;
+  font-size: 12px;
+  height: 28px;
+  text-overflow: ellipsis;
+}
+.law-workspace-meta {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.law-workspace-index {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px;
+}
+.law-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.law-section-heading h2 {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+}
+.law-section-heading p {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  line-height: 20px;
+  margin-top: 4px;
+}
+.law-index-heading {
+  font-size: 12px;
+  font-weight: 500;
+  margin: 24px 0 8px;
+}
+.law-resource-list {
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.law-resource-list > * + * {
+  border-top: 1px solid var(--border);
+}
+.law-resource-panel {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.law-workspace-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 32px 20px;
+  text-align: center;
+}
+.law-workspace-empty > svg {
+  width: 22px;
+  height: 22px;
+  color: var(--muted-foreground);
+}
+.law-workspace-empty h2 {
+  font-size: 14px;
+  font-weight: 500;
+}
+.law-workspace-empty p,
+.law-workspace-empty span {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  max-width: 340px;
+}
+.law-workspace-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--law-status, 27px);
+  flex-shrink: 0;
+  padding: 0 16px;
+  border-top: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.law-workspace-status > :last-child {
+  max-width: 45%;
+}
+.law-workspace-shell [data-slot="button"] {
+  height: var(--law-control, 28px);
+  font-size: 12px;
+  gap: 6px;
+  border-radius: 5px;
+}
+.law-workspace-shell [data-slot="button"] svg {
+  width: 14px;
+  height: 14px;
+}
+.law-workspace-tabs .is-recording {
+  color: var(--destructive);
+}
+.law-workspace-shell [hidden] {
+  display: none !important;
+}
+.law-speech-workspace {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.law-speech-subtabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px;
+  height: var(--law-toolbar, 42px);
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+.law-speech-subtabs button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 5px 9px;
+  height: 28px;
+  border-radius: 5px;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.law-speech-subtabs button[aria-pressed="true"] {
+  color: var(--accent-foreground);
+  background: var(--accent);
+}
+.law-speech-subtabs svg {
+  width: 14px;
+  height: 14px;
+}
+.law-speech-subtabs span {
+  font-size: 10px;
+  color: var(--muted-foreground);
+}
+.law-speech-content {
+  min-height: 0;
+  overflow-y: auto;
+  flex: 1;
+  padding: 24px;
+}
+.law-speech-content > div:first-child {
+  margin-bottom: 8px;
+}
+.law-speech-content > p {
+  max-width: 68ch;
+  line-height: 20px;
+}
+.law-speech-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.law-speech-capture,
+.law-speech-files {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.law-speech-capture > div:first-child > p {
+  max-width: 72ch;
+  line-height: 20px;
+}
+.law-speech-capture > div:first-child h4 {
+  font-size: 16px;
+  line-height: 24px;
+}
+.law-speech-workspace input:not([type="checkbox"]):not([type="range"]),
+.law-speech-workspace select {
+  min-height: 28px;
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 5px;
+}
+.law-speech-workspace input[type="checkbox"] {
+  accent-color: var(--primary);
+}
+.law-speech-records {
+  display: grid;
+  grid-template-columns: minmax(160px, 200px) minmax(0, 1fr);
+  gap: 16px;
+  margin-top: 12px;
+}
+.law-speech-records > div:first-child button {
+  padding: 10px;
+  border-color: transparent;
+  border-radius: 5px;
+}
+.law-speech-records > div:first-child button[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--border);
+}
+.law-speech-records > div:last-child {
+  border: 0;
+  padding: 0;
+  border-radius: 0;
+}
+.law-speech-records > div:last-child > div > div[class*="max-h-80"] {
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+}
+.law-speech-sort {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+  padding-bottom: 8px;
+}
+.law-speech-sort select {
+  min-width: 0;
+  background: var(--background);
+}
+.law-speech-workspace details p {
+  overflow-wrap: anywhere;
+}
+.law-speech-content.is-transcript {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+.law-speech-records {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.law-speech-content.is-transcript .law-speech-records {
+  margin: 0;
+}
+.law-transcript-view {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.law-transcript-heading {
+  flex-shrink: 0;
+  min-height: 64px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border);
+}
+.law-transcript-document {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px;
+}
+.law-transcript-document > * + * {
+  margin-top: 16px;
+}
+.law-transcript-segment {
+  display: grid;
+  grid-template-columns: 105px minmax(0, 1fr);
+  gap: 16px;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--border);
+}
+.law-transcript-segment:first-child {
+  border-top: 1px solid var(--border);
+}
+.law-transcript-segment.is-editing {
+  grid-template-columns: 90px minmax(0, 1fr) 140px;
+}
+.law-transcript-segment > p {
+  font-size: 13px;
+  line-height: 24px;
+  max-width: 66ch;
+}
+.law-transcript-segment > button {
+  padding-top: 3px;
+  color: var(--muted-foreground);
+  text-decoration: none;
+  font-size: 11px;
+}
+.law-transcript-actions {
+  min-height: var(--law-footer, 44px);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 24px;
+  border-top: 1px solid var(--border);
+}
+.law-transcript-actions > button {
+  margin-left: auto;
+}
+.law-transcript-review {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-width: 0;
+  border: 0;
+  font-size: 11px;
+}
+.law-transcript-review label {
+  align-items: center;
+}
+.law-transcript-player {
+  height: var(--law-player, 48px);
+  flex-shrink: 0;
+  padding: 0 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+}
+.law-transcript-player:empty {
+  display: none;
+}
+.law-transcript-player audio {
+  width: 100%;
+  height: 36px;
+}
+.law-transcript-view > details {
+  padding: 4px 24px;
+  font-size: 10px;
+}
+.law-capture-return {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+  font-size: 12px;
+}
+.law-capture-return svg {
+  width: 14px;
+  height: 14px;
+  color: var(--destructive);
+}
+.law-capture-return button {
+  font-size: 12px;
+}
+@media (max-width: 640px) {
+  .law-workspace-index {
+    padding: 16px;
+  }
+  .law-workspace-toolbar {
+    padding: 0 12px;
+    gap: 8px;
+  }
+  .law-workspace-toolbar > .law-workspace-meta {
+    display: none;
+  }
+  .law-resource-picker {
+    max-width: 100%;
+    flex: 1;
+  }
+  .law-workspace-tabs {
+    padding: 0 4px;
+  }
+  .law-speech-content {
+    padding: 16px;
+  }
+  .law-speech-records {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .law-speech-records > div:first-child {
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  .law-transcript-document {
+    padding: 16px;
+  }
+  .law-transcript-heading,
+  .law-transcript-actions {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .law-transcript-actions {
+    flex-wrap: wrap;
+  }
+  .law-transcript-segment {
+    grid-template-columns: 76px minmax(0, 1fr);
+    gap: 10px;
+  }
+  .law-transcript-segment.is-editing {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* The activity rail never collapses. Only the adjacent matter tree slides away. */
+.law-activity-rail {
+  position: relative;
+  z-index: 20;
+  display: flex;
+  flex: 0 0 48px;
+  width: 48px;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  border-right: 1px solid var(--sidebar-border);
+  background: var(--sidebar);
+}
+.law-activity-rail > div:last-child > [data-sidebar="menu"] {
+  width: 36px;
+}
+@media (min-width: 768px) {
+  .law-workbench .law-navigation-panel {
+    left: 48px;
+  }
+  .law-workbench [data-collapsible="offcanvas"] > .law-navigation-panel {
+    visibility: hidden;
+    pointer-events: none;
+  }
+}

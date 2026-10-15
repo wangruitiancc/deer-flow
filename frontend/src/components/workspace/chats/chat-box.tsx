@@ -1,4 +1,4 @@
-import { FilesIcon, XIcon } from "lucide-react";
+import { FilesIcon, MicIcon, XIcon } from "lucide-react";
 import dynamic from "next/dynamic";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 
 import { useArtifacts } from "../artifacts/context";
 import { useMaybeBrowserView } from "../browser-view/context";
+import type { SpeechWorkspaceActivity } from "../law/matter-speech-panel";
 import { useThread } from "../messages/context";
 import { useMaybeSidecar } from "../sidecar/context";
 
@@ -71,7 +72,7 @@ const ProjectArtifactsPanel = dynamic(
 );
 
 const RIGHT_PANEL_ANIMATION_MS = 280;
-const RIGHT_PANEL_DEFAULT_SIZE = "40%";
+const RIGHT_PANEL_DEFAULT_SIZE = "70%";
 
 type RightPanelKind = "sidecar" | "artifacts" | "browser";
 
@@ -89,6 +90,9 @@ const ChatBox: React.FC<{
 }> = ({ children, threadId, browserEnabled = true }) => {
   const { thread, isMock } = useThread();
   const [workspaceExpanded, setWorkspaceExpanded] = useState(false);
+  const [speechActivity, setSpeechActivity] =
+    useState<SpeechWorkspaceActivity | null>(null);
+  const [lawWorkspaceMounted, setLawWorkspaceMounted] = useState(false);
   const attachments = useMemo(
     () => workspaceAttachments(thread.values.messages ?? []),
     [thread.values.messages],
@@ -393,22 +397,33 @@ const ChatBox: React.FC<{
     setArtifactsOpen,
   ]);
 
-  const rightPanelContent =
-    renderedRightPanel === "artifacts" &&
-    !isMock &&
-    env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true" ? (
-      <ProjectArtifactsPanel
-        key={threadId}
-        threadId={threadId}
-        expanded={workspaceExpanded}
-        onExpandedChange={setWorkspaceExpanded}
-        attachments={attachments}
-      >
-        {nativeRightPanelContent}
-      </ProjectArtifactsPanel>
-    ) : (
-      nativeRightPanelContent
-    );
+  useEffect(() => {
+    if (renderedRightPanel === "artifacts") setLawWorkspaceMounted(true);
+  }, [renderedRightPanel]);
+  const legalWorkspace =
+    !isMock && env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true";
+  const rightPanelContent = legalWorkspace ? (
+    <>
+      {(lawWorkspaceMounted || renderedRightPanel === "artifacts") && (
+        <div
+          hidden={renderedRightPanel !== "artifacts"}
+          className="size-full min-h-0"
+        >
+          <ProjectArtifactsPanel
+            key={threadId}
+            threadId={threadId}
+            expanded={workspaceExpanded}
+            onExpandedChange={setWorkspaceExpanded}
+            attachments={attachments}
+            onSpeechActivityChange={setSpeechActivity}
+          />
+        </div>
+      )}
+      {renderedRightPanel !== "artifacts" && nativeRightPanelContent}
+    </>
+  ) : (
+    nativeRightPanelContent
+  );
 
   if (!layoutReady) return <RightPanelLoading />;
 
@@ -434,10 +449,33 @@ const ChatBox: React.FC<{
       >
         <div
           inert={modalPanel}
-          className="relative size-full min-h-0 min-w-0"
+          className="relative flex size-full min-h-0 min-w-0 flex-col"
           id="chat"
         >
-          {children}
+          {speechActivity && activeRightPanel !== "artifacts" && (
+            <div className="law-capture-return" role="status">
+              <MicIcon />
+              <button
+                onClick={() => {
+                  sidecar?.close();
+                  browserView?.close();
+                  speechActivity.returnToCapture?.();
+                  setArtifactsOpen(true);
+                }}
+              >
+                返回录音 · {speechActivity.seconds} 秒 · {speechActivity.label}
+              </button>
+              {speechActivity.recording && (
+                <button
+                  className="ml-auto shrink-0 rounded border px-2 py-1"
+                  onClick={speechActivity.stop}
+                >
+                  停止并保存
+                </button>
+              )}
+            </div>
+          )}
+          <div className="relative min-h-0 flex-1">{children}</div>
         </div>
       </ResizablePanel>
       <ResizableHandle

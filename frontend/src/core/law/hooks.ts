@@ -960,6 +960,9 @@ export function useLawSpeechTranscriptions(tenantId: string, matterId: string) {
     queryFn: ({ signal }) =>
       listMatterSpeechTranscriptions(tenantId, matterId, signal),
     retry: false,
+    refetchOnWindowFocus: "always",
+    refetchOnReconnect: "always",
+    refetchIntervalInBackground: false,
     refetchInterval: (query) =>
       query.state.data?.items.some((item) =>
         ["queued", "processing"].includes(item.status),
@@ -980,6 +983,9 @@ export function useLawSpeechTranscription(
       getMatterSpeechTranscription(tenantId, matterId, taskId!, signal),
     enabled: Boolean(taskId),
     retry: false,
+    refetchOnWindowFocus: "always",
+    refetchOnReconnect: "always",
+    refetchIntervalInBackground: false,
     refetchInterval: (query) =>
       query.state.data &&
       ["queued", "processing"].includes(query.state.data.task.status)

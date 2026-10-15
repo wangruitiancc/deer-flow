@@ -8,17 +8,21 @@ import {
   FilePenLineIcon,
   RefreshCwIcon,
   XIcon,
-  PlusIcon,
-  Maximize2Icon,
-  Minimize2Icon,
   FileTextIcon,
   FolderIcon,
   ChevronRightIcon,
-  ScanTextIcon,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useReducer,
+  useId,
+  type ReactNode,
+} from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -55,7 +59,13 @@ import {
 import { isLegalAuthoritiesFile } from "@/core/law/legal-authorities";
 import { isLegalGraphFile } from "@/core/law/legal-graph";
 import type { WorkspaceAttachment } from "@/core/law/workspace-attachments";
-import { cn } from "@/lib/utils";
+import {
+  initialWorkspaceTabs,
+  workspaceTabsReducer,
+  workspaceFunctionForResource,
+  WORKSPACE_FUNCTIONS,
+  type WorkspaceFunction,
+} from "@/core/law/workspace-tabs";
 
 import { EvidenceWorkbench, EvidenceUploadButton } from "./evidence-workbench";
 import { LegalAuthoritiesImportHandoff } from "./legal-authorities-import-handoff";
@@ -64,10 +74,14 @@ import { LegalGraphImportHandoff } from "./legal-graph-import-handoff";
 import { LegalGraphPreview } from "./legal-graph-preview";
 import { LegalGraphStarter } from "./legal-graph-starter";
 import { LegalTemplatePicker } from "./legal-template-picker";
+import { LegalWorkspaceTabs } from "./legal-workspace-tabs";
 import { MatterAuthoritiesPanel } from "./matter-authorities-panel";
 import { MatterDeadlinePanel } from "./matter-deadline-panel";
 import { MatterMemoryPanel } from "./matter-memory-panel";
-import { MatterSpeechPanel } from "./matter-speech-panel";
+import {
+  MatterSpeechPanel,
+  type SpeechWorkspaceActivity,
+} from "./matter-speech-panel";
 
 const WorkspaceFileDetail = dynamic(() =>
   import("../artifacts/artifact-file-detail").then(
@@ -220,9 +234,10 @@ function SpeechCitationSources({
             录音来源 ·{" "}
             {typeof citation.recording_name === "string"
               ? citation.recording_name
-              : "案件录音"}{" "}·{" "}
-            {formatSeconds(citation.audio_locator.start_ms)}–
-            {formatSeconds(citation.audio_locator.end_ms)} · 转写引用 {citation.citation_id}
+              : "案件录音"}{" "}
+            · {formatSeconds(citation.audio_locator.start_ms)}–
+            {formatSeconds(citation.audio_locator.end_ms)} · 转写引用{" "}
+            {citation.citation_id}
             {typeof citation.transcript_version_id === "string" && (
               <> · 固定转写版本 {citation.transcript_version_id}</>
             )}
@@ -271,12 +286,14 @@ export function ProjectArtifactsPanel({
   expanded = false,
   onExpandedChange,
   attachments = [],
+  onSpeechActivityChange,
 }: {
   threadId: string;
   children?: ReactNode;
   expanded?: boolean;
   onExpandedChange?: (value: boolean) => void;
   attachments?: WorkspaceAttachment[];
+  onSpeechActivityChange?: (activity: SpeechWorkspaceActivity | null) => void;
 }) {
   const context = useLawThreadContext(threadId);
   if (context.isPending)
@@ -303,6 +320,7 @@ export function ProjectArtifactsPanel({
       expanded={expanded}
       onExpandedChange={onExpandedChange}
       attachments={attachments}
+      onSpeechActivityChange={onSpeechActivityChange}
     />
   );
 }
@@ -313,12 +331,14 @@ function LegalDocumentWorkspace({
   expanded,
   onExpandedChange,
   attachments,
+  onSpeechActivityChange,
 }: {
   threadId: string;
   scope: NonNullable<ReturnType<typeof useLawThreadContext>["data"]>;
   expanded: boolean;
   onExpandedChange?: (value: boolean) => void;
   attachments: WorkspaceAttachment[];
+  onSpeechActivityChange?: (activity: SpeechWorkspaceActivity | null) => void;
 }) {
   const {
     artifacts,
@@ -328,9 +348,19 @@ function LegalDocumentWorkspace({
     setOpen,
     drafts,
   } = useArtifacts();
-  const [active, setActive] = useState("overview");
+  const workspaceId = useId();
+  const [functions, dispatch] = useReducer(
+    workspaceTabsReducer,
+    initialWorkspaceTabs,
+  );
   const [tabs, setTabs] = useState<WorkTab[]>([]);
+  const [selected, setSelected] = useState<
+    Partial<Record<WorkspaceFunction, string>>
+  >({});
   const [closeTarget, setCloseTarget] = useState<string | null>(null);
+  const [speechDirty, setSpeechDirty] = useState(false);
+  const [speechActivity, setSpeechActivity] =
+    useState<SpeechWorkspaceActivity | null>(null);
   const matter = useQuery({
     queryKey: ["law", "matter", scope.tenant_id, scope.matter_id],
     queryFn: ({ signal }) =>
@@ -343,11 +373,21 @@ function LegalDocumentWorkspace({
       listEvidence(scope.tenant_id, scope.matter_id, signal),
     retry: false,
   });
+  const category = (tab: WorkTab) =>
+    workspaceFunctionForResource({
+      kind: tab.kind,
+      path: tab.kind === "file" ? tab.path : undefined,
+      artifactKind: tab.kind === "saved" ? tab.item.kind : undefined,
+    });
+  const openFunction = (id: WorkspaceFunction) =>
+    dispatch({ type: "open", id });
   const openTab = (tab: WorkTab) => {
+    const functionId = category(tab);
     setTabs((current) =>
       current.some((row) => row.id === tab.id) ? current : [...current, tab],
     );
-    setActive(tab.id);
+    setSelected((current) => ({ ...current, [functionId]: tab.id }));
+    openFunction(functionId);
   };
   const openFile = (path: string) => {
     openTab({
@@ -361,6 +401,7 @@ function LegalDocumentWorkspace({
   useEffect(() => {
     if (!selectedArtifact) return;
     const path = selectedArtifact;
+    const functionId = workspaceFunctionForResource({ kind: "file", path });
     setTabs((current) =>
       current.some((row) => row.id === `file:${path}`)
         ? current
@@ -374,9 +415,9 @@ function LegalDocumentWorkspace({
             },
           ],
     );
-    setActive(`file:${path}`);
+    setSelected((current) => ({ ...current, [functionId]: `file:${path}` }));
+    dispatch({ type: "open", id: functionId });
   }, [selectedArtifact, selectionVersion]);
-  const overviewTitle = scope.work_kind === "case" ? "案件概览" : "项目概览";
   const openEvidence = (item: EvidenceItem) =>
     openTab({
       id: `evidence:${item.id}`,
@@ -384,370 +425,406 @@ function LegalDocumentWorkspace({
       title: item.title,
       item,
     });
+  const openSaved = (item: ProjectArtifact) =>
+    openTab({ id: `saved:${item.id}`, kind: "saved", title: item.title, item });
   const removeTab = (id: string) => {
+    const tab = tabs.find((row) => row.id === id);
     setTabs((current) => current.filter((row) => row.id !== id));
-    if (active === id) setActive("overview");
+    if (tab) {
+      const functionId = category(tab);
+      setSelected((current) =>
+        current[functionId] === id
+          ? { ...current, [functionId]: undefined }
+          : current,
+      );
+    }
     setCloseTarget(null);
   };
-  const closeTab = (tab: WorkTab) => {
+  const closeResource = (tab: WorkTab) => {
     const draft = tab.kind === "file" ? drafts[tab.path] : undefined;
     if (
       tab.kind === "evidence" ||
       (draft && draft.draftContent !== draft.baselineContent)
-    ) {
+    )
       setCloseTarget(tab.id);
-      return;
-    }
-    removeTab(tab.id);
+    else removeTab(tab.id);
   };
-  return (
-    <section
-      className="flex size-full min-h-0 min-w-0 flex-col"
-      aria-label="法律文档工作区"
-    >
-      <div className="flex shrink-0 items-center border-b">
-        <div
-          role="tablist"
-          aria-label="工作区文件"
-          className="flex min-w-0 flex-1 items-center overflow-x-auto"
-        >
-          {[{ id: "overview", title: overviewTitle }, ...tabs].map((tab) => (
-            <div
-              key={tab.id}
-              className={cn(
-                "flex shrink-0 items-center border-r",
-                active === tab.id && "bg-muted",
-              )}
-            >
-              <button
-                role="tab"
-                id={`work-tab-${tab.id}`}
-                aria-selected={active === tab.id}
-                aria-controls={`work-panel-${tab.id}`}
-                tabIndex={active === tab.id ? 0 : -1}
-                className="focus-visible:ring-ring flex max-w-48 items-center gap-2 px-3 py-3 text-sm outline-none focus-visible:ring-2"
-                onClick={() => setActive(tab.id)}
-                onKeyDown={(event) => {
-                  const ids = ["overview", ...tabs.map((row) => row.id)];
-                  const index = ids.indexOf(tab.id);
-                  if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
-                    event.preventDefault();
-                    const next =
-                      ids[
-                        (index +
-                          (event.key === "ArrowRight" ? 1 : ids.length - 1)) %
-                          ids.length
-                      ]!;
-                    setActive(next);
-                    document.getElementById(`work-tab-${next}`)?.focus();
-                  }
-                }}
-              >
-                {tab.id === "overview" ? (
-                  <FolderIcon className="size-4 shrink-0" />
-                ) : (
-                  <FileTextIcon className="size-4 shrink-0" />
-                )}
-                <span className="truncate">{tab.title}</span>
-              </button>
-              {tab.id !== "overview" && (
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label={`关闭 ${tab.title}`}
-                  onClick={() => closeTab(tab as WorkTab)}
-                >
-                  <XIcon />
-                </Button>
-              )}
-            </div>
-          ))}
-        </div>
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          aria-label="工作入口"
-          onClick={() => setActive("overview")}
-        >
-          <PlusIcon />
-        </Button>
-        {onExpandedChange && (
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            aria-label={expanded ? "退出展开工作区" : "展开工作区"}
-            onClick={() => onExpandedChange(!expanded)}
-          >
-            {expanded ? <Minimize2Icon /> : <Maximize2Icon />}
-          </Button>
-        )}
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          aria-label="关闭工作区"
-          onClick={() => {
-            onExpandedChange?.(false);
-            setOpen(false);
-          }}
-        >
-          <XIcon />
-        </Button>
-      </div>
-      <div
-        id="work-panel-overview"
-        role="tabpanel"
-        aria-labelledby="work-tab-overview"
-        hidden={active !== "overview"}
-        className="min-h-0 flex-1 overflow-y-auto p-5"
-      >
-        <div className="mb-7 flex items-start gap-3">
-          <FolderIcon className="mt-1 size-7 shrink-0" />
-          <div className="min-w-0">
-            <h2 className="text-xl font-semibold break-words">
-              {matter.data?.title ??
-                (matter.isError ? "项目资料暂不可用" : "正在加载项目…")}
-            </h2>
-            <p className="text-muted-foreground mt-1 text-sm">
-              当前对话的材料与成果
-            </p>
-          </div>
-        </div>
-        <section className="mb-7">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-semibold">办案成果</h3>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setActive("saved")}
-            >
-              查看全部成果
-            </Button>
-          </div>
-          <div className="divide-y rounded-lg border">
-            {artifacts.length ? (
-              artifacts.map((path) => (
-                <WorkspaceRow
-                  key={path}
-                  title={path.split("/").at(-1) ?? path}
-                  description="本会话文件"
-                  onClick={() => openFile(path)}
-                />
-              ))
-            ) : (
-              <p className="text-muted-foreground p-4 text-sm">
-                本次对话尚未生成成果。
-              </p>
-            )}
-          </div>
-        </section>
-        <section className="mb-7">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-semibold">材料来源</h3>
-            <EvidenceUploadButton
-              tenantId={scope.tenant_id}
-              matterId={scope.matter_id}
-              locale="zh-CN"
-              onUploaded={openEvidence}
-            />
-          </div>
-          <div className="divide-y rounded-lg border">
-            {attachments.length ? (
-              attachments.map((file) => (
-                <WorkspaceRow
-                  key={file.path}
-                  title={file.filename}
-                  description="本会话上传附件 · 是否用于分析以对话为准"
-                  onClick={() => openFile(file.path)}
-                />
-              ))
-            ) : (
-              <p className="text-muted-foreground p-4 text-sm">
-                本次对话尚无可核实的附件记录。
-              </p>
-            )}
-          </div>
-          {tabs.some((tab) => tab.kind === "evidence") && (
-            <div className="mt-3">
-              <p className="text-muted-foreground mb-2 text-xs">
-                本次打开的案件材料
-              </p>
-              <div className="divide-y rounded-lg border">
-                {tabs
-                  .filter(
-                    (tab): tab is Extract<WorkTab, { kind: "evidence" }> =>
-                      tab.kind === "evidence",
-                  )
-                  .map((tab) => (
-                    <WorkspaceRow
-                      key={tab.id}
-                      title={tab.title}
-                      description="本次打开"
-                      onClick={() => setActive(tab.id)}
-                    />
-                  ))}
-              </div>
-            </div>
-          )}
-          <Button
-            variant="link"
-            className="mt-2 px-0"
-            onClick={() => setActive("materials")}
-          >
-            查看案件全部材料
-            <ChevronRightIcon />
-          </Button>
-        </section>
-        <MatterMemoryPanel
-          tenantId={scope.tenant_id}
-          matterId={scope.matter_id}
-        />
-        <MatterDeadlinePanel
-          tenantId={scope.tenant_id}
-          matterId={scope.matter_id}
-          matterRole={scope.matter_role}
-          currentMembershipId={scope.membership_id}
-        />
-        <MatterSpeechPanel
-          tenantId={scope.tenant_id}
-          matterId={scope.matter_id}
-          matterRole={scope.matter_role}
-          userId={scope.user_id}
-          membershipId={scope.membership_id}
-        />
-        <MatterAuthoritiesPanel
-          tenantId={scope.tenant_id}
-          matterId={scope.matter_id}
-        />
-        <section>
-          <h3 className="mb-3 text-sm font-semibold">工作入口</h3>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 @[420px]:grid-cols-2">
-            <Button
-              variant="outline"
-              className="h-14 justify-start"
-              onClick={() => setActive("materials")}
-            >
-              <FileTextIcon />
-              查看原件
-            </Button>
-            <Button
-              variant="outline"
-              className="h-14 justify-start"
-              onClick={() => setActive("materials")}
-            >
-              <ScanTextIcon />
-              文档校对
-            </Button>
-            <div className="rounded-md border p-2">
-              <LegalTemplatePicker threadId={threadId} />
-            </div>
-            <div className="rounded-md border p-2">
-              <LegalGraphStarter threadId={threadId} />
-            </div>
-          </div>
-        </section>
-        <p className="text-muted-foreground mt-7 border-t pt-4 text-center text-xs">
-          选择文件，在这里查看或编辑
-        </p>
-      </div>
-      <div
-        hidden={active !== "materials"}
-        className="min-h-0 flex-1 overflow-y-auto p-4"
-      >
-        <div className="mb-3 flex items-center justify-between">
-          <Button variant="ghost" onClick={() => setActive("overview")}>
-            <ArrowLeftIcon />
-            返回概览
-          </Button>
-          <h2 className="text-sm font-semibold">案件全部材料</h2>
-          <EvidenceUploadButton
-            tenantId={scope.tenant_id}
-            matterId={scope.matter_id}
-            locale="zh-CN"
-            onUploaded={openEvidence}
-          />
-        </div>
-        {evidence.isPending ? (
-          <p role="status">正在加载材料…</p>
-        ) : evidence.isError ? (
-          <div>
-            <p role="alert">无法读取案件材料。</p>
-            <Button onClick={() => void evidence.refetch()}>重试</Button>
-          </div>
-        ) : !evidence.data?.length ? (
-          <p className="text-muted-foreground text-sm">还没有项目材料。</p>
-        ) : (
-          <div className="divide-y rounded-lg border">
-            {evidence.data.map((item) => (
-              <WorkspaceRow
-                key={item.id}
-                title={item.title}
-                description={item.status === "archived" ? "已归档" : "案件材料"}
-                onClick={() => openEvidence(item)}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-      {active === "saved" && (
-        <div className="min-h-0 flex-1">
-          <Button
-            variant="ghost"
-            className="m-2"
-            onClick={() => setActive("overview")}
-          >
-            <ArrowLeftIcon />
-            返回概览
-          </Button>
-          <ProjectArtifactBrowser
-            threadId={threadId}
-            onOpenProjectArtifact={(item) =>
-              openTab({
-                id: `saved:${item.id}`,
-                kind: "saved",
-                title: item.title,
-                item,
-              })
+  const onActivity = useCallback(
+    (activity: SpeechWorkspaceActivity | null) => {
+      setSpeechActivity(activity);
+      onSpeechActivityChange?.(
+        activity
+          ? {
+              ...activity,
+              returnToCapture: () => dispatch({ type: "open", id: "speech" }),
             }
-            onOpenThreadArtifact={openFile}
-          />
+          : null,
+      );
+    },
+    [onSpeechActivityChange],
+  );
+  const dirtyFunctions: WorkspaceFunction[] = Array.from(
+    new Set(
+      tabs
+        .filter(
+          (tab) =>
+            tab.kind === "file" &&
+            drafts[tab.path] &&
+            drafts[tab.path]!.draftContent !==
+              drafts[tab.path]!.baselineContent,
+        )
+        .map(category),
+    ),
+  );
+  if (speechDirty) dirtyFunctions.push("speech");
+  const returnToIndex = (id: WorkspaceFunction) =>
+    setSelected((current) => ({ ...current, [id]: undefined }));
+  const graphFiles = artifacts.filter(isLegalGraphFile);
+  const draftFiles = artifacts.filter((path) => !isLegalGraphFile(path));
+
+  return (
+    <section className="law-workspace-shell" aria-label="法律文档工作区">
+      <LegalWorkspaceTabs
+        idPrefix={workspaceId}
+        state={functions}
+        onOpen={openFunction}
+        onClose={(id) => dispatch({ type: "close", id })}
+        onHide={() => {
+          onExpandedChange?.(false);
+          setOpen(false);
+        }}
+        expanded={expanded}
+        onExpandedChange={onExpandedChange}
+        recording={speechActivity?.recording}
+        dirtyFunctions={dirtyFunctions}
+      />
+      {functions.active === null && (
+        <div className="law-workspace-empty">
+          <FolderIcon />
+          <h2>打开一个工作区功能</h2>
+          <p>从上方“＋”选择功能，之前的工作仍会保留。</p>
+          <Button variant="outline" onClick={() => openFunction("documents")}>
+            文档校对
+          </Button>
         </div>
       )}
-      {tabs.map((tab) => (
-        <div
-          key={tab.id}
-          id={`work-panel-${tab.id}`}
-          role="tabpanel"
-          aria-labelledby={`work-tab-${tab.id}`}
-          hidden={active !== tab.id}
-          className="min-h-0 flex-1 overflow-hidden"
-        >
-          {tab.kind === "file" ? (
-            <WorkspaceFileDetail
-              className="size-full"
-              filepath={tab.path}
-              threadId={threadId}
-            />
-          ) : tab.kind === "evidence" ? (
-            <EvidenceWorkbench
-              tenantId={scope.tenant_id}
-              matterId={scope.matter_id}
-              locale="zh-CN"
-              mode="document"
-              initialEvidenceId={tab.item.id}
-            />
-          ) : (
-            <ProjectArtifactDetail
-              artifact={tab.item}
-              threadId={threadId}
-              canReview={["owner", "lead", "lawyer"].includes(
-                scope.matter_role,
+      {functions.visited.map((functionId) => {
+        const functionTabs = tabs.filter((tab) => category(tab) === functionId);
+        const current = functionTabs.find(
+          (tab) => tab.id === selected[functionId],
+        );
+        const info = WORKSPACE_FUNCTIONS.find(
+          (item) => item.id === functionId,
+        )!;
+        return (
+          <div
+            key={functionId}
+            id={`${workspaceId}-panel-${functionId}`}
+            role="tabpanel"
+            aria-labelledby={
+              functions.opened.includes(functionId)
+                ? `${workspaceId}-tab-${functionId}`
+                : undefined
+            }
+            aria-label={info.title}
+            hidden={functions.active !== functionId}
+            className="law-function-panel"
+          >
+            {["documents", "graph", "drafting"].includes(functionId) && (
+              <div className="law-workspace-toolbar">
+                <label className="law-resource-picker">
+                  <FileTextIcon />
+                  <span className="sr-only">{info.title}当前文件</span>
+                  <select
+                    value={current?.id ?? ""}
+                    onChange={(event) =>
+                      setSelected((value) => ({
+                        ...value,
+                        [functionId]: event.target.value || undefined,
+                      }))
+                    }
+                  >
+                    <option value="">
+                      {functionId === "documents"
+                        ? "案件材料"
+                        : functionId === "graph"
+                          ? "图谱与来源"
+                          : "文书与成果"}
+                    </option>
+                    {functionTabs.map((tab) => (
+                      <option key={tab.id} value={tab.id}>
+                        {tab.title}
+                        {tab.kind === "file" &&
+                        drafts[tab.path]?.draftContent !== undefined &&
+                        drafts[tab.path]?.draftContent !==
+                          drafts[tab.path]?.baselineContent
+                          ? " · 未保存"
+                          : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {current ? (
+                  <>
+                    <span className="law-workspace-meta">
+                      {current.kind === "evidence"
+                        ? "案件原件"
+                        : current.kind === "saved"
+                          ? "固定成果版本"
+                          : "会话文件"}
+                    </span>
+                    <button
+                      className="law-workspace-icon ml-auto"
+                      aria-label={`关闭 ${current.title}`}
+                      onClick={() => closeResource(current)}
+                    >
+                      <XIcon />
+                    </button>
+                  </>
+                ) : (
+                  <span className="law-workspace-meta ml-auto">
+                    {matter.data?.title ?? "正在读取案件…"}
+                  </span>
+                )}
+              </div>
+            )}
+            <div className="law-function-body">
+              {functionId === "documents" && (
+                <div hidden={Boolean(current)} className="law-workspace-index">
+                  <div className="law-section-heading">
+                    <div>
+                      <h2>案件材料</h2>
+                      <p>选择原件，对照识别结果进行校对。</p>
+                    </div>
+                    <EvidenceUploadButton
+                      tenantId={scope.tenant_id}
+                      matterId={scope.matter_id}
+                      locale="zh-CN"
+                      onUploaded={openEvidence}
+                    />
+                  </div>
+                  {evidence.isPending ? (
+                    <p role="status">正在加载材料…</p>
+                  ) : evidence.isError ? (
+                    <div>
+                      <p role="alert">无法读取案件材料。</p>
+                      <Button onClick={() => void evidence.refetch()}>
+                        重试
+                      </Button>
+                    </div>
+                  ) : !evidence.data?.length ? (
+                    <div className="law-workspace-empty">
+                      <FileTextIcon />
+                      <p>还没有案件材料</p>
+                      <span>上传文件后，扫描结果与可用版本会显示在这里。</span>
+                    </div>
+                  ) : (
+                    <div className="law-resource-list">
+                      {evidence.data.map((item) => (
+                        <WorkspaceRow
+                          key={item.id}
+                          title={item.title}
+                          description={
+                            item.status === "archived" ? "已归档" : "案件材料"
+                          }
+                          onClick={() => openEvidence(item)}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {attachments.length > 0 && (
+                    <>
+                      <h3 className="law-index-heading">当前对话附件</h3>
+                      {attachments.map((file) => (
+                        <WorkspaceRow
+                          key={file.path}
+                          title={file.filename}
+                          description="本会话上传附件 · 是否用于分析以对话为准"
+                          onClick={() => openFile(file.path)}
+                        />
+                      ))}
+                    </>
+                  )}
+                </div>
               )}
-              onBack={() => setActive("saved")}
-              onOpenThreadArtifact={openFile}
-            />
-          )}
-        </div>
-      ))}
+              {functionId === "speech" && (
+                <MatterSpeechPanel
+                  workspace
+                  tenantId={scope.tenant_id}
+                  matterId={scope.matter_id}
+                  matterRole={scope.matter_role}
+                  userId={scope.user_id}
+                  membershipId={scope.membership_id}
+                  onActivityChange={onActivity}
+                  onDirtyChange={setSpeechDirty}
+                />
+              )}
+              {functionId === "graph" && (
+                <div hidden={Boolean(current)} className="law-workspace-index">
+                  <div className="law-section-heading">
+                    <div>
+                      <h2>案情图谱</h2>
+                      <p>打开已有图谱，核对关系、时间线与固定来源。</p>
+                    </div>
+                    <div className="flex gap-1">
+                      <LegalGraphStarter threadId={threadId} />
+                      <LegalGraphImportHandoff threadId={threadId} />
+                    </div>
+                  </div>
+                  {graphFiles.map((path) => (
+                    <WorkspaceRow
+                      key={path}
+                      title={path.split("/").at(-1) ?? path}
+                      description="本会话图谱"
+                      onClick={() => openFile(path)}
+                    />
+                  ))}
+                  <ProjectArtifactBrowser
+                    threadId={threadId}
+                    kindFilter="knowledge_graph"
+                    onOpenProjectArtifact={openSaved}
+                    onOpenThreadArtifact={openFile}
+                  />
+                </div>
+              )}
+              {functionId === "drafting" && (
+                <div hidden={Boolean(current)} className="law-workspace-index">
+                  <div className="law-section-heading">
+                    <div>
+                      <h2>文书与成果</h2>
+                      <p>编辑会话文件，或打开已保存的成果版本进行审核。</p>
+                    </div>
+                    <LegalTemplatePicker threadId={threadId} />
+                  </div>
+                  <h3 className="law-index-heading">本会话文件</h3>
+                  {draftFiles.length ? (
+                    draftFiles.map((path) => (
+                      <WorkspaceRow
+                        key={path}
+                        title={path.split("/").at(-1) ?? path}
+                        description="本会话文件"
+                        onClick={() => openFile(path)}
+                      />
+                    ))
+                  ) : (
+                    <p className="law-workspace-meta">本次对话尚未生成文书。</p>
+                  )}
+                  <ProjectArtifactBrowser
+                    threadId={threadId}
+                    excludeGraphs
+                    onOpenProjectArtifact={openSaved}
+                    onOpenThreadArtifact={openFile}
+                  />
+                </div>
+              )}
+              {functionId === "overview" && (
+                <div className="law-workspace-index">
+                  <div className="law-section-heading">
+                    <div>
+                      <h2>
+                        {matter.data?.title ??
+                          (matter.isError
+                            ? "项目资料暂不可用"
+                            : "正在加载项目…")}
+                      </h2>
+                      <p>当前案件的工作入口</p>
+                    </div>
+                  </div>
+                  {WORKSPACE_FUNCTIONS.filter(
+                    (item) => item.id !== "overview",
+                  ).map((item) => (
+                    <WorkspaceRow
+                      key={item.id}
+                      title={item.title}
+                      description={item.description}
+                      onClick={() => openFunction(item.id)}
+                    />
+                  ))}
+                </div>
+              )}
+              {functionId === "memory" && (
+                <div className="law-workspace-index">
+                  <MatterMemoryPanel
+                    tenantId={scope.tenant_id}
+                    matterId={scope.matter_id}
+                  />
+                </div>
+              )}
+              {functionId === "deadlines" && (
+                <div className="law-workspace-index">
+                  <MatterDeadlinePanel
+                    tenantId={scope.tenant_id}
+                    matterId={scope.matter_id}
+                    matterRole={scope.matter_role}
+                    currentMembershipId={scope.membership_id}
+                  />
+                </div>
+              )}
+              {functionId === "authorities" && (
+                <div className="law-workspace-index">
+                  <MatterAuthoritiesPanel
+                    tenantId={scope.tenant_id}
+                    matterId={scope.matter_id}
+                  />
+                </div>
+              )}
+              {functionTabs.map((tab) => (
+                <div
+                  key={tab.id}
+                  hidden={current?.id !== tab.id}
+                  className="law-resource-panel"
+                  aria-label={tab.title}
+                >
+                  {tab.kind === "file" ? (
+                    <WorkspaceFileDetail
+                      className="size-full"
+                      filepath={tab.path}
+                      threadId={threadId}
+                    />
+                  ) : tab.kind === "evidence" ? (
+                    <EvidenceWorkbench
+                      tenantId={scope.tenant_id}
+                      matterId={scope.matter_id}
+                      locale="zh-CN"
+                      mode="document"
+                      initialEvidenceId={tab.item.id}
+                    />
+                  ) : (
+                    <ProjectArtifactDetail
+                      artifact={tab.item}
+                      threadId={threadId}
+                      canReview={["owner", "lead", "lawyer"].includes(
+                        scope.matter_role,
+                      )}
+                      onBack={() => returnToIndex(functionId)}
+                      onOpenThreadArtifact={openFile}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+      <footer className="law-workspace-status" aria-live="polite">
+        {speechActivity ? (
+          <>
+            <button onClick={() => openFunction("speech")} className="truncate">
+              {speechActivity.label} · {speechActivity.seconds} 秒
+            </button>
+            {speechActivity.recording && (
+              <button className="ml-2" onClick={speechActivity.stop}>
+                停止并保存
+              </button>
+            )}
+          </>
+        ) : (
+          <span>选择功能开始工作</span>
+        )}
+        <span className="ml-auto truncate">
+          {matter.data?.title ?? "案件工作区"}
+        </span>
+      </footer>
       <Dialog
         open={Boolean(closeTarget)}
         onOpenChange={(open) => {
@@ -758,14 +835,15 @@ function LegalDocumentWorkspace({
           <DialogHeader>
             <DialogTitle>关闭文件</DialogTitle>
             <DialogDescription>
-              请先确认修改已保存。关闭材料会结束校对视图；保存失败的修改请先保留。
+              请先确认修改已保存。关闭材料会结束校对视图；保存失败的修改请先保留。关闭功能页签可保留当前视图。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button
               variant="outline"
               onClick={() => {
-                if (closeTarget) setActive(closeTarget);
+                const tab = tabs.find((item) => item.id === closeTarget);
+                if (tab) openFunction(category(tab));
                 setCloseTarget(null);
               }}
             >
@@ -816,10 +894,14 @@ function ProjectArtifactBrowser({
   threadId,
   onOpenThreadArtifact,
   onOpenProjectArtifact,
+  kindFilter,
+  excludeGraphs = false,
 }: {
   threadId: string;
   onOpenProjectArtifact?: (artifact: ProjectArtifact) => void;
   onOpenThreadArtifact: (path: string) => void;
+  kindFilter?: string;
+  excludeGraphs?: boolean;
 }) {
   const context = useLawThreadContext(threadId);
   const scope = context.data;
@@ -850,7 +932,12 @@ function ProjectArtifactBrowser({
         </Button>
       </div>
     );
-  const selected = items.data?.find((item) => item.id === selectedId);
+  const visibleItems = items.data?.filter(
+    (item) =>
+      (!kindFilter || item.kind === kindFilter) &&
+      (!excludeGraphs || item.kind !== "knowledge_graph"),
+  );
+  const selected = visibleItems?.find((item) => item.id === selectedId);
   if (selected)
     return (
       <ProjectArtifactDetail
@@ -867,15 +954,17 @@ function ProjectArtifactBrowser({
   return (
     <section className="flex size-full flex-col">
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b p-3">
-        <h2 className="font-medium">项目成果</h2>
+        <h2 className="font-medium">
+          {kindFilter === "knowledge_graph" ? "已保存图谱" : "项目成果"}
+        </h2>
         <div className="flex flex-wrap gap-1">
-          {scope && (
+          {scope && !kindFilter && (
             <LegalAuthoritiesImportHandoff
               key={`authorities:${threadId}`}
               threadId={threadId}
             />
           )}
-          {scope && (
+          {scope && !kindFilter && !excludeGraphs && (
             <LegalGraphImportHandoff key={threadId} threadId={threadId} />
           )}
           <Button
@@ -900,13 +989,15 @@ function ProjectArtifactBrowser({
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         {items.isPending ? (
           <p role="status">正在加载项目成果…</p>
-        ) : !items.data?.length ? (
+        ) : !visibleItems?.length ? (
           <p className="text-muted-foreground text-sm">
-            还没有已保存成果。在本会话文件中打开文书或笔记，点击“保存到项目”。
+            {kindFilter === "knowledge_graph"
+              ? "还没有已保存图谱。可从本会话图谱中打开，或使用上方入口准备图谱任务。"
+              : "还没有已保存成果。在本会话文件中打开文书或笔记，点击“保存到项目”。"}
           </p>
         ) : (
           <ul className="space-y-2">
-            {items.data.map((item) => (
+            {visibleItems.map((item) => (
               <li key={item.id}>
                 <button
                   className="hover:bg-muted focus-visible:ring-ring w-full cursor-pointer rounded-md border p-3 text-left focus-visible:ring-2"

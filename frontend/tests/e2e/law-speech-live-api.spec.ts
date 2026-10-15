@@ -19,23 +19,37 @@ function reportCaptureOutcome(
   details: Record<string, unknown> = {},
 ): void {
   const path = process.env.W11_LIVE_API_OUTCOME_FILE;
-  if (path) appendFileSync(path, `${JSON.stringify({ browserName, outcome, ...details })}\n`, "utf8");
+  if (path)
+    appendFileSync(
+      path,
+      `${JSON.stringify({ browserName, outcome, ...details })}\n`,
+      "utf8",
+    );
 }
 
-function readSpeechOutboxCounts(page: Page): Promise<{ sessions: number; chunks: number }> {
+function readSpeechOutboxCounts(
+  page: Page,
+): Promise<{ sessions: number; chunks: number }> {
   return page.evaluate(
     () =>
       new Promise<{ sessions: number; chunks: number }>((resolve, reject) => {
         const request = indexedDB.open("matrix-law-speech-capture-outbox-v1");
-        request.onerror = () => reject(request.error ?? new Error("cannot inspect speech outbox"));
+        request.onerror = () =>
+          reject(request.error ?? new Error("cannot inspect speech outbox"));
         request.onsuccess = () => {
           const database = request.result;
-          if (!database.objectStoreNames.contains("sessions") || !database.objectStoreNames.contains("chunks")) {
+          if (
+            !database.objectStoreNames.contains("sessions") ||
+            !database.objectStoreNames.contains("chunks")
+          ) {
             database.close();
             resolve({ sessions: 0, chunks: 0 });
             return;
           }
-          const transaction = database.transaction(["sessions", "chunks"], "readonly");
+          const transaction = database.transaction(
+            ["sessions", "chunks"],
+            "readonly",
+          );
           const sessions = transaction.objectStore("sessions").getAll();
           const chunks = transaction.objectStore("chunks").getAll();
           let sessionCount = 0;
@@ -46,7 +60,8 @@ function readSpeechOutboxCounts(page: Page): Promise<{ sessions: number; chunks:
           chunks.onsuccess = () => {
             chunkCount = chunks.result.length;
           };
-          transaction.onerror = () => reject(transaction.error ?? new Error("cannot read speech outbox"));
+          transaction.onerror = () =>
+            reject(transaction.error ?? new Error("cannot read speech outbox"));
           transaction.oncomplete = () => {
             database.close();
             resolve({ sessions: sessionCount, chunks: chunkCount });
@@ -56,8 +71,14 @@ function readSpeechOutboxCounts(page: Page): Promise<{ sessions: number; chunks:
   );
 }
 
-test("live HTTP capture succeeds or browser startup fails closed", async ({ page, browserName }) => {
-  test.skip(!apiBase || !tenantId || !matterId || !apiUserId, "requires the isolated W11 live API pytest harness");
+test("live HTTP capture succeeds or browser startup fails closed", async ({
+  page,
+  browserName,
+}) => {
+  test.skip(
+    !apiBase || !tenantId || !matterId || !apiUserId,
+    "requires the isolated W11 live API pytest harness",
+  );
   test.setTimeout(150_000);
   const matterBase = `/api/law/tenants/${tenantId}/matters/${matterId}`;
   const speechPath = `${matterBase}/speech-transcriptions`;
@@ -69,7 +90,11 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
   let caseWorkbenchEventsStarted = false;
   let firstChunkUploadPaused = false;
   let offlineChunkRetryAttempts = 0;
-  let offlineBufferEvidence: { durationMs: number; bufferedChunks: number; retryAttempts: number } | null = null;
+  let offlineBufferEvidence: {
+    durationMs: number;
+    bufferedChunks: number;
+    retryAttempts: number;
+  } | null = null;
   let firstChunkAcceptedByApi = false;
   let failFirstChunkUploadOffline = false;
   let releaseFirstChunkUpload!: () => void;
@@ -104,13 +129,15 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
       configurable: true,
       get: () => online,
     });
-    (window as typeof window & { __w11SetOnline?: (value: boolean) => void }).__w11SetOnline = (
-      value: boolean,
-    ) => {
+    (
+      window as typeof window & { __w11SetOnline?: (value: boolean) => void }
+    ).__w11SetOnline = (value: boolean) => {
       online = value;
       window.dispatchEvent(new Event(value ? "online" : "offline"));
     };
-    const target = window as typeof window & { __w11GetUserMediaCalls?: number };
+    const target = window as typeof window & {
+      __w11GetUserMediaCalls?: number;
+    };
     target.__w11GetUserMediaCalls = 0;
     const devices = navigator.mediaDevices;
     const original = devices.getUserMedia.bind(devices);
@@ -121,7 +148,8 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
           __w11AudioTracks?: MediaStreamTrack[][];
           __w11GetUserMediaCalls?: number;
         };
-        target.__w11GetUserMediaCalls = (target.__w11GetUserMediaCalls ?? 0) + 1;
+        target.__w11GetUserMediaCalls =
+          (target.__w11GetUserMediaCalls ?? 0) + 1;
         const stream = await original(constraints);
         target.__w11AudioTracks ??= [];
         target.__w11AudioTracks.push(stream.getTracks());
@@ -134,7 +162,10 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
       caseWorkbenchEventsStarted = true;
   });
   await page.context().route("**/api/**", (route) =>
-    route.fulfill({ status: 404, json: { detail: "Unmocked live API browser endpoint" } }),
+    route.fulfill({
+      status: 404,
+      json: { detail: "Unmocked live API browser endpoint" },
+    }),
   );
   mockLangGraphAPI(page, {
     threads: [
@@ -142,7 +173,13 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
         thread_id: threadId,
         title: "Synthetic live API capture",
         artifacts: [],
-        messages: [{ type: "ai", id: "w11-live-api-thread", content: "Synthetic browser/API acceptance only." }],
+        messages: [
+          {
+            type: "ai",
+            id: "w11-live-api-thread",
+            content: "Synthetic browser/API acceptance only.",
+          },
+        ],
       },
     ],
   });
@@ -167,7 +204,10 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
       });
     }
     if (url.pathname.endsWith(`/matters/${matterId}`)) {
-      return route.fulfill({ status: 200, json: { data: { matter: { title: "Synthetic browser/API matter" } } } });
+      return route.fulfill({
+        status: 200,
+        json: { data: { matter: { title: "Synthetic browser/API matter" } } },
+      });
     }
     return route.fulfill({ status: 200, json: { data: { items: [] } } });
   });
@@ -199,28 +239,38 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
     delete headers.host;
     delete headers.cookie;
     delete headers.authorization;
-    const chunkMatch = new RegExp(`^${speechPath}/live-captures/[0-9a-f-]{36}/chunks/(\\d+)$`).exec(
-      url.pathname,
-    );
+    const chunkMatch = new RegExp(
+      `^${speechPath}/live-captures/[0-9a-f-]{36}/chunks/(\\d+)$`,
+    ).exec(url.pathname);
     if (request.method() === "PUT" && chunkMatch?.[1] === "0") {
       if (!firstChunkUploadPaused) {
         firstChunkUploadPaused = true;
         await firstChunkUploadGate;
-        if (failFirstChunkUploadOffline) return route.abort("internetdisconnected");
+        if (failFirstChunkUploadOffline)
+          return route.abort("internetdisconnected");
       } else if (failFirstChunkUploadOffline) {
         offlineChunkRetryAttempts += 1;
         return route.abort("internetdisconnected");
       }
     }
-    if (request.method() === "PUT" && chunkMatch?.[1] === "5" && !secondWindowChunkReleased) {
+    if (
+      request.method() === "PUT" &&
+      chunkMatch?.[1] === "5" &&
+      !secondWindowChunkReleased
+    ) {
       secondWindowChunkHeld = true;
       await secondWindowChunkGate;
       secondWindowChunkReleased = true;
     }
     const finishPath = `${speechPath}/live-captures/`;
-    if (request.method() === "POST" && url.pathname.includes(finishPath) && url.pathname.endsWith("/finish")) {
+    if (
+      request.method() === "POST" &&
+      url.pathname.includes(finishPath) &&
+      url.pathname.endsWith("/finish")
+    ) {
       firstCaptureFinishSeen = true;
-      if (heldChunkAckReachedApi && !heldChunkAckReleased) firstCaptureFinishSeenWhileAckHeld = true;
+      if (heldChunkAckReachedApi && !heldChunkAckReleased)
+        firstCaptureFinishSeenWhileAckHeld = true;
     }
     if (url.pathname.endsWith("/case-workbench/events")) {
       forwarded.push(`${request.method()} ${url.pathname}`);
@@ -235,21 +285,36 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
       headers,
       ...(request.postDataBuffer() ? { data: request.postDataBuffer()! } : {}),
     });
-    if (request.method() === "PUT" && chunkMatch?.[1] === "0" && response.status() < 300)
+    if (
+      request.method() === "PUT" &&
+      chunkMatch?.[1] === "0" &&
+      response.status() < 300
+    )
       firstChunkAcceptedByApi = true;
-    if (request.method() === "GET" && url.pathname.endsWith("/preview") && response.status() === 200) {
+    if (
+      request.method() === "GET" &&
+      url.pathname.endsWith("/preview") &&
+      response.status() === 200
+    ) {
       const body = (await response.json()) as {
         data?: {
           revision?: number;
           items?: Array<{
-            transcript?: { modelId?: string; provisional?: boolean; reviewStatus?: string; text?: string };
+            transcript?: {
+              modelId?: string;
+              provisional?: boolean;
+              reviewStatus?: string;
+              text?: string;
+            };
           }>;
         };
       };
       const items = body.data?.items ?? [];
       if (realAsr && items.length > 0) {
         for (const item of items) {
-          expect(item.transcript?.modelId).toBe("sherpa-onnx-paraformer-zh-2023-09-14");
+          expect(item.transcript?.modelId).toBe(
+            "sherpa-onnx-paraformer-zh-2023-09-14",
+          );
           expect(item.transcript?.provisional).toBe(true);
           expect(item.transcript?.reviewStatus).toBe("unreviewed");
           expect(item.transcript?.text?.trim().length ?? 0).toBeGreaterThan(0);
@@ -261,17 +326,26 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
         heldOldPreviewReachedApi = true;
         await heldOldPreviewGate;
         heldOldPreviewReleased = true;
-      } else if (heldOldPreviewReachedApi && revision > heldOldPreviewRevision) {
+      } else if (
+        heldOldPreviewReachedApi &&
+        revision > heldOldPreviewRevision
+      ) {
         newerPreviewRevisionSeen = true;
       }
     }
-    if (request.method() === "PUT" && chunkMatch?.[1] === "10" && !heldChunkAckReachedApi) {
+    if (
+      request.method() === "PUT" &&
+      chunkMatch?.[1] === "10" &&
+      !heldChunkAckReachedApi
+    ) {
       expect(response.status()).toBe(201);
       heldChunkAckReachedApi = true;
       await heldChunkAckGate;
       heldChunkAckReleased = true;
     }
-    const taskMatch = new RegExp(`^${speechPath}/([0-9a-f-]{36})$`).exec(url.pathname);
+    const taskMatch = new RegExp(`^${speechPath}/([0-9a-f-]{36})$`).exec(
+      url.pathname,
+    );
     if (request.method() === "GET" && taskMatch) {
       liveTaskId = taskMatch[1] ?? null;
       liveTaskDetailReads += 1;
@@ -287,10 +361,17 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
   });
 
   await page.goto(`/workspace/chats/${threadId}`);
-  await expect(page.getByRole("heading", { name: "庭审录音与语音转写" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /开始麦克风录音/ })).toBeVisible();
+  await page.getByRole("tab", { name: "录音 / 实时转写", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "庭审录音与语音转写" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /开始麦克风录音/ }),
+  ).toBeVisible();
   await page.getByLabel("录音名称").fill("隔离 HTTP 真实路由合成录音");
-  const captureProgress = page.getByText(/正在采集；本机保存、服务器确认和识别进度分开显示/);
+  const captureProgress = page.getByText(
+    /正在采集；本机保存、服务器确认和识别进度分开显示/,
+  );
   const audioStartupFailure = page.getByText(
     /浏览器未能及时启动音频上下文|当前浏览器或麦克风不支持所需的音频录音设置/,
   );
@@ -299,22 +380,31 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
     .poll(
       async () => {
         if (await captureProgress.isVisible()) return "recording";
-        if (await audioStartupFailure.isVisible()) return "audio_context_unavailable";
+        if (await audioStartupFailure.isVisible())
+          return "audio_context_unavailable";
         return "starting";
       },
       { timeout: 15_000 },
     )
     .not.toBe("starting");
   if (browserName !== "chromium" && (await audioStartupFailure.isVisible())) {
-    await expect(page.getByRole("button", { name: "上传并扫描" })).toBeEnabled();
+    await page.getByRole("button", { name: "文件转写", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "上传并扫描" }),
+    ).toBeEnabled();
     expect(
       await page.evaluate(
         () =>
-          (window as typeof window & { __w11AudioTracks?: MediaStreamTrack[][] })
-            .__w11AudioTracks?.flat().length ?? 0,
+          (
+            window as typeof window & {
+              __w11AudioTracks?: MediaStreamTrack[][];
+            }
+          ).__w11AudioTracks?.flat().length ?? 0,
       ),
     ).toBe(0);
-    expect(forwarded.some((item) => item === `POST ${speechPath}/live-captures`)).toBe(false);
+    expect(
+      forwarded.some((item) => item === `POST ${speechPath}/live-captures`),
+    ).toBe(false);
     expect(
       forwarded.some(
         (item) =>
@@ -322,23 +412,63 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
           (item.includes("/chunks/") || item.endsWith("/finish")),
       ),
     ).toBe(false);
-    expect(await readSpeechOutboxCounts(page)).toEqual({ sessions: 0, chunks: 0 });
+    expect(await readSpeechOutboxCounts(page)).toEqual({
+      sessions: 0,
+      chunks: 0,
+    });
     await page.close();
     reportCaptureOutcome(browserName, "unsupported");
     return;
   }
   await expect(captureProgress).toBeVisible();
-  await expect.poll(() => firstChunkUploadPaused, { timeout: 20_000 }).toBe(true);
+  await page.getByRole("tab", { name: "案情图谱", exact: true }).click();
+  await page
+    .getByRole("button", { name: "关闭录音 / 实时转写页签", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "停止并保存", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "关闭工作区", exact: true }).click();
+  const captureReturn = page.getByRole("button", { name: /^返回录音 ·/ });
+  await expect(captureReturn).toBeVisible();
+  expect(
+    await page.evaluate(
+      () =>
+        (window as typeof window & { __w11GetUserMediaCalls?: number })
+          .__w11GetUserMediaCalls,
+    ),
+  ).toBe(1);
+  expect(
+    await page.evaluate(() =>
+      (
+        window as typeof window & { __w11AudioTracks?: MediaStreamTrack[][] }
+      ).__w11AudioTracks?.[0]?.every((track) => track.readyState === "live"),
+    ),
+  ).toBe(true);
+  await captureReturn.click();
+  await expect(
+    page.getByRole("tab", { name: /录音 \/ 实时转写.*正在录音/ }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(captureProgress).toBeVisible();
+  await expect
+    .poll(() => firstChunkUploadPaused, { timeout: 20_000 })
+    .toBe(true);
   try {
     failFirstChunkUploadOffline = true;
     await page.evaluate(() =>
-      (window as typeof window & { __w11SetOnline?: (value: boolean) => void }).__w11SetOnline?.(false),
+      (
+        window as typeof window & { __w11SetOnline?: (value: boolean) => void }
+      ).__w11SetOnline?.(false),
     );
     releaseFirstChunkUpload();
-    await expect(page.getByText("网络不可用；采集内容保留在加密本机暂存中")).toBeVisible({
+    await expect(
+      page.getByText("网络不可用；采集内容保留在加密本机暂存中"),
+    ).toBeVisible({
       timeout: 10_000,
     });
-    await expect.poll(async () => (await readSpeechOutboxCounts(page)).chunks).toBeGreaterThan(0);
+    await expect
+      .poll(async () => (await readSpeechOutboxCounts(page)).chunks)
+      .toBeGreaterThan(0);
     expect(firstChunkAcceptedByApi).toBe(false);
     expect(firstCaptureFinishSeen).toBe(false);
     const disconnectedAt = Date.now();
@@ -362,19 +492,33 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
   failFirstChunkUploadOffline = false;
   await page.context().setOffline(false);
   await page.evaluate(() =>
-    (window as typeof window & { __w11SetOnline?: (value: boolean) => void }).__w11SetOnline?.(true),
+    (
+      window as typeof window & { __w11SetOnline?: (value: boolean) => void }
+    ).__w11SetOnline?.(true),
   );
-  await expect.poll(() => firstChunkAcceptedByApi, { timeout: 20_000 }).toBe(true);
-  const previewWindows = page.getByLabel("录音临时识别预览").locator(":scope > div");
+  await expect
+    .poll(() => firstChunkAcceptedByApi, { timeout: 20_000 })
+    .toBe(true);
+  const previewWindows = page
+    .getByLabel("录音临时识别预览")
+    .locator(":scope > div");
   if (realAsr) {
-    await expect.poll(() => previewWindows.count(), { timeout: 45_000 }).toBeGreaterThan(0);
+    await expect
+      .poll(() => previewWindows.count(), { timeout: 45_000 })
+      .toBeGreaterThan(0);
   } else {
-    await expect(page.getByText("隔离 HTTP 实时预览")).toBeVisible({ timeout: 45_000 });
+    await expect(page.getByText("隔离 HTTP 实时预览")).toBeVisible({
+      timeout: 45_000,
+    });
   }
-  await expect.poll(() => heldOldPreviewReachedApi, { timeout: 20_000 }).toBe(true);
+  await expect
+    .poll(() => heldOldPreviewReachedApi, { timeout: 20_000 })
+    .toBe(true);
   try {
     await expect.poll(() => heldOldPreviewRevision, { timeout: 5_000 }).toBe(1);
-    await expect.poll(() => secondWindowChunkHeld, { timeout: 10_000 }).toBe(true);
+    await expect
+      .poll(() => secondWindowChunkHeld, { timeout: 10_000 })
+      .toBe(true);
 
     // Keep one unacknowledged local chunk while a second tab opens. It must
     // respect the active tab's per-identity Web Lock and perform no write.
@@ -395,11 +539,20 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
           thread_id: threadId,
           title: "Synthetic live API capture",
           artifacts: [],
-          messages: [{ type: "ai", id: "w11-live-api-thread-second-tab", content: "Synthetic browser/API acceptance only." }],
+          messages: [
+            {
+              type: "ai",
+              id: "w11-live-api-thread-second-tab",
+              content: "Synthetic browser/API acceptance only.",
+            },
+          ],
         },
       ],
     });
     await secondPage.goto(page.url());
+    await secondPage
+      .getByRole("tab", { name: "录音 / 实时转写", exact: true })
+      .click();
     await expect(
       secondPage.getByRole("heading", { name: "庭审录音与语音转写" }),
     ).toBeVisible();
@@ -421,22 +574,39 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
 
     releaseSecondWindowChunk();
     await expect(previewWindows).toHaveCount(1, { timeout: 10_000 });
-    await expect.poll(() => newerPreviewRevisionSeen, { timeout: 30_000 }).toBe(true);
+    await expect
+      .poll(() => newerPreviewRevisionSeen, { timeout: 30_000 })
+      .toBe(true);
     await expect(previewWindows).toHaveCount(2, { timeout: 5_000 });
     releaseHeldOldPreview();
-    await expect.poll(() => heldOldPreviewReleased, { timeout: 5_000 }).toBe(true);
+    await expect
+      .poll(() => heldOldPreviewReleased, { timeout: 5_000 })
+      .toBe(true);
     await expect(previewWindows).toHaveCount(2);
-    await expect.poll(() => heldChunkAckReachedApi, { timeout: 20_000 }).toBe(true);
-    await expect(page.getByRole("button", { name: "停止并保存" })).toBeVisible();
-    await page.getByRole("button", { name: "停止并保存" }).click();
+    await expect
+      .poll(() => heldChunkAckReachedApi, { timeout: 20_000 })
+      .toBe(true);
+    await expect(
+      page
+        .getByLabel("庭审录音与语音转写", { exact: true })
+        .getByRole("button", { name: "停止并保存", exact: true }),
+    ).toBeVisible();
+    await page
+      .getByLabel("庭审录音与语音转写", { exact: true })
+      .getByRole("button", { name: "停止并保存", exact: true })
+      .click();
     await expect
       .poll(
         () =>
           page.evaluate(
             () =>
               (
-                window as typeof window & { __w11AudioTracks?: MediaStreamTrack[][] }
-              ).__w11AudioTracks?.[0]?.every((track) => track.readyState === "ended") ?? false,
+                window as typeof window & {
+                  __w11AudioTracks?: MediaStreamTrack[][];
+                }
+              ).__w11AudioTracks?.[0]?.every(
+                (track) => track.readyState === "ended",
+              ) ?? false,
           ),
         { timeout: 5_000 },
       )
@@ -449,14 +619,23 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
     releaseSecondWindowChunk();
     releaseHeldChunkAck();
   }
-  await expect.poll(() => firstCaptureFinishSeen, { timeout: 20_000 }).toBe(true);
+  await expect
+    .poll(() => firstCaptureFinishSeen, { timeout: 20_000 })
+    .toBe(true);
   expect(firstCaptureFinishSeenWhileAckHeld).toBe(false);
+  await page
+    .getByRole("button", { name: "编辑文字与时间", exact: true })
+    .click({ timeout: 60_000 });
   const reviewSegment = page.getByLabel("校对片段 1", { exact: true });
   if (realAsr) {
     await expect(reviewSegment).toBeVisible({ timeout: 60_000 });
-    await expect.poll(() => reviewSegment.inputValue(), { timeout: 10_000 }).not.toBe("");
+    await expect
+      .poll(() => reviewSegment.inputValue(), { timeout: 10_000 })
+      .not.toBe("");
   } else {
-    await expect(page.getByText("隔离 HTTP 正式机器稿")).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText("隔离 HTTP 正式机器稿")).toBeVisible({
+      timeout: 60_000,
+    });
     await expect(reviewSegment).toHaveValue(/隔离 HTTP 正式机器稿/);
   }
   await reviewSegment.fill("律师未提交的真实 API 草稿。");
@@ -475,10 +654,16 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
   await page.route("**/api/v1/auth/me", sameIdentityRoute);
   const refreshVisiblePage = async () => {
     await page.evaluate(() => {
-      Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: "hidden",
+      });
       window.dispatchEvent(new Event("visibilitychange"));
       document.dispatchEvent(new Event("visibilitychange"));
-      Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: "visible",
+      });
       window.dispatchEvent(new Event("visibilitychange"));
       document.dispatchEvent(new Event("visibilitychange"));
       Reflect.deleteProperty(document, "visibilityState");
@@ -486,42 +671,62 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
   };
   const readsBeforeSameVersionRefresh = liveTaskDetailReads;
   await refreshVisiblePage();
-  await expect.poll(() => liveTaskDetailReads, { timeout: 15_000 }).toBeGreaterThan(readsBeforeSameVersionRefresh);
+  await expect
+    .poll(() => liveTaskDetailReads, { timeout: 15_000 })
+    .toBeGreaterThan(readsBeforeSameVersionRefresh);
   await expect(reviewSegment).toHaveValue("律师未提交的真实 API 草稿。");
-  await expect(page.locator('[role="alert"]').filter({ hasText: "该转写已有新版本" })).toHaveCount(0);
+  await expect(
+    page.locator('[role="alert"]').filter({ hasText: "该转写已有新版本" }),
+  ).toHaveCount(0);
 
   const concurrentText = "另一位律师提交的新版本。";
-  const concurrentReview = await page.request.post(`${apiBase}${speechPath}/${liveTaskId}/review`, {
-    headers: { "x-test-user-id": apiUserId! },
-    data: {
-      expected_version: 1,
-      text: concurrentText,
-      segments: [
-        {
-          text: concurrentText,
-          charStart: 0,
-          charEnd: concurrentText.length,
-          startMs: 0,
-          endMs: 1_000,
-          speakerId: null,
-        },
-      ],
-      speakers: [],
-      reviewed_text: true,
-      reviewed_time_ranges: true,
+  const concurrentReview = await page.request.post(
+    `${apiBase}${speechPath}/${liveTaskId}/review`,
+    {
+      headers: { "x-test-user-id": apiUserId! },
+      data: {
+        expected_version: 1,
+        text: concurrentText,
+        segments: [
+          {
+            text: concurrentText,
+            charStart: 0,
+            charEnd: concurrentText.length,
+            startMs: 0,
+            endMs: 1_000,
+            speakerId: null,
+          },
+        ],
+        speakers: [],
+        reviewed_text: true,
+        reviewed_time_ranges: true,
+      },
     },
-  });
+  );
   expect(concurrentReview.status()).toBe(200);
   const readsBeforeConcurrentVersionRefresh = liveTaskDetailReads;
   await refreshVisiblePage();
-  await expect.poll(() => liveTaskDetailReads, { timeout: 15_000 }).toBeGreaterThan(readsBeforeConcurrentVersionRefresh);
+  await expect
+    .poll(() => liveTaskDetailReads, { timeout: 15_000 })
+    .toBeGreaterThan(readsBeforeConcurrentVersionRefresh);
   await expect(
     page.locator('[role="alert"]').filter({ hasText: "该转写已有新版本" }),
   ).toContainText("该转写已有新版本；当前未保存草稿已保留。");
   await expect(reviewSegment).toHaveValue("律师未提交的真实 API 草稿。");
   await page.unroute("**/api/v1/auth/me", sameIdentityRoute);
-  await page.getByLabel("我已逐段核对转写文字和匿名说话人标签。").check();
-  await page.getByLabel(/我已对照原音频核对并修正每段时间范围/).check();
+  // A new immutable baseline cannot be overwritten by simply checking review boxes.
+  const retainedDraft = await reviewSegment.inputValue();
+  await expect(
+    page.getByRole("button", { name: "保存为律师校对版本" }),
+  ).toBeDisabled();
+  await page
+    .getByRole("button", { name: "放弃草稿并载入版本 2", exact: true })
+    .click();
+  await expect(reviewSegment).toHaveValue(concurrentText);
+  // Simulate the lawyer explicitly comparing and reapplying their retained draft.
+  await reviewSegment.fill(retainedDraft);
+  await page.getByLabel("文字已复核", { exact: true }).check();
+  await page.getByLabel("时间范围已复核", { exact: true }).check();
   await page.getByRole("button", { name: "保存为律师校对版本" }).click();
   await expect(
     page.getByRole("heading", { name: "固定版本录音引用" }),
@@ -530,7 +735,9 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
   await expect(citationText).toHaveValue("律师未提交的真实 API 草稿。");
   expect(await citationText.inputValue()).not.toContain("隔离 HTTP 实时预览");
   await citationText.click();
-  await citationText.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+  await citationText.press(
+    process.platform === "darwin" ? "Meta+A" : "Control+A",
+  );
   await expect
     .poll(() =>
       citationText.evaluate((element) => {
@@ -544,9 +751,12 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
   });
   await expect(createCitationButton).toBeEnabled({ timeout: 5_000 });
   await createCitationButton.click();
-  await expect(page.getByLabel("已创建的录音引用")).toContainText("律师未提交的真实 API 草稿。", {
-    timeout: 20_000,
-  });
+  await expect(page.getByLabel("已创建的录音引用")).toContainText(
+    "律师未提交的真实 API 草稿。",
+    {
+      timeout: 20_000,
+    },
+  );
   expect(liveTaskId).toMatch(/^[0-9a-f-]{36}$/);
   expect(speechCitationId).toMatch(/^[0-9a-f-]{36}$/);
 
@@ -554,28 +764,34 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
     `合成庭审录音校对稿：律师未提交的真实 API 草稿。 [[citation:${speechCitationId}]]`,
     "utf8",
   );
-  const artifactSha256 = createHash("sha256").update(transcriptArtifact).digest("hex");
-  const artifactResponse = await page.request.post(`${apiBase}${matterBase}/project-artifacts`, {
-    headers: {
-      "x-test-user-id": apiUserId!,
-      "idempotency-key": randomUUID(),
-      "x-content-sha256": artifactSha256,
-    },
-    multipart: {
-      file: {
-        name: "w11-synthetic-transcript.md",
-        mimeType: "text/markdown",
-        buffer: transcriptArtifact,
+  const artifactSha256 = createHash("sha256")
+    .update(transcriptArtifact)
+    .digest("hex");
+  const artifactResponse = await page.request.post(
+    `${apiBase}${matterBase}/project-artifacts`,
+    {
+      headers: {
+        "x-test-user-id": apiUserId!,
+        "idempotency-key": randomUUID(),
+        "x-content-sha256": artifactSha256,
       },
-      title: "W11 synthetic transcript delivery",
-      kind: "transcript",
-      byte_size: String(transcriptArtifact.byteLength),
-      source_thread_id: threadId,
-      source_artifact_path: "/mnt/user-data/outputs/w11-synthetic-transcript.md",
-      source_revision_sha256: artifactSha256,
-      source_provenance: "client_asserted",
+      multipart: {
+        file: {
+          name: "w11-synthetic-transcript.md",
+          mimeType: "text/markdown",
+          buffer: transcriptArtifact,
+        },
+        title: "W11 synthetic transcript delivery",
+        kind: "transcript",
+        byte_size: String(transcriptArtifact.byteLength),
+        source_thread_id: threadId,
+        source_artifact_path:
+          "/mnt/user-data/outputs/w11-synthetic-transcript.md",
+        source_revision_sha256: artifactSha256,
+        source_provenance: "client_asserted",
+      },
     },
-  });
+  );
   expect(artifactResponse.status()).toBe(201);
   const artifactData = (await artifactResponse.json()) as {
     data: {
@@ -585,19 +801,34 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
   };
   expect(artifactData.data.artifact_version.sha256).toBe(artifactSha256);
   const artifactVersionPath = `${matterBase}/project-artifacts/${artifactData.data.artifact.id}/versions/${artifactData.data.artifact_version.id}`;
-  const approved = await page.request.post(`${apiBase}${artifactVersionPath}/reviews`, {
-    headers: { "x-test-user-id": apiUserId!, "idempotency-key": randomUUID() },
-    data: { decision: "approved", review_note: "Synthetic W11 export acceptance." },
-  });
+  const approved = await page.request.post(
+    `${apiBase}${artifactVersionPath}/reviews`,
+    {
+      headers: {
+        "x-test-user-id": apiUserId!,
+        "idempotency-key": randomUUID(),
+      },
+      data: {
+        decision: "approved",
+        review_note: "Synthetic W11 export acceptance.",
+      },
+    },
+  );
   expect(approved.status()).toBe(201);
-  const docx = await page.request.get(`${apiBase}${artifactVersionPath}/exports/docx`, {
-    headers: { "x-test-user-id": apiUserId! },
-  });
+  const docx = await page.request.get(
+    `${apiBase}${artifactVersionPath}/exports/docx`,
+    {
+      headers: { "x-test-user-id": apiUserId! },
+    },
+  );
   expect(docx.status()).toBe(200);
   expect((await docx.body()).subarray(0, 2).toString()).toBe("PK");
-  const pdf = await page.request.get(`${apiBase}${artifactVersionPath}/exports/pdf`, {
-    headers: { "x-test-user-id": apiUserId! },
-  });
+  const pdf = await page.request.get(
+    `${apiBase}${artifactVersionPath}/exports/pdf`,
+    {
+      headers: { "x-test-user-id": apiUserId! },
+    },
+  );
   expect(pdf.status()).toBe(200);
   expect((await pdf.body()).subarray(0, 2).toString()).toBe("PK");
 
@@ -605,6 +836,7 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
   // durably accepted PCM. The page is unloaded before deleting IndexedDB so
   // its capture controller cannot write the old local snapshot back.
   const evictedCaptureTitle = "W11 本机缓存清除后恢复";
+  await page.getByRole("button", { name: "录音", exact: true }).click();
   await page.getByLabel("录音名称").fill(evictedCaptureTitle);
   await page.getByRole("button", { name: /开始麦克风录音/ }).click();
   await expect(
@@ -671,6 +903,7 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
   );
 
   await page.goto(`/workspace/chats/${threadId}`);
+  await page.getByRole("tab", { name: "录音 / 实时转写", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "庭审录音与语音转写" }),
   ).toBeVisible();
@@ -707,21 +940,45 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
     .poll(evictedCaptureStatus, { timeout: 30_000 })
     .toBe("completed");
 
-  expect(forwarded.some((item) => item === `POST ${speechPath}/live-captures`)).toBe(true);
-  expect(forwarded.some((item) => item.includes("/live-captures/") && item.includes("/chunks/"))).toBe(true);
-  expect(forwarded.some((item) => item.includes("/live-captures/") && item.endsWith("/finish"))).toBe(true);
-  expect(forwarded.some((item) => item.startsWith(`GET ${speechPath}/`))).toBe(true);
+  expect(
+    forwarded.some((item) => item === `POST ${speechPath}/live-captures`),
+  ).toBe(true);
+  expect(
+    forwarded.some(
+      (item) => item.includes("/live-captures/") && item.includes("/chunks/"),
+    ),
+  ).toBe(true);
+  expect(
+    forwarded.some(
+      (item) => item.includes("/live-captures/") && item.endsWith("/finish"),
+    ),
+  ).toBe(true);
+  expect(forwarded.some((item) => item.startsWith(`GET ${speechPath}/`))).toBe(
+    true,
+  );
 
+  // API completion can precede the controller's finalizing→idle reconciliation.
+  // Wait for that UI transition before choosing another recording view.
+  await expect(page.getByLabel("录音名称")).toBeEnabled({ timeout: 30_000 });
   suppressCapturePreview = true;
+  await page.getByRole("button", { name: "录音", exact: true }).click();
   await page.getByLabel("录音名称").fill("真实案件 SSE 撤权合成测试");
   await page.getByRole("button", { name: /开始麦克风录音/ }).click();
-  await expect(page.getByText(/正在采集；本机保存、服务器确认和识别进度分开显示/)).toBeVisible({ timeout: 15_000 });
-  await expect.poll(() => caseWorkbenchEventsStarted, { timeout: 15_000 }).toBe(true);
+  await expect(
+    page.getByText(/正在采集；本机保存、服务器确认和识别进度分开显示/),
+  ).toBeVisible({ timeout: 15_000 });
   await expect
-    .poll(async () => (await readSpeechOutboxCounts(page)).sessions, { timeout: 15_000 })
+    .poll(() => caseWorkbenchEventsStarted, { timeout: 15_000 })
+    .toBe(true);
+  await expect
+    .poll(async () => (await readSpeechOutboxCounts(page)).sessions, {
+      timeout: 15_000,
+    })
     .toBeGreaterThan(0);
 
-  const revoked = await page.request.post(`${apiBase}/__test/revoke-matter-access`);
+  const revoked = await page.request.post(
+    `${apiBase}/__test/revoke-matter-access`,
+  );
   expect(revoked.status()).toBe(204);
   const accessAfterRevocation = await page.request.get(
     `${apiBase}${matterBase}/case-workbench`,
@@ -735,12 +992,20 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({ page
     () =>
       (
         window as typeof window & { __w11AudioTracks?: MediaStreamTrack[][] }
-      ).__w11AudioTracks?.at(-1)?.map((track) => track.readyState) ?? [],
+      ).__w11AudioTracks
+        ?.at(-1)
+        ?.map((track) => track.readyState) ?? [],
   );
   expect(audioTracks.length).toBeGreaterThan(0);
   expect(audioTracks.every((state) => state === "ended")).toBe(true);
-  expect(forwarded.some((item) => item.endsWith(`${matterBase}/case-workbench/events`))).toBe(true);
-  const restored = await page.request.post(`${apiBase}/__test/restore-matter-access`);
+  expect(
+    forwarded.some((item) =>
+      item.endsWith(`${matterBase}/case-workbench/events`),
+    ),
+  ).toBe(true);
+  const restored = await page.request.post(
+    `${apiBase}/__test/restore-matter-access`,
+  );
   expect(restored.status()).toBe(204);
   await page.close();
   reportCaptureOutcome(browserName, "recorded", offlineBufferEvidence ?? {});

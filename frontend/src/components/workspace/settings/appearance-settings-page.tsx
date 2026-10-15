@@ -1,8 +1,19 @@
 "use client";
 
-import { MonitorSmartphoneIcon, MoonIcon, SunIcon } from "lucide-react";
+import {
+  MonitorSmartphoneIcon,
+  MoonIcon,
+  SunIcon,
+  SunriseIcon,
+} from "lucide-react";
 import { useTheme } from "next-themes";
-import { useMemo, type ComponentType, type SVGProps } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentType,
+  type SVGProps,
+} from "react";
 
 import {
   Select,
@@ -14,6 +25,15 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { enUS, isLocale, zhCN, type Locale } from "@/core/i18n";
 import { useI18n } from "@/core/i18n/hooks";
+import {
+  APPEARANCE_EVENT,
+  APPEARANCE_KEY,
+  SOLAR_CITIES,
+  parseAppearance,
+  solarAppearance,
+  type AppearanceMode,
+  type SolarCityId,
+} from "@/core/settings/solar-theme";
 import { cn } from "@/lib/utils";
 
 import { SettingsSection } from "./settings-section";
@@ -26,7 +46,49 @@ const languageOptions: { value: Locale; label: string }[] = [
 export function AppearanceSettingsPage() {
   const { t, locale, changeLocale } = useI18n();
   const { theme, setTheme, systemTheme } = useTheme();
-  const currentTheme = (theme ?? "system") as "system" | "light" | "dark";
+  const [preferenceMode, setPreferenceMode] = useState<AppearanceMode | null>(
+    null,
+  );
+  const [city, setCity] = useState<SolarCityId>("shanghai");
+  const currentTheme =
+    preferenceMode ??
+    (theme === "dark" || theme === "light" ? theme : "system");
+  useEffect(() => {
+    const refresh = () => {
+      try {
+        const preference = parseAppearance(
+          localStorage.getItem(APPEARANCE_KEY),
+        );
+        setPreferenceMode(preference?.mode ?? null);
+        setCity(preference?.city ?? "shanghai");
+      } catch {
+        /* Existing next-themes mode remains available. */
+      }
+    };
+    refresh();
+    window.addEventListener(APPEARANCE_EVENT, refresh);
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener(APPEARANCE_EVENT, refresh);
+      window.removeEventListener("storage", refresh);
+    };
+  }, []);
+  const chooseAppearance = (mode: AppearanceMode, selectedCity = city) => {
+    setPreferenceMode(mode);
+    setCity(selectedCity);
+    try {
+      localStorage.setItem(
+        APPEARANCE_KEY,
+        JSON.stringify({ mode, city: selectedCity }),
+      );
+      window.dispatchEvent(new Event(APPEARANCE_EVENT));
+    } catch {
+      /* Apply the selection for this page even without persistence. */
+    }
+    setTheme(
+      mode === "solar" ? solarAppearance(new Date(), selectedCity) : mode,
+    );
+  };
 
   const themeOptions = useMemo(
     () => [
@@ -48,6 +110,12 @@ export function AppearanceSettingsPage() {
         description: t.settings.appearance.darkDescription,
         icon: MoonIcon,
       },
+      {
+        id: "solar",
+        label: "日出日落",
+        description: "按所选城市的日出日落自动切换",
+        icon: SunriseIcon,
+      },
     ],
     [
       t.settings.appearance.dark,
@@ -65,7 +133,7 @@ export function AppearanceSettingsPage() {
         title={t.settings.appearance.themeTitle}
         description={t.settings.appearance.themeDescription}
       >
-        <div className="grid gap-3 lg:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2">
           {themeOptions.map((option) => (
             <ThemePreviewCard
               key={option.id}
@@ -73,12 +141,38 @@ export function AppearanceSettingsPage() {
               label={option.label}
               description={option.description}
               active={currentTheme === option.id}
-              mode={option.id as "system" | "light" | "dark"}
+              mode={
+                option.id === "solar"
+                  ? solarAppearance(new Date(), city)
+                  : (option.id as "system" | "light" | "dark")
+              }
               systemTheme={systemTheme}
-              onSelect={(value) => setTheme(value)}
+              onSelect={() => chooseAppearance(option.id as AppearanceMode)}
             />
           ))}
         </div>
+        {currentTheme === "solar" && (
+          <label className="mt-4 flex flex-wrap items-center gap-3 text-sm">
+            <span>日出日落城市</span>
+            <select
+              aria-label="日出日落城市"
+              value={city}
+              onChange={(event) =>
+                chooseAppearance("solar", event.target.value as SolarCityId)
+              }
+              className="bg-background rounded-md border px-3 py-2"
+            >
+              {SOLAR_CITIES.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+            <span className="text-muted-foreground text-xs">
+              手动选择城市，无需定位权限。
+            </span>
+          </label>
+        )}
       </SettingsSection>
 
       <Separator />
@@ -161,12 +255,7 @@ function ThemePreviewCard({
         )}
       >
         <div className="border-border/50 flex items-center gap-2 border-b px-3 py-2">
-          <div
-            className={cn(
-              "h-2 w-2 rounded-full",
-              previewMode === "dark" ? "bg-emerald-400" : "bg-emerald-500",
-            )}
-          />
+          <div className={cn("h-2 w-2 rounded-full", "bg-primary")} />
           <div className="h-2 w-10 rounded-full bg-current/20" />
           <div className="h-2 w-6 rounded-full bg-current/15" />
         </div>

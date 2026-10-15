@@ -589,6 +589,210 @@ describe("matter speech panel", () => {
     expect(screen.getByText(/模型提示：合成估算警告/)).toBeTruthy();
   });
 
+  it("keeps trailing text read-only until editing and invalidates review after speaker or tail edits", async () => {
+    rs.mocked(useLawEvidence).mockReturnValue({
+      data: [evidenceItem],
+      refetch: evidenceRefetch,
+    } as unknown as ReturnType<typeof useLawEvidence>);
+    const reviewTask = {
+      ...task,
+      status: "awaiting_review" as const,
+      current_version_number: 1,
+    };
+    rs.mocked(useLawSpeechTranscriptions).mockReturnValue({
+      data: {
+        items: [reviewTask],
+        transcription_available: true,
+        supported_media_types: ["audio/wav"],
+        live_capture_available: false,
+      },
+      refetch,
+    } as unknown as ReturnType<typeof useLawSpeechTranscriptions>);
+    rs.mocked(useLawSpeechTranscription).mockReturnValue({
+      data: {
+        task: reviewTask,
+        versions: [
+          {
+            id: "guard-v1",
+            task_id: task.id,
+            version_number: 1,
+            origin: "asr",
+            source_sha256: task.source_sha256,
+            transcript: {
+              schemaVersion: 1,
+              offsetUnit: "utf16",
+              text: "甲尾部",
+              durationMs: 2000,
+              reviewStatus: "unreviewed",
+              approxAlignment: true,
+              warnings: [],
+              segments: [
+                {
+                  text: "甲",
+                  charStart: 0,
+                  charEnd: 1,
+                  startMs: 0,
+                  endMs: 2000,
+                  speakerId: "spk_0",
+                },
+              ],
+              speakers: [{ id: "spk_0", label: "说话人1" }],
+            },
+            actor_membership_id: "member-1",
+            created_at: task.created_at,
+          },
+        ],
+        events: [],
+      },
+      isError: false,
+    } as unknown as ReturnType<typeof useLawSpeechTranscription>);
+    render(
+      <MatterSpeechPanel
+        tenantId="tenant-1"
+        matterId="matter-1"
+        matterRole="owner"
+        userId="user-1"
+        membershipId="member-1"
+        workspace
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /转写记录/ }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /合成录音.*待律师校对/ }),
+    );
+    expect(await screen.findByLabelText("未分配片段的文字")).toHaveProperty(
+      "textContent",
+      "未分配到识别片段的尾部文字尾部",
+    );
+    expect(
+      screen.queryByRole("textbox", { name: "未分配到识别片段的尾部文字" }),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "编辑文字与时间" }));
+    const textReview = screen.getByLabelText("文字已复核");
+    const timeReview = screen.getByLabelText("时间范围已复核");
+    const save = screen.getByRole("button", { name: "保存为律师校对版本" });
+    for (const [label, value] of [
+      ["说话人 1 名称", "律师自定标签"],
+      ["未分配到识别片段的尾部文字", "修改后的尾部"],
+    ]) {
+      fireEvent.click(textReview);
+      fireEvent.click(timeReview);
+      expect(save).toHaveProperty("disabled", false);
+      fireEvent.change(screen.getByLabelText(label!), { target: { value } });
+      expect(textReview).toHaveProperty("checked", false);
+      expect(timeReview).toHaveProperty("checked", false);
+      expect(save).toHaveProperty("disabled", true);
+    }
+  });
+
+  it("preserves each task draft while moving between records in the split workspace", async () => {
+    const taskA = {
+      ...task,
+      status: "awaiting_review" as const,
+      current_version_number: 1,
+    };
+    const taskB = {
+      ...taskA,
+      id: "speech-task-2",
+      evidence_item_id: "evidence-2",
+    };
+    rs.mocked(useLawEvidence).mockReturnValue({
+      data: [
+        evidenceItem,
+        { ...evidenceItem, id: "evidence-2", title: "02-合成录音" },
+      ],
+      refetch: evidenceRefetch,
+    } as unknown as ReturnType<typeof useLawEvidence>);
+    rs.mocked(useLawSpeechTranscriptions).mockReturnValue({
+      data: {
+        items: [taskA, taskB],
+        transcription_available: true,
+        supported_media_types: ["audio/wav"],
+        live_capture_available: false,
+      },
+      refetch,
+    } as unknown as ReturnType<typeof useLawSpeechTranscriptions>);
+    rs.mocked(useLawSpeechTranscription).mockImplementation(
+      (_tenant, _matter, id) => {
+        const selected = id === taskB.id ? taskB : taskA;
+        const text = id === taskB.id ? "乙机器稿" : "甲机器稿";
+        return {
+          data: id
+            ? {
+                task: selected,
+                versions: [
+                  {
+                    id: `${selected.id}-v1`,
+                    task_id: selected.id,
+                    version_number: 1,
+                    origin: "asr",
+                    source_sha256: selected.source_sha256,
+                    transcript: {
+                      schemaVersion: 1,
+                      offsetUnit: "utf16",
+                      text,
+                      durationMs: 2000,
+                      reviewStatus: "unreviewed",
+                      approxAlignment: true,
+                      warnings: [],
+                      segments: [
+                        {
+                          text,
+                          charStart: 0,
+                          charEnd: text.length,
+                          startMs: 0,
+                          endMs: 2000,
+                        },
+                      ],
+                      speakers: [],
+                    },
+                    actor_membership_id: "member-1",
+                    created_at: task.created_at,
+                  },
+                ],
+                events: [],
+              }
+            : undefined,
+          isError: false,
+        } as unknown as ReturnType<typeof useLawSpeechTranscription>;
+      },
+    );
+    render(
+      <MatterSpeechPanel
+        workspace
+        tenantId="tenant-1"
+        matterId="matter-1"
+        matterRole="owner"
+        userId="user-1"
+        membershipId="member-1"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /转写记录/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /^合成录音 待律师校对/ }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "编辑文字与时间" }));
+    fireEvent.change(await screen.findByLabelText("校对片段 1"), {
+      target: { value: "甲未保存草稿" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "返回转写记录" }));
+    fireEvent.click(screen.getByRole("button", { name: /^02-合成录音/ }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑文字与时间" }));
+    expect(await screen.findByLabelText("校对片段 1")).toHaveProperty(
+      "value",
+      "乙机器稿",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "返回转写记录" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /^合成录音 待律师校对/ }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "编辑文字与时间" }));
+    expect(await screen.findByLabelText("校对片段 1")).toHaveProperty(
+      "value",
+      "甲未保存草稿",
+    );
+  });
+
   it("keeps microphone capture disabled when the browser lacks durable recovery support", () => {
     available = true;
     liveCaptureAvailable = true;

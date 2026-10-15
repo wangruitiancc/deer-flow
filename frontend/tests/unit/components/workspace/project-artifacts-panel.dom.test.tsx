@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, rs } from "@rstest/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -19,7 +20,32 @@ rs.mock("@/components/workspace/law/legal-template-picker", () => ({
   LegalTemplatePicker: () => null,
 }));
 rs.mock("@/components/workspace/law/matter-speech-panel", () => ({
-  MatterSpeechPanel: () => null,
+  MatterSpeechPanel: ({
+    onActivityChange,
+  }: {
+    onActivityChange?: (activity: {
+      recording: boolean;
+      seconds: number;
+      label: string;
+      stop: () => void;
+    }) => void;
+  }) => (
+    <>
+      <input aria-label="录音工作状态替身" defaultValue="未开始" />
+      <button
+        onClick={() =>
+          onActivityChange?.({
+            recording: true,
+            seconds: 12,
+            label: "录音中",
+            stop: () => undefined,
+          })
+        }
+      >
+        模拟录音活动
+      </button>
+    </>
+  ),
 }));
 rs.mock("next/navigation", () => ({ useRouter: () => ({ push: rs.fn() }) }));
 rs.mock("@/components/workspace/law/legal-graph-import-handoff", () => ({
@@ -137,6 +163,8 @@ rs.mock("@/core/law", () => ({
 import { ProjectArtifactsPanel } from "@/components/workspace/law/project-artifacts-panel";
 import { runAuthSessionCleanups } from "@/core/auth/session-lifecycle";
 import {
+  getMatter,
+  listEvidence,
   fetchEvidenceContent,
   fetchProjectArtifactContent,
   fetchProjectArtifactExport,
@@ -162,6 +190,12 @@ const version = {
 } as ProjectArtifactVersion;
 beforeEach(() => {
   revokedObjectUrls = [];
+  rs.mocked(getMatter).mockResolvedValue({ title: "合成测试案件" } as Awaited<
+    ReturnType<typeof getMatter>
+  >);
+  rs.mocked(listEvidence).mockResolvedValue([
+    { id: "evidence", title: "测试合同.pdf", status: "active" },
+  ] as Awaited<ReturnType<typeof listEvidence>>);
   rs.mocked(listProjectArtifacts).mockResolvedValue([
     {
       id: "item",
@@ -206,12 +240,48 @@ async function open() {
       </ProjectArtifactsPanel>
     </QueryClientProvider>,
   );
-  fireEvent.click(screen.getByRole("button", { name: "查看全部成果" }));
+  fireEvent.click(screen.getByRole("tab", { name: "文书撰写" }));
   fireEvent.click(await screen.findByRole("button", { name: /已保存笔记/ }));
   return rendered;
 }
 
 describe("project artifact preview lifetime", () => {
+  it("returns a capture to its function even after that tab was closed on another function", async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    clients.push(client);
+    const onActivity = rs.fn();
+    render(
+      <QueryClientProvider client={client}>
+        <ProjectArtifactsPanel
+          threadId="thread"
+          onSpeechActivityChange={onActivity}
+        />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "录音 / 实时转写" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "模拟录音活动" }),
+    );
+    const activity = onActivity.mock.calls.at(-1)?.[0] as {
+      returnToCapture: () => void;
+    };
+    expect(typeof activity.returnToCapture).toBe("function");
+    fireEvent.click(screen.getByRole("tab", { name: "案情图谱" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "关闭录音 / 实时转写页签" }),
+    );
+    expect(screen.queryByRole("tab", { name: /录音 \/ 实时转写/ })).toBeNull();
+    act(() => activity.returnToCapture());
+    expect(
+      screen
+        .getByRole("tab", { name: /录音 \/ 实时转写/ })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(screen.getByRole("button", { name: "模拟录音活动" })).toBeDefined();
+  });
+
   it("exposes the project evidence and OCR workspace in the conversation panel", async () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -224,7 +294,6 @@ describe("project artifact preview lifetime", () => {
         </ProjectArtifactsPanel>
       </QueryClientProvider>,
     );
-    fireEvent.click(screen.getByRole("button", { name: /查看案件全部材料/ }));
     fireEvent.click(await screen.findByRole("button", { name: /测试合同/ }));
     expect(
       await screen.findByRole("textbox", { name: "校对测试材料" }),
@@ -232,9 +301,9 @@ describe("project artifact preview lifetime", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "校对测试材料" }), {
       target: { value: "保留的修改" },
     });
-    fireEvent.click(screen.getByRole("tab", { name: /概览/ }));
+    fireEvent.click(screen.getByRole("tab", { name: "案情图谱" }));
     expect(screen.queryByRole("textbox", { name: "校对测试材料" })).toBeNull();
-    fireEvent.click(screen.getByRole("tab", { name: "测试合同.pdf" }));
+    fireEvent.click(screen.getByRole("tab", { name: "文档校对" }));
     const kept = screen.getByRole("textbox", { name: "校对测试材料" });
     if (!(kept instanceof HTMLInputElement)) throw new Error("Expected input");
     expect(kept.value).toBe("保留的修改");
@@ -250,18 +319,43 @@ describe("project artifact preview lifetime", () => {
         <ProjectArtifactsPanel threadId="thread" />
       </QueryClientProvider>,
     );
-    expect(screen.getByText("本次对话尚无可核实的附件记录。")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /测试合同/ })).toBeNull();
+    expect(
+      screen.queryByText("本会话上传附件 · 是否用于分析以对话为准"),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "文书撰写" }));
     fireEvent.click(screen.getByRole("button", { name: /note.md 本会话文件/ }));
     const input = await screen.findByRole("textbox", {
       name: "编辑 /mnt/user-data/outputs/note.md",
     });
     fireEvent.change(input, { target: { value: "正在编辑" } });
-    fireEvent.click(screen.getByRole("tab", { name: /概览/ }));
-    fireEvent.click(screen.getByRole("tab", { name: "note.md" }));
+    fireEvent.click(screen.getByRole("tab", { name: "文档校对" }));
+    fireEvent.click(screen.getByRole("tab", { name: "文书撰写" }));
     const kept = screen.getByRole("textbox");
     if (!(kept instanceof HTMLInputElement)) throw new Error("Expected input");
     expect(kept.value).toBe("正在编辑");
+  });
+
+  it("retains a mounted speech workspace when switching and closing its functional tab", async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    clients.push(client);
+    render(
+      <QueryClientProvider client={client}>
+        <ProjectArtifactsPanel threadId="thread" />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "录音 / 实时转写" }));
+    const controller = screen.getByLabelText("录音工作状态替身");
+    fireEvent.change(controller, { target: { value: "录音仍在进行" } });
+    fireEvent.click(screen.getByRole("tab", { name: "文档校对" }));
+    fireEvent.click(screen.getByRole("tab", { name: "录音 / 实时转写" }));
+    expect(screen.getByLabelText("录音工作状态替身")).toBe(controller);
+    fireEvent.click(
+      screen.getByRole("button", { name: "关闭录音 / 实时转写页签" }),
+    );
+    expect(controller.isConnected).toBe(true);
+    expect(controller).toHaveProperty("value", "录音仍在进行");
   });
 
   it("releases content URLs and aborts requests when closing the saved version view", async () => {
@@ -370,7 +464,9 @@ describe("project artifact preview lifetime", () => {
 
     await open();
     expect(
-      await screen.findByText(/录音来源 · 庭审录音-合成\.wav · 12\.0 秒–14\.5 秒/),
+      await screen.findByText(
+        /录音来源 · 庭审录音-合成\.wav · 12\.0 秒–14\.5 秒/,
+      ),
     ).toBeTruthy();
     expect(screen.getByText(/固定转写版本 transcript-version-1/)).toBeTruthy();
     expect(screen.queryByText(/第 undefined 页/)).toBeNull();
@@ -380,9 +476,7 @@ describe("project artifact preview lifetime", () => {
       }),
     );
 
-    const audio = await screen.findByLabelText(
-      "固定版本录音来源播放器",
-    );
+    const audio = await screen.findByLabelText("固定版本录音来源播放器");
     if (!(audio instanceof HTMLAudioElement))
       throw new Error("Expected the protected speech audio player");
     await waitFor(() =>
@@ -408,9 +502,7 @@ describe("project artifact preview lifetime", () => {
 
     await runAuthSessionCleanups();
     await waitFor(() =>
-      expect(
-        screen.queryByLabelText("固定版本录音来源播放器"),
-      ).toBeNull(),
+      expect(screen.queryByLabelText("固定版本录音来源播放器")).toBeNull(),
     );
     expect(revokedObjectUrls).toContain("blob:synthetic");
   });

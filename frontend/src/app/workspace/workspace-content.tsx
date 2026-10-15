@@ -7,6 +7,7 @@ import { CommandPalette } from "@/components/workspace/command-palette";
 import { GatewayOfflineBanner } from "@/components/workspace/gateway-offline-banner";
 import { ModelLoadErrorBanner } from "@/components/workspace/model-load-error-banner";
 import { SettingsDialogHost } from "@/components/workspace/settings";
+import { WorkspaceAppearance } from "@/components/workspace/workspace-appearance";
 import { WorkspaceResizeProvider } from "@/components/workspace/workspace-resize-provider";
 import { WorkspaceSettingsDeepLink } from "@/components/workspace/workspace-settings-deep-link";
 import { WorkspaceSidebar } from "@/components/workspace/workspace-sidebar";
@@ -33,6 +34,7 @@ export async function WorkspaceContent({
 
   return (
     <QueryClientProvider>
+      <WorkspaceAppearance />
       <WorkspaceResizeProvider defaultOpen={initialSidebarOpen}>
         <WorkspaceSidebar />
         <SidebarInset className="min-w-0">

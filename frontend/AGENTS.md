@@ -315,3 +315,35 @@ routes, writes the detailed result to `.next/performance-results.json`, and comp
 totals with `performance-budgets.json`. Fix route ownership or split points when a
 budget fails; do not raise a ceiling without documenting and reviewing the measured
 regression.
+
+### Matrix Law workspace UI v1 (2026-10-15)
+
+The paired Matrix Law repository's `docs/design/lawyer-workbench-ui-standard-v1.md`
+owns the approved layout and slate-blue palette. `styles/law-workspace.css` scopes
+shared tokens to the authenticated workbench and its portalled settings/menus.
+The permanent activity rail is48px; the adjacent matter tree defaults to216px
+and collapses off-canvas independently. Existing numeric tree-width preferences
+remain valid. Keep toggle/settings/account controls in the rail and a close
+control inside the mobile drawer. Separator coordinates include the rail offset. Keep generated `ui/` primitives unchanged.
+
+`law/LegalWorkspaceTabs` and `core/law/workspace-tabs.ts` own functional view state.
+The four default functions are proofreading, speech, graph and drafting; memory,
+deadlines, authorities and overview open from the add menu. Resource selection is
+inside its function, not another top-level tab system. A closed function retains
+its mounted work; explicitly closing a dirty resource still asks about saved state.
+Scope changes remain the remount/authorization boundary. Do not persist legal tab
+IDs, drafts or source bytes as layout preferences.
+
+`ChatBox` retains the mounted legal workspace when another right-panel kind opens.
+Its capture-return control remains outside the hidden/inert panel. Speech reports
+only capture activity and a stop/cancel action to the shell; it does not move audio
+or transcript data into global events. Starting captures must cancel their pending
+start from this control. The split speech view retains task-specific drafts in
+bounded component memory and keeps protected media, mutations and review/version
+guards in the existing speech client/controller.
+
+`WorkspaceAppearance` is the single sunrise/sunset scheduler. Only mode and a
+predefined city ID may be stored; it requests no geolocation or service access.
+`tests/fixtures/workspace-ui-server.mjs` is a loopback-only read fixture for visual
+QA; it has no real authentication, database, model or microphone and refuses writes.
+Do not use that fixture as backend, browser-capture or production evidence.

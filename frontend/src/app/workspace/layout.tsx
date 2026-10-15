@@ -1,5 +1,6 @@
 import "katex/dist/katex.min.css";
 import "streamdown/styles.css";
+import "@/styles/law-workspace.css";
 
 import { redirect } from "next/navigation";
 
