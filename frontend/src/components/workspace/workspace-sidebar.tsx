@@ -18,6 +18,7 @@ export function WorkspaceSidebar({
 }: React.ComponentProps<typeof Sidebar>) {
   const { isMobile, setOpen, setOpenMobile } = useSidebar();
   const [searchRequest, setSearchRequest] = useState(0);
+  const [recentRequest, setRecentRequest] = useState(0);
   const searchProjects = () => {
     if (isMobile) setOpenMobile(true);
     else setOpen(true);
@@ -25,7 +26,14 @@ export function WorkspaceSidebar({
   };
   return (
     <>
-      <WorkspaceActivityRail onSearch={searchProjects} />
+      <WorkspaceActivityRail
+        onSearch={searchProjects}
+        onRecent={() => {
+          if (isMobile) setOpenMobile(true);
+          else setOpen(true);
+          setRecentRequest((value) => value + 1);
+        }}
+      />
       <Sidebar
         variant="sidebar"
         collapsible="offcanvas"
@@ -39,6 +47,7 @@ export function WorkspaceSidebar({
           <SidebarContent>
             <LegalProjectTree
               searchRequest={searchRequest}
+              recentRequest={recentRequest}
               onSearchHandled={() => setSearchRequest(0)}
             />
           </SidebarContent>

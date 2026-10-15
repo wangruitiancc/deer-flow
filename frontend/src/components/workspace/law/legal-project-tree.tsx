@@ -77,6 +77,7 @@ import { cn } from "@/lib/utils";
 
 import { LegalProjectTreeSkeleton } from "./legal-project-tree-skeleton";
 import { NewMatterConversationButton } from "./new-matter-conversation-button";
+import { RecentLegalConversations } from "./recent-legal-conversations";
 
 const COPY = {
   "en-US": {
@@ -474,9 +475,11 @@ function ProjectTreeItem({
 
 export function LegalProjectTree({
   searchRequest = 0,
+  recentRequest = 0,
   onSearchHandled,
 }: {
   searchRequest?: number;
+  recentRequest?: number;
   onSearchHandled?: () => void;
 }) {
   const { locale } = useI18n();
@@ -503,6 +506,9 @@ export function LegalProjectTree({
       onSearchHandled?.();
     }
   }, [searchRequest, onSearchHandled]);
+  useEffect(() => {
+    if (recentRequest > 0) setSearchQuery("");
+  }, [recentRequest]);
   useEffect(() => {
     setChooseProjectOpen(false);
     setSearchQuery("");
@@ -651,6 +657,15 @@ export function LegalProjectTree({
         </SidebarGroupContent>
       </SidebarGroup>
 
+      {selectedTenantId && mattersQuery.isSuccess && !searchQuery && (
+        <RecentLegalConversations
+          key={selectedTenantId}
+          tenantId={selectedTenantId}
+          matters={mattersQuery.data}
+          activeThreadId={activeThreadId}
+          focusRequest={recentRequest}
+        />
+      )}
       <SidebarGroup className="min-h-0 flex-1 pt-1 group-data-[collapsible=icon]:hidden">
         <SidebarGroupLabel>{copy.projects}</SidebarGroupLabel>
         <SidebarGroupAction asChild title={copy.newProject}>

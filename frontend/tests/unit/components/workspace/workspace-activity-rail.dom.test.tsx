@@ -23,7 +23,7 @@ afterEach(() => {
   mocks.role = "member";
   rs.restoreAllMocks();
 });
-function mount(open: boolean) {
+function mount(open: boolean, onRecent?: () => void) {
   rs.spyOn(window, "matchMedia").mockReturnValue({
     matches: false,
     addEventListener: () => undefined,
@@ -31,11 +31,23 @@ function mount(open: boolean) {
   } as unknown as MediaQueryList);
   return render(
     <SidebarProvider defaultOpen={open}>
-      <WorkspaceActivityRail />
+      <WorkspaceActivityRail onRecent={onRecent} />
     </SidebarProvider>,
   );
 }
 describe("persistent activity rail", () => {
+  it("keeps history and the more menu available while the case sidebar is closed", () => {
+    const recent = rs.fn();
+    mount(false, recent);
+    fireEvent.click(screen.getByRole("button", { name: "最近会话" }));
+    expect(recent).toHaveBeenCalledTimes(1);
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "更多工作区功能" }),
+      { button: 0, ctrlKey: false },
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "外观与设置" }));
+    expect(mocks.openSettings).toHaveBeenCalledWith("appearance");
+  });
   it("keeps a labelled toggle and account menu when collapsed, and reopens without hover", () => {
     mount(false);
     const toggle = screen.getByRole("button", { name: "展开案件侧栏" });

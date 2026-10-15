@@ -5,6 +5,9 @@ import {
   FolderOpenIcon,
   GaugeIcon,
   HomeIcon,
+  HistoryIcon,
+  MoreHorizontalIcon,
+  CircleHelpIcon,
   SearchIcon,
   Settings2Icon,
 } from "lucide-react";
@@ -12,6 +15,12 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar";
 import {
   Tooltip,
@@ -24,7 +33,13 @@ import { cn } from "@/lib/utils";
 import { useSettingsDialog } from "./settings";
 import { WorkspaceNavMenu } from "./workspace-nav-menu";
 
-export function WorkspaceActivityRail({ onSearch }: { onSearch?: () => void }) {
+export function WorkspaceActivityRail({
+  onSearch,
+  onRecent,
+}: {
+  onSearch?: () => void;
+  onRecent?: () => void;
+}) {
   const { open, openMobile, isMobile, setOpen, setOpenMobile } = useSidebar();
   const expanded = isMobile ? openMobile : open;
   const pathname = usePathname();
@@ -136,6 +151,57 @@ export function WorkspaceActivityRail({ onSearch }: { onSearch?: () => void }) {
             <TooltipContent side="right">搜索案件</TooltipContent>
           </Tooltip>
         )}
+        {onRecent && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="text-muted-foreground size-9 rounded-lg"
+                aria-label="最近会话"
+                onClick={onRecent}
+              >
+                <HistoryIcon className="size-[18px]" strokeWidth={1.7} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">最近会话</TooltipContent>
+          </Tooltip>
+        )}
+        <DropdownMenu>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="text-muted-foreground size-9 rounded-lg"
+                  aria-label="更多工作区功能"
+                >
+                  <MoreHorizontalIcon
+                    className="size-[18px]"
+                    strokeWidth={1.7}
+                  />
+                </Button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="right">更多</TooltipContent>
+          </Tooltip>
+          <DropdownMenuContent
+            className="law-workbench min-w-44 rounded-lg"
+            side="right"
+            align="start"
+            sideOffset={8}
+          >
+            <DropdownMenuItem onSelect={() => openSettings("appearance")}>
+              <Settings2Icon />
+              外观与设置
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => openSettings("about")}>
+              <CircleHelpIcon />
+              关于 Matrix Law
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
       <div role="separator" className="law-rail-divider" />
       <div role="group" aria-label="能力与管理" className="law-rail-group">

@@ -52,6 +52,13 @@ its matter. The sidebar may use tenant/matter IDs for navigation state only; it 
 not persist legal IDs or legal data in browser storage, and the backend remains the
 authorization authority.
 
+`law/RecentLegalConversations` reuses native thread search display metadata and
+the existing thread-context query keys. Check at most twelve candidates; render
+only successful matching thread/tenant contexts whose matter remains in the
+current accessible list. An authorization error must hide stale rows. It is a
+read-only navigation shortcut; deletion still belongs to the bound project tree.
+History opens the existing sidebar and focuses this group without leaving chat.
+
 The native `ArtifactFileDetail` toolbar hosts `law/SaveProjectArtifact`, keyed by thread and path so
 switching files cannot carry over a draft save target. It uses the trusted thread context, displays the
 target project's name, and promotes complete authenticated file bytes through the legal extension API.
