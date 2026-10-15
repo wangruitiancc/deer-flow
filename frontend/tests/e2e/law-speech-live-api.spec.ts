@@ -500,7 +500,7 @@ test("live HTTP capture succeeds or browser startup fails closed", async ({
     .poll(() => firstChunkAcceptedByApi, { timeout: 20_000 })
     .toBe(true);
   const previewWindows = page
-    .getByLabel("录音临时识别预览")
+    .getByRole("log", { name: "录音预览内容", exact: true })
     .locator(":scope > div");
   if (realAsr) {
     await expect

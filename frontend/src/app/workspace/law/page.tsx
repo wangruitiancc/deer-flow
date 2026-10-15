@@ -10,11 +10,14 @@ import {
   RefreshCwIcon,
   ShieldCheckIcon,
   UsersIcon,
+  UserRoundPlusIcon,
+  CheckIcon,
+  UserRoundMinusIcon,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,6 +42,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { MatterDeadlinePanel } from "@/components/workspace/law/matter-deadline-panel";
 import {
   WorkspaceBody,
   WorkspaceContainer,
@@ -51,6 +55,9 @@ import {
   createMatterConversation,
   useLawMatter,
   useLawMatterMembers,
+  useLawMatterMemberCandidates,
+  useCreateLawMatterMember,
+  useUpdateLawMatterMember,
   useLawMatters,
   useLawMatterThreads,
   useLawTenants,
@@ -58,6 +65,8 @@ import {
   type MatterClassification,
   type MatterKind,
   type MatterStage,
+  type MatterMemberRole,
+  type MatterMemberStatus,
 } from "@/core/law";
 import { pathOfThread } from "@/core/threads/utils";
 import { cn } from "@/lib/utils";
@@ -158,6 +167,15 @@ const COPY = {
     noMembers: "No members are visible.",
     noConversations: "No conversation has been bound to this legal work item.",
     memberId: "Membership",
+    addMember: "Grant case access",
+    chooseMember: "Select a firm member",
+    caseRole: "Case role",
+    saveAccess: "Save access",
+    removeAccess: "Remove access",
+    restoreAccess: "Restore access",
+    noEligibleMembers: "No eligible firm members are available.",
+    memberManagementHint:
+      "Only active firm members can be granted case access. Removing access immediately revokes case access.",
     updated: "Updated",
     role: "Role",
     status: "Status",
@@ -236,6 +254,15 @@ const COPY = {
     noMembers: "暂无可见成员。",
     noConversations: "这个法律事项还没有绑定对话。",
     memberId: "成员标识",
+    addMember: "添加案件成员",
+    chooseMember: "选择律所成员",
+    caseRole: "案件角色",
+    saveAccess: "保存授权",
+    removeAccess: "撤销访问",
+    restoreAccess: "恢复访问",
+    noEligibleMembers: "当前没有可加入的律所成员。",
+    memberManagementHint:
+      "只能授权有效律所成员；撤销后会立即失去案件访问权限。",
     updated: "更新时间",
     role: "角色",
     status: "状态",
@@ -317,6 +344,18 @@ export default function LawMattersPage() {
   const [selectedTenantId, setSelectedTenantId] = useState<string | null>(null);
   const [selectedMatterId, setSelectedMatterId] = useState<string | null>(null);
   const [matterDialogOpen, setMatterDialogOpen] = useState(false);
+  const [newMatterMemberId, setNewMatterMemberId] = useState("");
+  const [newMatterMemberRole, setNewMatterMemberRole] =
+    useState<MatterMemberRole>("lawyer");
+  const [editedMatterMemberRoles, setEditedMatterMemberRoles] = useState<
+    Record<string, MatterMemberRole>
+  >({});
+  const createMemberAttempt = useRef<{ signature: string; key: string } | null>(
+    null,
+  );
+  const updateMemberAttempts = useRef(
+    new Map<string, { signature: string; key: string }>(),
+  );
   const mattersQuery = useLawMatters(selectedTenantId);
   const matterQuery = useLawMatter(selectedTenantId, selectedMatterId);
   const membersQuery = useLawMatterMembers(selectedTenantId, selectedMatterId);
@@ -413,11 +452,86 @@ export default function LawMattersPage() {
     (item) => item.tenant.id === selectedTenantId,
   );
   const matter = matterQuery.data;
+  const currentMatterMember = membersQuery.data?.find(
+    (member) => member.membership_id === selectedTenant?.membership.id,
+  );
+  const canManageMatterMembers =
+    currentMatterMember?.status === "active" &&
+    (currentMatterMember.role === "owner" ||
+      currentMatterMember.role === "lead");
+  const memberCandidatesQuery = useLawMatterMemberCandidates(
+    selectedTenantId,
+    selectedMatterId,
+    canManageMatterMembers,
+  );
+  const createMatterMemberMutation = useCreateLawMatterMember(
+    selectedTenantId,
+    selectedMatterId,
+  );
+  const updateMatterMemberMutation = useUpdateLawMatterMember(
+    selectedTenantId,
+    selectedMatterId,
+  );
 
   async function createConversation() {
     if (!selectedTenantId || !selectedMatterId) return;
     const created = await conversationMutation.mutateAsync();
     router.push(pathOfThread(created.threadId));
+  }
+
+  async function grantMatterAccess() {
+    if (!newMatterMemberId || !selectedTenantId || !selectedMatterId) return;
+    const signature = `${newMatterMemberId}:${newMatterMemberRole}`;
+    if (createMemberAttempt.current?.signature !== signature) {
+      createMemberAttempt.current = {
+        signature,
+        key: globalThis.crypto.randomUUID(),
+      };
+    }
+    try {
+      await createMatterMemberMutation.mutateAsync({
+        input: {
+          membership_id: newMatterMemberId,
+          role: newMatterMemberRole,
+        },
+        idempotencyKey: createMemberAttempt.current.key,
+      });
+      createMemberAttempt.current = null;
+      setNewMatterMemberId("");
+    } catch {
+      // Keep the idempotency key so a retry of the same form action replays safely.
+    }
+  }
+
+  async function setMatterMemberAccess(
+    memberId: string,
+    role: MatterMemberRole,
+    status: MatterMemberStatus,
+    version: number,
+  ) {
+    if (!selectedTenantId || !selectedMatterId) return;
+    const signature = `${memberId}:${role}:${status}:${version}`;
+    const previous = updateMemberAttempts.current.get(memberId);
+    const attempt =
+      previous?.signature === signature
+        ? previous
+        : { signature, key: globalThis.crypto.randomUUID() };
+    updateMemberAttempts.current.set(memberId, attempt);
+    try {
+      await updateMatterMemberMutation.mutateAsync({
+        memberId,
+        input: { role, status, expected_version: version },
+        idempotencyKey: attempt.key,
+      });
+      updateMemberAttempts.current.delete(memberId);
+      setEditedMatterMemberRoles((current) => {
+        const next = { ...current };
+        delete next[memberId];
+        return next;
+      });
+    } catch {
+      // Keep the idempotency key so a retry of the same row action replays safely.
+    }
   }
 
   function selectWorkbenchView(view: string) {
@@ -661,6 +775,17 @@ export default function LawMattersPage() {
                             matter={matter}
                             view="schedule"
                           />
+                          {currentMatterMember?.status === "active" &&
+                            selectedTenant?.membership.id && (
+                              <MatterDeadlinePanel
+                                tenantId={matter.tenant_id}
+                                matterId={matter.id}
+                                matterRole={currentMatterMember.role}
+                                currentMembershipId={
+                                  selectedTenant.membership.id
+                                }
+                              />
+                            )}
                         </TabsContent>
                       </Tabs>
 
@@ -670,12 +795,9 @@ export default function LawMattersPage() {
                         matterStatus={matter.status}
                         matterVersion={matter.version}
                         canManage={
-                          membersQuery.data?.some(
-                            (member) =>
-                              member.status === "active" &&
-                              (member.role === "owner" ||
-                                member.role === "lead"),
-                          ) ?? false
+                          currentMatterMember?.status === "active" &&
+                          (currentMatterMember.role === "owner" ||
+                            currentMatterMember.role === "lead")
                         }
                       />
 
@@ -688,6 +810,138 @@ export default function LawMattersPage() {
                             </CardTitle>
                           </CardHeader>
                           <CardContent>
+                            {canManageMatterMembers && (
+                              <div className="mb-4 space-y-3 rounded-md border p-3">
+                                <div className="flex items-center gap-2 text-sm font-medium">
+                                  <UserRoundPlusIcon className="size-4" />
+                                  {copy.addMember}
+                                </div>
+                                <p className="text-muted-foreground text-xs leading-5">
+                                  {copy.memberManagementHint}
+                                </p>
+                                <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(8rem,0.7fr)_auto]">
+                                  <Select
+                                    value={newMatterMemberId}
+                                    onValueChange={setNewMatterMemberId}
+                                    disabled={
+                                      memberCandidatesQuery.isPending ||
+                                      createMatterMemberMutation.isPending
+                                    }
+                                  >
+                                    <SelectTrigger
+                                      aria-label={copy.chooseMember}
+                                    >
+                                      <SelectValue
+                                        placeholder={copy.chooseMember}
+                                      />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {(memberCandidatesQuery.data ?? []).map(
+                                        (candidate) => (
+                                          <SelectItem
+                                            key={candidate.membership_id}
+                                            value={candidate.membership_id}
+                                          >
+                                            {candidate.display_name ??
+                                              `${copy.memberId} ${shortId(candidate.membership_id)}`}{" "}
+                                            · {candidate.tenant_role}
+                                          </SelectItem>
+                                        ),
+                                      )}
+                                    </SelectContent>
+                                  </Select>
+                                  <Select
+                                    value={newMatterMemberRole}
+                                    onValueChange={(value) =>
+                                      setNewMatterMemberRole(
+                                        value as MatterMemberRole,
+                                      )
+                                    }
+                                    disabled={
+                                      createMatterMemberMutation.isPending
+                                    }
+                                  >
+                                    <SelectTrigger aria-label={copy.caseRole}>
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {(
+                                        [
+                                          "lead",
+                                          "lawyer",
+                                          "assistant",
+                                          "viewer",
+                                        ] as MatterMemberRole[]
+                                      )
+                                        .concat(
+                                          currentMatterMember.role === "owner"
+                                            ? ["owner"]
+                                            : [],
+                                        )
+                                        .map((role) => (
+                                          <SelectItem key={role} value={role}>
+                                            {copy.roles[role]}
+                                          </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                  </Select>
+                                  <Button
+                                    onClick={() => void grantMatterAccess()}
+                                    disabled={
+                                      !newMatterMemberId ||
+                                      createMatterMemberMutation.isPending
+                                    }
+                                  >
+                                    {createMatterMemberMutation.isPending ? (
+                                      <LoaderCircleIcon className="animate-spin" />
+                                    ) : (
+                                      <UserRoundPlusIcon />
+                                    )}
+                                    {copy.addMember}
+                                  </Button>
+                                </div>
+                                {memberCandidatesQuery.isError && (
+                                  <p
+                                    role="alert"
+                                    className="text-destructive text-sm"
+                                  >
+                                    {errorMessage(
+                                      memberCandidatesQuery.error,
+                                      copy.requestFailed,
+                                    )}
+                                  </p>
+                                )}
+                                {!memberCandidatesQuery.isPending &&
+                                  !memberCandidatesQuery.isError &&
+                                  !memberCandidatesQuery.data?.length && (
+                                    <p className="text-muted-foreground text-xs">
+                                      {copy.noEligibleMembers}
+                                    </p>
+                                  )}
+                                {createMatterMemberMutation.isError && (
+                                  <p
+                                    role="alert"
+                                    className="text-destructive text-sm"
+                                  >
+                                    {errorMessage(
+                                      createMatterMemberMutation.error,
+                                      copy.requestFailed,
+                                    )}
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                            {updateMatterMemberMutation.isError && (
+                              <p
+                                role="alert"
+                                className="text-destructive mb-3 text-sm"
+                              >
+                                {errorMessage(
+                                  updateMatterMemberMutation.error,
+                                  copy.requestFailed,
+                                )}
+                              </p>
+                            )}
                             {membersQuery.isPending ? (
                               <Skeleton className="h-24 w-full" />
                             ) : membersQuery.isError ? (
@@ -711,7 +965,7 @@ export default function LawMattersPage() {
                                     key={member.id}
                                     className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
                                   >
-                                    <div className="min-w-0">
+                                    <div className="min-w-0 flex-1">
                                       <div className="text-sm font-medium">
                                         {copy.roles[member.role]}
                                       </div>
@@ -723,15 +977,127 @@ export default function LawMattersPage() {
                                         {shortId(member.membership_id)}
                                       </div>
                                     </div>
-                                    <Badge
-                                      variant={
-                                        member.status === "active"
-                                          ? "secondary"
-                                          : "outline"
-                                      }
-                                    >
-                                      {member.status}
-                                    </Badge>
+                                    <div className="flex flex-wrap items-center justify-end gap-2">
+                                      {canManageMatterMembers &&
+                                      (member.role !== "owner" ||
+                                        currentMatterMember.role ===
+                                          "owner") ? (
+                                        <>
+                                          <Select
+                                            value={
+                                              editedMatterMemberRoles[
+                                                member.id
+                                              ] ?? member.role
+                                            }
+                                            onValueChange={(value) =>
+                                              setEditedMatterMemberRoles(
+                                                (current) => ({
+                                                  ...current,
+                                                  [member.id]:
+                                                    value as MatterMemberRole,
+                                                }),
+                                              )
+                                            }
+                                            disabled={
+                                              updateMatterMemberMutation.isPending ||
+                                              member.status === "removed"
+                                            }
+                                          >
+                                            <SelectTrigger
+                                              aria-label={`${copy.caseRole}: ${shortId(member.membership_id)}`}
+                                              className="w-36"
+                                            >
+                                              <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                              {(
+                                                [
+                                                  "lead",
+                                                  "lawyer",
+                                                  "assistant",
+                                                  "viewer",
+                                                ] as MatterMemberRole[]
+                                              )
+                                                .concat(
+                                                  currentMatterMember.role ===
+                                                    "owner"
+                                                    ? ["owner"]
+                                                    : [],
+                                                )
+                                                .map((role) => (
+                                                  <SelectItem
+                                                    key={role}
+                                                    value={role}
+                                                  >
+                                                    {copy.roles[role]}
+                                                  </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                          </Select>
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            disabled={
+                                              updateMatterMemberMutation.isPending ||
+                                              (editedMatterMemberRoles[
+                                                member.id
+                                              ] ?? member.role) === member.role
+                                            }
+                                            onClick={() =>
+                                              void setMatterMemberAccess(
+                                                member.id,
+                                                editedMatterMemberRoles[
+                                                  member.id
+                                                ] ?? member.role,
+                                                member.status,
+                                                member.version,
+                                              )
+                                            }
+                                          >
+                                            <CheckIcon />
+                                            {copy.saveAccess}
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            disabled={
+                                              updateMatterMemberMutation.isPending
+                                            }
+                                            onClick={() =>
+                                              void setMatterMemberAccess(
+                                                member.id,
+                                                editedMatterMemberRoles[
+                                                  member.id
+                                                ] ?? member.role,
+                                                member.status === "active"
+                                                  ? "removed"
+                                                  : "active",
+                                                member.version,
+                                              )
+                                            }
+                                          >
+                                            {member.status === "active" ? (
+                                              <UserRoundMinusIcon />
+                                            ) : (
+                                              <UserRoundPlusIcon />
+                                            )}
+                                            {member.status === "active"
+                                              ? copy.removeAccess
+                                              : copy.restoreAccess}
+                                          </Button>
+                                        </>
+                                      ) : (
+                                        <Badge
+                                          variant={
+                                            member.status === "active"
+                                              ? "secondary"
+                                              : "outline"
+                                          }
+                                        >
+                                          {member.status}
+                                        </Badge>
+                                      )}
+                                    </div>
                                   </div>
                                 ))}
                               </div>

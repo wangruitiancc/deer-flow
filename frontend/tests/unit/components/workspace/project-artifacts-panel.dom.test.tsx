@@ -99,6 +99,45 @@ rs.mock("@/core/law", () => ({
     isFetching: false,
     refetch: rs.fn(),
   }),
+  useLawMatterDeadlineCandidateDrafts: () => ({
+    data: [],
+    isPending: false,
+    isError: false,
+  }),
+  useLawDeadlineNotificationCapabilities: () => ({
+    data: {
+      channels: {
+        in_app: {
+          selectable: true,
+          dispatch_active: false,
+          disabled_reason: null,
+          dispatch_state: "paused",
+        },
+        email: {
+          selectable: false,
+          dispatch_active: false,
+          disabled_reason: "email_not_configured",
+          dispatch_state: "unavailable",
+        },
+        wecom: {
+          selectable: false,
+          dispatch_active: false,
+          disabled_reason: "not_implemented",
+          dispatch_state: "unavailable",
+        },
+      },
+    },
+  }),
+  useLawMatterDeadlineRules: () => ({
+    data: { rules: [], unreviewed_preview_enabled: false },
+    isPending: false,
+    isError: false,
+  }),
+  useCalculateLawMatterDeadlineCandidate: () => ({
+    mutateAsync: rs.fn(),
+    isPending: false,
+    error: null,
+  }),
   useLawMatterDeadlineRecipients: () => ({ data: [], isPending: false }),
   useLawMatterDeadlineEvents: () => ({
     data: [],
@@ -132,6 +171,28 @@ rs.mock("@/core/law", () => ({
     error: null,
   }),
   useTransitionLawMatterDeadline: () => ({
+    mutate: rs.fn(),
+    isPending: false,
+    error: null,
+  }),
+  useHandoffLawMatterDeadline: () => ({
+    mutate: rs.fn(),
+    isPending: false,
+    error: null,
+  }),
+  useLawMatterNotificationIncidents: () => ({
+    data: [],
+    isPending: false,
+    isError: false,
+    isFetching: false,
+    refetch: rs.fn(),
+  }),
+  useClaimLawMatterNotificationIncident: () => ({
+    mutate: rs.fn(),
+    isPending: false,
+    error: null,
+  }),
+  useCloseLawMatterNotificationIncident: () => ({
     mutate: rs.fn(),
     isPending: false,
     error: null,
