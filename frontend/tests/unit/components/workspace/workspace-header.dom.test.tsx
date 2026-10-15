@@ -46,6 +46,11 @@ describe("workspace header actions", () => {
   });
   it("keeps search usable without fabricating a notification count or a cross-matter link", () => {
     const search = mount();
+    const legalHome = screen.getAllByRole("link", {
+      name: "Matrix Law · 法律工作",
+    });
+    expect(legalHome).toHaveLength(1);
+    expect(legalHome[0]?.getAttribute("href")).toBe("/workspace/law");
     expect(screen.queryByRole("link", { name: "案件提醒与日程" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "搜索法律项目" }));
     expect(search).toHaveBeenCalledTimes(1);

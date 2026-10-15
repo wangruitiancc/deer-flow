@@ -65,7 +65,7 @@ describe("Matrix-Law product boundary", () => {
     expect(sidebar).not.toContain("RecentChatList");
     expect(sidebar).not.toContain("WorkspaceNavChatList");
     expect(sidebar).toContain("LegalProjectTree");
-    expect(header.match(/\{t\.sidebar\.lawMatters\}/g)).toHaveLength(1);
+    expect(header.match(/href="\/workspace\/law"/g)).toHaveLength(1);
     expect(header).not.toContain("/workspace/chats/new");
     expect(palette).not.toContain("/workspace/chats/new");
     expect(chatPage).not.toContain("/workspace/chats/new");
