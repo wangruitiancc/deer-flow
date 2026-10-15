@@ -1,0 +1,5 @@
+/* The protected Markdown renderer strips arbitrary author-supplied classes.
+   Scan the actual renderer and highlighter, not the old generic page safelist. */
+@source "../../node_modules/streamdown/dist/index.js";
+@source "../../node_modules/@streamdown/code/dist/*.js";
+@source "../../node_modules/@streamdown/mermaid/dist/*.js";

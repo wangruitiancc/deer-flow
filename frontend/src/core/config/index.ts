@@ -1,5 +1,3 @@
-import { env } from "@/env";
-
 function getBaseOrigin() {
   if (typeof window !== "undefined") {
     return window.location.origin;
@@ -8,22 +6,21 @@ function getBaseOrigin() {
   return "http://localhost:2026";
 }
 
+// Public string settings are validated by env.js during Next configuration.
+// Direct references let Next inline them without shipping the validator itself.
 export function getBackendBaseURL() {
-  if (env.NEXT_PUBLIC_BACKEND_BASE_URL) {
-    return new URL(env.NEXT_PUBLIC_BACKEND_BASE_URL, getBaseOrigin())
-      .toString()
-      .replace(/\/+$/, "");
+  const configured = process.env.NEXT_PUBLIC_BACKEND_BASE_URL;
+  if (configured) {
+    return new URL(configured, getBaseOrigin()).toString().replace(/\/+$/, "");
   } else {
     return "";
   }
 }
 
 export function getLangGraphBaseURL(isMock?: boolean) {
-  if (env.NEXT_PUBLIC_LANGGRAPH_BASE_URL) {
-    return new URL(
-      env.NEXT_PUBLIC_LANGGRAPH_BASE_URL,
-      getBaseOrigin(),
-    ).toString();
+  const configured = process.env.NEXT_PUBLIC_LANGGRAPH_BASE_URL;
+  if (configured) {
+    return new URL(configured, getBaseOrigin()).toString();
   } else if (isMock) {
     if (typeof window !== "undefined") {
       return `${window.location.origin}/mock/api`;

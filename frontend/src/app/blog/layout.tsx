@@ -1,3 +1,4 @@
+import "@/styles/globals.css";
 import "katex/dist/katex.min.css";
 
 import { Layout } from "nextra-theme-docs";

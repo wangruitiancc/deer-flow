@@ -1,3 +1,4 @@
+import "@/styles/admin.css";
 import { redirect } from "next/navigation";
 
 import { AuthProvider } from "@/core/auth/AuthProvider";

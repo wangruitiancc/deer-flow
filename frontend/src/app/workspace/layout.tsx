@@ -1,3 +1,4 @@
+import "@/styles/workbench.css";
 import "katex/dist/katex.min.css";
 import "streamdown/styles.css";
 import "@/styles/law-workspace.css";

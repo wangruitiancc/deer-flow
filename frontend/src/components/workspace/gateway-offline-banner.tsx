@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 
 import { useAuth } from "@/core/auth/AuthProvider";
-import { userSchema, type User } from "@/core/auth/types";
+import type { User } from "@/core/auth/types";
 import { useI18n } from "@/core/i18n/hooks";
 
 import {
@@ -40,6 +40,7 @@ export function GatewayOfflineBanner({
     // for the entire lifetime of the page (gatewayUnavailable is a
     // server-rendered prop and stays true until a full reload).
     if (user !== null) return;
+    let cancelled = false;
 
     const probe = async () => {
       if (inFlightRef.current) return;
@@ -58,6 +59,7 @@ export function GatewayOfflineBanner({
         if (res.ok) {
           try {
             const data = await res.json();
+            const { userSchema } = await import("@/core/auth/types");
             const parsed = userSchema.safeParse(data);
             if (parsed.success) parsedUser = parsed.data;
           } catch (err) {
@@ -74,6 +76,7 @@ export function GatewayOfflineBanner({
         inFlightRef.current = false;
       }
 
+      if (cancelled) return;
       const action = decideProbeAction(
         authFailuresRef.current,
         classifyProbe(res, errored, parsedUser),
@@ -98,6 +101,7 @@ export function GatewayOfflineBanner({
       void probe();
     }, OFFLINE_BANNER_RETRY_INTERVAL_MS);
     return () => {
+      cancelled = true;
       window.clearInterval(handle);
     };
   }, [gatewayUnavailable, user, applyUser, refreshUser]);

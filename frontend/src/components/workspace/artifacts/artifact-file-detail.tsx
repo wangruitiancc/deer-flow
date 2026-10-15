@@ -42,7 +42,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { CodeEditor } from "@/components/workspace/code-editor";
 import {
   ArtifactRequestError,
   updateArtifactContent,
@@ -93,6 +92,9 @@ import {
 import { useArtifacts } from "./context";
 
 const WRITE_FILE_PREVIEW_REFRESH_INTERVAL_MS = 3000;
+const CodeEditor = lazy(() =>
+  import("../code-editor").then((module) => ({ default: module.CodeEditor })),
+);
 const MarkdownRichEditor = lazy(() =>
   import("./markdown-rich-editor").then((module) => ({
     default: module.MarkdownRichEditor,
@@ -836,24 +838,32 @@ export function ArtifactFileDetail({
             effectiveViewMode === "code" &&
             !truncated &&
             !isLoading && (
-              <CodeEditor
-                className="size-full resize-none rounded-none border-none"
-                value={editorContent ?? ""}
-                readonly={!isEditing}
-                disabled={thread.isLoading || isSaving}
-                autoFocus={isEditing}
-                onChange={(nextContent) => {
-                  setDrafts((current) => ({
-                    ...current,
-                    [filepath]: {
-                      ...(current[filepath] ?? activeDraft),
-                      draftContent: nextContent,
-                    },
-                  }));
-                }}
-                onSave={() => void handleSave()}
-                language={language}
-              />
+              <Suspense
+                fallback={
+                  <pre className="size-full overflow-auto p-4 font-mono text-sm whitespace-pre-wrap">
+                    {editorContent ?? ""}
+                  </pre>
+                }
+              >
+                <CodeEditor
+                  className="size-full resize-none rounded-none border-none"
+                  value={editorContent ?? ""}
+                  readonly={!isEditing}
+                  disabled={thread.isLoading || isSaving}
+                  autoFocus={isEditing}
+                  onChange={(nextContent) => {
+                    setDrafts((current) => ({
+                      ...current,
+                      [filepath]: {
+                        ...(current[filepath] ?? activeDraft),
+                        draftContent: nextContent,
+                      },
+                    }));
+                  }}
+                  onSave={() => void handleSave()}
+                  language={language}
+                />
+              </Suspense>
             )}
           {isCodeFile &&
             !error &&

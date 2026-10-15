@@ -30,6 +30,20 @@ function renderSharedMarkdown(content: string) {
   );
 }
 
+test("protected Markdown does not depend on arbitrary authored utility classes", () => {
+  const content =
+    '<span class="text-neutral-950 px-24">Synthetic text</span>\n\n## Heading\n\n- [x] Checked\n\n| Item | Value |\n| --- | --- |\n| A | B |';
+  for (const render of [renderSharedMarkdown, renderArtifactMarkdown]) {
+    const html = render(content);
+    expect(html).toContain("Synthetic text");
+    expect(html).toContain("Heading");
+    expect(html).toContain("<table");
+    expect(html).toContain('type="checkbox"');
+    expect(html).not.toContain("text-neutral-950");
+    expect(html).not.toContain("px-24");
+  }
+});
+
 // Mirrors the memory settings page: shared preset plus the safe link
 // component it passes for stored/LLM-generated summary content.
 function renderMemorySummaryMarkdown(content: string) {

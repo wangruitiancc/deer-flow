@@ -8,7 +8,8 @@ import {
 } from "@testing-library/react";
 
 import { GatewayOfflineBanner } from "@/components/workspace/gateway-offline-banner";
-import { AuthProvider } from "@/core/auth/AuthProvider";
+import { AuthProvider, useAuth } from "@/core/auth/AuthProvider";
+import { userSchema } from "@/core/auth/types";
 
 // AuthProvider pulls useRouter/usePathname from next/navigation. Hand it a
 // no-op router so logout()'s `router.push("/")` stays inert under happy-dom
@@ -94,6 +95,49 @@ function renderBanner() {
 }
 
 describe("GatewayOfflineBanner logout recovery (#3001)", () => {
+  it("discards a recovery response after its effect has been retired", async () => {
+    let resolveResponse: (response: Response) => void = () => {
+      throw new Error("probe not started");
+    };
+    rs.spyOn(globalThis, "fetch").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveResponse = resolve;
+        }),
+    );
+    const parsed = rs.spyOn(userSchema, "safeParse");
+    function Identity() {
+      return (
+        <output aria-label="current identity">
+          {useAuth().user?.email ?? "signed-out"}
+        </output>
+      );
+    }
+    const tree = (unavailable: boolean) => (
+      <AuthProvider initialUser={null}>
+        <GatewayOfflineBanner gatewayUnavailable={unavailable} />
+        <Identity />
+      </AuthProvider>
+    );
+    const view = render(tree(true));
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+    view.rerender(tree(false));
+    resolveResponse(
+      new Response(
+        JSON.stringify({
+          id: "late-synthetic",
+          email: "late@example.test",
+          system_role: "user",
+        }),
+        { status: 200 },
+      ),
+    );
+    await waitFor(() => expect(parsed).toHaveBeenCalled());
+    expect(screen.getByLabelText("current identity").textContent).toBe(
+      "signed-out",
+    );
+  });
+
   it("renders a <button> (not a GET-style link) as the logout affordance", async () => {
     installFetch();
     renderBanner();

@@ -11,6 +11,7 @@ import {
   ShieldCheckIcon,
   UsersIcon,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
@@ -38,14 +39,6 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { MatterLegalHoldPanel } from "@/components/workspace/law/matter-legal-hold-panel";
-import { MatterOverviewDashboard } from "@/components/workspace/law/matter-overview-dashboard";
-import {
-  MatterCaseAnalysisPanel,
-  MatterLitigationStrategyPanel,
-  MatterProposalReviewPanel,
-  MatterWorkProductList,
-} from "@/components/workspace/law/matter-structured-work-product-panel";
 import {
   WorkspaceBody,
   WorkspaceContainer,
@@ -68,6 +61,59 @@ import {
 } from "@/core/law";
 import { pathOfThread } from "@/core/threads/utils";
 import { cn } from "@/lib/utils";
+
+function WorkProductLoading() {
+  const { t } = useI18n();
+  return (
+    <p role="status" className="text-muted-foreground py-4 text-xs">
+      {t.common.loading}
+    </p>
+  );
+}
+
+const MatterOverviewDashboard = dynamic(
+  () =>
+    import("@/components/workspace/law/matter-overview-dashboard").then(
+      (module) => module.MatterOverviewDashboard,
+    ),
+  { loading: WorkProductLoading },
+);
+const MatterLegalHoldPanel = dynamic(
+  () =>
+    import("@/components/workspace/law/matter-legal-hold-panel").then(
+      (module) => module.MatterLegalHoldPanel,
+    ),
+  { loading: WorkProductLoading },
+);
+
+const MatterCaseAnalysisPanel = dynamic(
+  () =>
+    import("@/components/workspace/law/matter-structured-work-product-panel").then(
+      (module) => module.MatterCaseAnalysisPanel,
+    ),
+  { loading: WorkProductLoading },
+);
+const MatterLitigationStrategyPanel = dynamic(
+  () =>
+    import("@/components/workspace/law/matter-structured-work-product-panel").then(
+      (module) => module.MatterLitigationStrategyPanel,
+    ),
+  { loading: WorkProductLoading },
+);
+const MatterProposalReviewPanel = dynamic(
+  () =>
+    import("@/components/workspace/law/matter-structured-work-product-panel").then(
+      (module) => module.MatterProposalReviewPanel,
+    ),
+  { loading: WorkProductLoading },
+);
+const MatterWorkProductList = dynamic(
+  () =>
+    import("@/components/workspace/law/matter-structured-work-product-panel").then(
+      (module) => module.MatterWorkProductList,
+    ),
+  { loading: WorkProductLoading },
+);
 
 const COPY = {
   "en-US": {

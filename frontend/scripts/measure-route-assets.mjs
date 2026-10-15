@@ -71,6 +71,24 @@ export function evaluateBudgets(measurements, budgets) {
       failures.push(`${route}: ${actual.error}`);
       continue;
     }
+    if (limits.redirectTo) {
+      if (
+        actual.kind !== "redirect" ||
+        actual.target !== limits.redirectTo ||
+        actual.status !== limits.redirectStatus
+      ) {
+        failures.push(
+          `${route}: expected HTTP ${limits.redirectStatus} redirect to ${limits.redirectTo}`,
+        );
+      }
+      continue;
+    }
+    if (actual.kind === "redirect") {
+      failures.push(
+        `${route}: a redirect cannot replace page asset measurement`,
+      );
+      continue;
+    }
     for (const kind of ["css", "js"]) {
       if (actual[kind] <= limits[kind]) continue;
       const overage = actual[kind] - limits[kind];
@@ -85,6 +103,12 @@ export function evaluateBudgets(measurements, budgets) {
 export function formatMeasurementSummary(measurements) {
   const lines = ["Route asset summary"];
   for (const [route, measurement] of Object.entries(measurements)) {
+    if (measurement.kind === "redirect") {
+      lines.push(
+        `${route} [${measurement.buildMode}] REDIRECT ${measurement.status} to ${measurement.target}; no page assets`,
+      );
+      continue;
+    }
     if (measurement.error) {
       lines.push(
         `${route} [${measurement.buildMode}] UNMEASURED: ${measurement.error}`,
@@ -147,6 +171,30 @@ async function waitForServer(baseUrl, child) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error("Timed out waiting for the Next.js production server");
+}
+
+export async function measureRedirect(
+  baseUrl,
+  route,
+  expected,
+  request = fetch,
+) {
+  const source = new URL(route, baseUrl);
+  const target = new URL(expected.redirectTo, baseUrl);
+  if (source.origin !== target.origin || target.username || target.password) {
+    throw new Error(`${route} has an invalid redirect contract`);
+  }
+  const response = await request(source.href, { redirect: "manual" });
+  const location = response.headers.get("location");
+  if (
+    response.status !== expected.redirectStatus ||
+    !location ||
+    new URL(location, source).href !== target.href
+  ) {
+    throw new Error(`${route} did not preserve its retired-page redirect`);
+  }
+  await response.body?.cancel();
+  return { kind: "redirect", status: response.status, target: target.pathname };
 }
 
 export async function readRouteHtml(baseUrl, route, request = fetch) {
@@ -230,7 +278,7 @@ async function measureRoute(baseUrl, route) {
   };
 }
 
-async function measureBuild(routes, staticWebsiteOnly) {
+async function measureBuild(routes, staticWebsiteOnly, budgets) {
   const env = createBuildEnvironment(staticWebsiteOnly);
   await run("pnpm", ["exec", "next", "build"], {
     env,
@@ -262,8 +310,11 @@ async function measureBuild(routes, staticWebsiteOnly) {
     for (const route of routes) {
       const buildMode = staticWebsiteOnly ? "static-demo" : "normal";
       try {
+        const result = budgets[route]?.redirectTo
+          ? await measureRedirect(baseUrl, route, budgets[route])
+          : await measureRoute(baseUrl, route);
         measurements[route] = {
-          ...(await measureRoute(baseUrl, route)),
+          ...result,
           buildMode,
         };
       } catch (error) {
@@ -291,11 +342,15 @@ async function measureBuild(routes, staticWebsiteOnly) {
 
 async function main() {
   const check = process.argv.includes("--check");
+  const budgets = JSON.parse(
+    await readFile(path.join(frontendDir, "performance-budgets.json"), "utf8"),
+  );
   const measurements = {
-    ...(await measureBuild(["/login"], false)),
+    ...(await measureBuild(["/login"], false, budgets)),
     ...(await measureBuild(
       ROUTES.filter((route) => route !== "/login"),
       true,
+      budgets,
     )),
   };
   await writeFile(
@@ -306,12 +361,6 @@ async function main() {
   process.stdout.write(`${formatMeasurementSummary(measurements)}\n`);
 
   if (check) {
-    const budgets = JSON.parse(
-      await readFile(
-        path.join(frontendDir, "performance-budgets.json"),
-        "utf8",
-      ),
-    );
     const failures = evaluateBudgets(measurements, budgets);
     if (failures.length > 0) {
       throw new Error(`Route asset budgets failed:\n${failures.join("\n")}`);

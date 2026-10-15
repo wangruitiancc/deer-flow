@@ -28,9 +28,7 @@ export function assertNever(x: never): never {
   throw new Error(`Unexpected auth result: ${JSON.stringify(x)}`);
 }
 
-export function buildLoginUrl(returnPath: string): string {
-  return `/login?next=${encodeURIComponent(returnPath)}`;
-}
+export { buildLoginUrl } from "./login-url";
 
 // ── Backend error response parsing ────────────────────────────────
 

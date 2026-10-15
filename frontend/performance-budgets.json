@@ -6,6 +6,16 @@
     "css": 190000,
     "js": 4100000
   },
-  "/en/docs": { "css": 270000, "js": 4200000 },
-  "/blog/posts": { "css": 270000, "js": 4200000 }
+  "/en/docs": {
+    "css": 270000,
+    "js": 4200000,
+    "redirectTo": "/workspace/law",
+    "redirectStatus": 307
+  },
+  "/blog/posts": {
+    "css": 270000,
+    "js": 4200000,
+    "redirectTo": "/workspace/law",
+    "redirectStatus": 307
+  }
 }

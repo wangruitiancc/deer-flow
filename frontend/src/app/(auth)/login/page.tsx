@@ -25,8 +25,7 @@ import {
   canCreateRegularAccount,
   fetchSetupStatus,
   type SetupStatusResponse,
-} from "@/core/auth/setup";
-import { parseAuthError, userSchema } from "@/core/auth/types";
+} from "@/core/auth/setup-status";
 import { useI18n } from "@/core/i18n/hooks";
 
 type MFASetupResponse = {
@@ -154,6 +153,7 @@ export default function LoginPage() {
       setError("登录成功，但无法读取账户角色，请重新登录。");
       return;
     }
+    const { userSchema } = await import("@/core/auth/types");
     const parsedUser = userSchema.safeParse(await meResponse.json());
     if (!parsedUser.success) {
       setError("账户角色数据异常，请联系平台运营人员。");
@@ -229,6 +229,7 @@ export default function LoginPage() {
         credentials: "include",
       });
       if (!response.ok) {
+        const { parseAuthError } = await import("@/core/auth/types");
         const authError = parseAuthError(await response.json());
         setError(authError.message);
         if (ssoProviders.length > 0) setShowSsoHint(true);

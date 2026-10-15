@@ -13,8 +13,9 @@ import React, {
 
 import { isStaticWebsiteOnly } from "../static-mode";
 
+import { buildLoginUrl } from "./login-url";
 import { runAuthSessionCleanups } from "./session-lifecycle";
-import { type User, buildLoginUrl } from "./types";
+import type { User } from "./types";
 
 // Re-export for consumers
 export type { User };
@@ -100,9 +101,9 @@ export function AuthProvider({ children, initialUser }: AuthProviderProps) {
           router.push(buildLoginUrl(pathname));
         }
       }
-      } catch (err) {
-        console.error("Failed to refresh user:", err);
-        await applyUser(null);
+    } catch (err) {
+      console.error("Failed to refresh user:", err);
+      await applyUser(null);
     } finally {
       setIsLoading(false);
     }

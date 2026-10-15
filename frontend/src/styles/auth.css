@@ -1,0 +1,8 @@
+@import "tailwindcss" source(none);
+@import "tw-animate-css";
+@import "./theme.css";
+@import "./control-sources.css";
+@source "../app/(auth)";
+@source "../components/auth";
+@source "../components/workspace/gateway-offline-banner.tsx";
+@source "../components/workspace/gateway-offline-fallback.tsx";

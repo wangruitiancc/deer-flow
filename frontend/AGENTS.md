@@ -347,3 +347,32 @@ predefined city ID may be stored; it requests no geolocation or service access.
 `tests/fixtures/workspace-ui-server.mjs` is a loopback-only read fixture for visual
 QA; it has no real authentication, database, model or microphone and refuses writes.
 Do not use that fixture as backend, browser-capture or production evidence.
+
+### Route-owned stylesheet and interaction bundles
+
+`styles/theme.css` is the shared token/reset/component-rule source. Root layout
+contains providers and redirects, but does not ship all Tailwind utilities to
+all routes. Auth, platform admin and workspace layouts import `auth.css`,
+`admin.css` and `workbench.css`; other HTML layouts explicitly import the
+compatibility `globals.css`. Every rendered page must have an owning layout.
+`workbench.css` lists the AI elements reachable from application imports; update
+its source list when adding one. `style-ownership.test.ts` checks page coverage,
+transitive AI imports and compiled renderer utilities. Do not edit generated UI
+primitives to change ownership. The protected Markdown pipeline strips arbitrary
+authored utility classes, so workspace uses actual renderer sources rather than
+the old broad page safelist; generic standalone routes retain that compatibility
+safelist. Keep sanitizer, formula, table and code tests passing.
+
+Keep `import type` for shell-only auth schema types: with verbatim module syntax,
+inline type-only specifiers can retain an empty side-effect import and eagerly
+load the validator. Login/recovery still use the same schema before applying an
+identity. Public optional string settings are inlined directly by Next; full env
+validation remains in `env.js` and Next configuration. Never infer authorization
+from these URL/build helpers. Only a requested command menu/editor/matter panel
+loads its heavy UI. Preserve keyboard listeners, closable loading states, drafts,
+expected-version checks and active capture mounts.
+
+`perf:check` retains all numeric ceilings. The disabled generic docs/blog entries
+have explicit HTTP307 contracts in `performance-budgets.json`; they must still
+redirect to `/workspace/law`. A returned page or another destination fails that
+contract. These are redirect checks, never zero-byte page measurements.

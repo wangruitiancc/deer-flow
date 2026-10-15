@@ -193,3 +193,11 @@ the terminal answer or change authoritative history seq to hide late arrival.
 Matrix Law right workspace (2026-10-03): `law/ProjectArtifactsPanel` owns the overview and document tabs. Keep opened file/evidence components mounted while hidden so switching tabs, expanding and returning do not recreate editors. `ChatBox` uses the same mounted desktop tree for the mobile fullscreen view; closed workspaces are inert. Native artifact drafts remain in `ArtifactsProvider`; an explicit dirty close preserves the provider draft, and evidence close asks the user to confirm save state. Scope changes remount the document workspace. Structured human upload metadata is an attachment display only, not proof the model used it or a project evidence binding. Project material opened here is labeled as opened, not used. Do not infer mappings from filenames or parsed document text.
 
 `workspace-resize-provider.tsx` owns the left splitter, keyboard increments and a bounded width preference; the native right splitter owns the chat/document ratio. Store only numeric widths as layout preferences. Selecting an artifact no longer collapses the project sidebar. Both dividers must remain draggable, and expanded/mobile views must restore the same thread/editor DOM and keep keyboard focus within the modal workspace.
+
+The route utility entries in `styles/` share `theme.css`. Keep all source-owned
+layouts explicit when adding a page; do not restore a global all-route utility
+import in root layout. Add newly imported AI elements to `workbench.css` and run
+`tests/unit/scripts/style-ownership.test.ts`. Auth shell type-only schema imports
+must be erased completely (`import type`); validation itself remains mandatory
+when processing login/recovery responses. Heavy overview/editor/command dialogs
+load on actual use without moving native state or authorization into another store.

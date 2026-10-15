@@ -5,11 +5,85 @@ import {
   evaluateBudgets,
   extractAssetPaths,
   formatMeasurementSummary,
+  measureRedirect,
   readRouteHtml,
   ROUTES,
 } from "../../../scripts/measure-route-assets.mjs";
 
 describe("route asset measurement", () => {
+  it("records a retired route as a checked redirect without fake zero-byte assets", async () => {
+    const contract = {
+      redirectTo: "/workspace/law",
+      redirectStatus: 307,
+      css: 270000,
+      js: 4200000,
+    };
+    const result = await measureRedirect(
+      "http://127.0.0.1:4310",
+      "/en/docs",
+      contract,
+      async () =>
+        new Response(null, {
+          status: 307,
+          headers: { location: "/workspace/law" },
+        }),
+    );
+    expect(result).toEqual({
+      kind: "redirect",
+      status: 307,
+      target: "/workspace/law",
+    });
+    expect(
+      evaluateBudgets({ "/en/docs": result }, { "/en/docs": contract }),
+    ).toEqual([]);
+    expect(
+      formatMeasurementSummary({
+        "/en/docs": { ...result, buildMode: "static-demo" },
+      }),
+    ).toContain("REDIRECT 307 to /workspace/law; no page assets");
+  });
+
+  it("fails retired-route contracts on a served page, status change or external destination", async () => {
+    const contract = { redirectTo: "/workspace/law", redirectStatus: 307 };
+    for (const response of [
+      new Response("page", { status: 200 }),
+      new Response(null, {
+        status: 308,
+        headers: { location: "/workspace/law" },
+      }),
+      new Response(null, {
+        status: 307,
+        headers: { location: "https://example.com/workspace/law" },
+      }),
+    ]) {
+      await expect(
+        measureRedirect(
+          "http://127.0.0.1:4310",
+          "/en/docs",
+          contract,
+          async () => response,
+        ),
+      ).rejects.toThrow("retired-page redirect");
+    }
+  });
+
+  it("never treats a redirect as a passing ordinary page budget", () => {
+    expect(
+      evaluateBudgets(
+        {
+          "/login": { kind: "redirect", status: 307, target: "/workspace/law" },
+        },
+        { "/login": { css: 170000, js: 850000 } },
+      ),
+    ).toEqual(["/login: a redirect cannot replace page asset measurement"]);
+    expect(
+      evaluateBudgets(
+        { "/en/docs": { css: 1, js: 1 } },
+        { "/en/docs": { redirectTo: "/workspace/law", redirectStatus: 307 } },
+      ),
+    ).toEqual(["/en/docs: expected HTTP 307 redirect to /workspace/law"]);
+  });
+
   it("covers every approved representative route", () => {
     expect(ROUTES).toContain("/login");
   });

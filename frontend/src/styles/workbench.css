@@ -1,0 +1,24 @@
+@import "tailwindcss" source(none);
+@import "tw-animate-css";
+@import "./theme.css";
+@import "./control-sources.css";
+@import "./rich-renderer-sources.css";
+@source "../app/workspace";
+@source "../components/workspace";
+
+/* Every AI element reachable from application imports, including relative children. */
+@source "../components/ai-elements/artifact.tsx";
+@source "../components/ai-elements/chain-of-thought.tsx";
+@source "../components/ai-elements/code-block.tsx";
+@source "../components/ai-elements/conversation.tsx";
+@source "../components/ai-elements/loader.tsx";
+@source "../components/ai-elements/message.tsx";
+@source "../components/ai-elements/model-selector.tsx";
+@source "../components/ai-elements/prompt-input.tsx";
+@source "../components/ai-elements/queue.tsx";
+@source "../components/ai-elements/reasoning.tsx";
+@source "../components/ai-elements/shiki-highlight.ts";
+@source "../components/ai-elements/shimmer.tsx";
+@source "../components/ai-elements/streamdown.tsx";
+@source "../components/ai-elements/suggestion.tsx";
+@source "../components/ai-elements/task.tsx";

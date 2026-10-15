@@ -1,4 +1,4 @@
-import { buildLoginUrl } from "@/core/auth/types";
+import { buildLoginUrl } from "@/core/auth/login-url";
 
 import { UnauthorizedError } from "./errors";
 

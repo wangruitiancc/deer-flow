@@ -1,22 +1,11 @@
 "use client";
 
-import { KeyboardIcon, ScaleIcon, SettingsIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useMemo, useState } from "react";
 
-import {
-  CommandDialog,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-  CommandShortcut,
-} from "@/components/ui/command";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -25,13 +14,18 @@ import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
 
 import { useSettingsDialog } from "./settings";
 
+const CommandPaletteDialogs = lazy(() =>
+  import("./command-palette-dialogs").then((module) => ({
+    default: module.CommandPaletteDialogs,
+  })),
+);
+
 export function CommandPalette() {
   const { t } = useI18n();
   const router = useRouter();
   const { openSettings } = useSettingsDialog();
   const [open, setOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [isMac, setIsMac] = useState(false);
 
   const handleOpenLegalMatters = useCallback(() => {
     router.push("/workspace/law");
@@ -60,70 +54,36 @@ export function CommandPalette() {
 
   useGlobalShortcuts(shortcuts);
 
-  useEffect(() => {
-    setIsMac(navigator.userAgent.includes("Mac"));
-  }, []);
-  const metaKey = isMac ? "⌘" : "Ctrl+";
-  const shiftKey = isMac ? "⇧" : "Shift+";
-
+  if (!open && !shortcutsOpen) return null;
   return (
-    <>
-      <CommandDialog open={open} onOpenChange={setOpen}>
-        <CommandInput placeholder={t.shortcuts.searchActions} />
-        <CommandList>
-          <CommandEmpty>{t.shortcuts.noResults}</CommandEmpty>
-          <CommandGroup heading={t.shortcuts.actions}>
-            <CommandItem onSelect={handleOpenLegalMatters}>
-              <ScaleIcon className="mr-2 h-4 w-4" />
-              {t.sidebar.lawMatters}
-              <CommandShortcut>
-                {metaKey}
-                {shiftKey}N
-              </CommandShortcut>
-            </CommandItem>
-            <CommandItem onSelect={handleOpenSettings}>
-              <SettingsIcon className="mr-2 h-4 w-4" />
-              {t.common.settings}
-              <CommandShortcut>{metaKey},</CommandShortcut>
-            </CommandItem>
-            <CommandItem onSelect={handleShowShortcuts}>
-              <KeyboardIcon className="mr-2 h-4 w-4" />
-              {t.shortcuts.keyboardShortcuts}
-              <CommandShortcut>{metaKey}/</CommandShortcut>
-            </CommandItem>
-          </CommandGroup>
-        </CommandList>
-      </CommandDialog>
-
-      <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{t.shortcuts.keyboardShortcuts}</DialogTitle>
-            <DialogDescription>
-              {t.shortcuts.keyboardShortcutsDescription}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3 text-sm">
-            {[
-              { keys: `${metaKey}K`, label: t.shortcuts.openCommandPalette },
-              { keys: `${metaKey}${shiftKey}N`, label: t.sidebar.lawMatters },
-              { keys: `${metaKey}B`, label: t.shortcuts.toggleSidebar },
-              { keys: `${metaKey},`, label: t.common.settings },
-              {
-                keys: `${metaKey}/`,
-                label: t.shortcuts.keyboardShortcuts,
-              },
-            ].map(({ keys, label }) => (
-              <div key={keys} className="flex items-center justify-between">
-                <span className="text-muted-foreground">{label}</span>
-                <kbd className="bg-muted text-muted-foreground rounded px-2 py-0.5 font-mono text-xs">
-                  {keys}
-                </kbd>
-              </div>
-            ))}
-          </div>
-        </DialogContent>
-      </Dialog>
-    </>
+    <Suspense
+      fallback={
+        <Dialog
+          open
+          onOpenChange={(next) => {
+            if (!next) {
+              setOpen(false);
+              setShortcutsOpen(false);
+            }
+          }}
+        >
+          <DialogContent className="law-workbench" aria-describedby={undefined}>
+            <DialogHeader>
+              <DialogTitle>{t.common.loading}</DialogTitle>
+            </DialogHeader>
+          </DialogContent>
+        </Dialog>
+      }
+    >
+      <CommandPaletteDialogs
+        open={open}
+        shortcutsOpen={shortcutsOpen}
+        setOpen={setOpen}
+        setShortcutsOpen={setShortcutsOpen}
+        handleOpenLegalMatters={handleOpenLegalMatters}
+        handleOpenSettings={handleOpenSettings}
+        handleShowShortcuts={handleShowShortcuts}
+      />
+    </Suspense>
   );
 }
