@@ -335,6 +335,14 @@ the current matter's existing schedule, without invented unread counts. Show fiv
 bound conversations initially, retaining the active one, with explicit expansion.
 Only actual thread metadata can show a running indicator.
 
+Worklet PCM messages carry an additional numeric `endFrame` for W11 performance
+acceptance, identifying the exclusive last sampled render frame; delayed flushes
+must retain that sampled frame. It is not part of uploaded PCM or a new capture
+protocol. The test-only `tests/helpers/speech-preview-timing-probe.ts` observes
+time labels and numeric frame metadata without audio/text/network logging. Never
+import it into application bundles or treat its local oscillator test as target
+ASR/T44 evidence. See the helper README for clock and incomplete-run limits.
+
 `law/LegalWorkspaceTabs` and `core/law/workspace-tabs.ts` own functional view state.
 The four default functions are proofreading, speech, graph and drafting; memory,
 deadlines, authorities and overview open from the add menu. Resource selection is

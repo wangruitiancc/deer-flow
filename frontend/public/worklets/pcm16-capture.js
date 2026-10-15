@@ -9,6 +9,7 @@ class Pcm16CaptureProcessor extends AudioWorkletProcessor {
     )
       throw new Error("Invalid PCM capture sample budget");
     this.totalSamples = 0;
+    this.lastSampleFrame = 0;
     this.stopped = false;
     this.buffer = new Int16Array(16000);
     this.length = 0;
@@ -28,6 +29,7 @@ class Pcm16CaptureProcessor extends AudioWorkletProcessor {
       this.buffer[this.length] = sample < 0 ? sample * 32768 : sample * 32767;
       this.length += 1;
       this.totalSamples += 1;
+      this.lastSampleFrame = currentFrame + index + 1;
       if (this.length === this.buffer.length) this.flush();
       if (this.totalSamples === this.maxSamples) {
         this.stopped = true;
@@ -42,9 +44,10 @@ class Pcm16CaptureProcessor extends AudioWorkletProcessor {
   flush() {
     if (this.length === 0) return;
     const output = this.buffer.slice(0, this.length);
-    this.port.postMessage({ type: "pcm", samples: output.buffer }, [
-      output.buffer,
-    ]);
+    this.port.postMessage(
+      { type: "pcm", samples: output.buffer, endFrame: this.lastSampleFrame },
+      [output.buffer],
+    );
     this.length = 0;
   }
 }
