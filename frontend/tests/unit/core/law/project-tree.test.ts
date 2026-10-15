@@ -5,8 +5,9 @@ import {
   pathOfNewLawProject,
   toggleExpandedProject,
   visibleLawProjects,
+  collapsedProjectThreads,
 } from "@/core/law/project-tree";
-import type { Matter } from "@/core/law/types";
+import type { Matter, MatterThread } from "@/core/law/types";
 
 function matter(overrides: Partial<Matter> = {}): Matter {
   return {
@@ -28,6 +29,29 @@ function matter(overrides: Partial<Matter> = {}): Matter {
 }
 
 describe("legal project tree model", () => {
+  it("bounds a long conversation list while retaining the current thread and original data", () => {
+    const threads = Array.from(
+      { length: 8 },
+      (_, index) =>
+        ({
+          id: `mapping-${index}`,
+          thread_id: `thread-${index}`,
+          status: index === 7 ? "detached" : "active",
+          updated_at: `2026-10-${String(index + 1).padStart(2, "0")}T00:00:00Z`,
+        }) as MatterThread,
+    );
+    const before = JSON.stringify(threads);
+    expect(
+      collapsedProjectThreads(threads).map((thread) => thread.thread_id),
+    ).toEqual(["thread-6", "thread-5", "thread-4", "thread-3", "thread-2"]);
+    expect(
+      collapsedProjectThreads(threads, "thread-0").map(
+        (thread) => thread.thread_id,
+      ),
+    ).toEqual(["thread-6", "thread-5", "thread-4", "thread-3", "thread-0"]);
+    expect(collapsedProjectThreads(threads, "thread-7")).toHaveLength(5);
+    expect(JSON.stringify(threads)).toBe(before);
+  });
   it("builds stable project and creation links without losing legal scope", () => {
     expect(pathOfLawProject("tenant/a", "matter b")).toBe(
       "/workspace/law?tenant=tenant%2Fa&matter=matter+b",

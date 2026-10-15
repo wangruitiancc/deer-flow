@@ -1,4 +1,18 @@
-import type { Matter } from "./types";
+import type { Matter, MatterThread } from "./types";
+
+// Keep the current conversation visible even when it falls outside the short list.
+export function collapsedProjectThreads(
+  threads: readonly MatterThread[],
+  activeThreadId?: string,
+): MatterThread[] {
+  const ordered = threads
+    .filter((thread) => thread.status === "active")
+    .sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+  const visible = ordered.slice(0, 5);
+  const active = ordered.find((thread) => thread.thread_id === activeThreadId);
+  if (active && !visible.includes(active)) visible[4] = active;
+  return visible;
+}
 
 export function pathOfLawProject(tenantId: string, matterId: string): string {
   const params = new URLSearchParams({ tenant: tenantId, matter: matterId });

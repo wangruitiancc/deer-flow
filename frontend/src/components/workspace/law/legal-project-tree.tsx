@@ -4,15 +4,15 @@ import {
   ChevronRightIcon,
   FolderIcon,
   LoaderCircleIcon,
-  MessageSquareIcon,
   MoreHorizontalIcon,
   PlusIcon,
   SearchIcon,
+  SquarePenIcon,
   Trash2Icon,
 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -54,25 +54,29 @@ import {
 import { resetThreadChatAfterDelete } from "@/components/workspace/chats/use-thread-chat";
 import { useI18n } from "@/core/i18n/hooks";
 import {
-  toggleExpandedProject,
-  pathOfLawProject,
-  pathOfNewLawProject,
   useCreateMatterConversation,
   useDetachMatterConversation,
   useLawMatters,
   useLawMatterThreads,
   useLawTenants,
   useLawThreadContext,
-  visibleLawProjects,
   type Matter,
   type MatterKind,
   type MatterThread,
 } from "@/core/law";
+import {
+  collapsedProjectThreads,
+  pathOfLawProject,
+  pathOfNewLawProject,
+  toggleExpandedProject,
+  visibleLawProjects,
+} from "@/core/law/project-tree";
 import { useDeleteThread, useThreadMetadata } from "@/core/threads/hooks";
 import { pathOfThread, titleOfThread } from "@/core/threads/utils";
 import { cn } from "@/lib/utils";
 
 import { LegalProjectTreeSkeleton } from "./legal-project-tree-skeleton";
+import { NewMatterConversationButton } from "./new-matter-conversation-button";
 
 const COPY = {
   "en-US": {
@@ -105,6 +109,12 @@ const COPY = {
     retry: "Retry",
     expandProject: "Expand conversations",
     collapseProject: "Collapse conversations",
+    showMore: "Show more",
+    showLess: "Show less",
+    chooseProject: "Choose a legal project",
+    chooseProjectDescription:
+      "The new conversation will belong to the project you select.",
+    running: "Working",
     workKinds: {
       case: "Case",
       consultation: "Consultation",
@@ -142,6 +152,11 @@ const COPY = {
     retry: "重试",
     expandProject: "展开会话列表",
     collapseProject: "折叠会话列表",
+    showMore: "展开显示",
+    showLess: "收起列表",
+    chooseProject: "选择会话所属案件",
+    chooseProjectDescription: "新会话会保存在你选择的法律项目中。",
+    running: "正在处理",
     workKinds: {
       case: "案件",
       consultation: "法律咨询",
@@ -237,8 +252,13 @@ function ConversationLink({
         title={title}
       >
         <Link className="pr-7" href={pathOfThread(mapping.thread_id)}>
-          <MessageSquareIcon />
-          <span>{title}</span>
+          <span className="min-w-0 flex-1 truncate">{title}</span>
+          {threadQuery.data?.status === "busy" && (
+            <LoaderCircleIcon
+              aria-label={copy.running}
+              className="text-muted-foreground size-3 shrink-0 animate-spin"
+            />
+          )}
         </Link>
       </SidebarMenuSubButton>
       {canOfferAction && (
@@ -331,10 +351,14 @@ function ProjectTreeItem({
     expanded ? matter.id : null,
   );
   const conversationMutation = useCreateMatterConversation(tenantId, matter.id);
-  const activeThreads = threadsQuery.data?.filter(
-    (mapping) => mapping.status === "active",
-  );
+  const [showAll, setShowAll] = useState(false);
+  const activeThreads = threadsQuery.data
+    ?.filter((mapping) => mapping.status === "active")
+    .sort((left, right) => right.updated_at.localeCompare(left.updated_at));
   const contextLabel = matter.case_number ?? workKinds[matter.kind];
+  const visibleThreads = showAll
+    ? activeThreads
+    : collapsedProjectThreads(activeThreads ?? [], activeThreadId);
 
   async function createConversation() {
     try {
@@ -367,15 +391,12 @@ function ProjectTreeItem({
           type="button"
           isActive={matter.id === activeMatterId}
           onClick={onOpenProject}
-          className="h-auto min-h-8 min-w-0 flex-1 items-start py-1.5"
+          className="h-8 min-w-0 flex-1 items-center pr-6"
           title={`${matter.title} · ${contextLabel}`}
         >
-          <FolderIcon className="mt-0.5" />
+          <FolderIcon />
           <span className="min-w-0 flex-1">
             <span className="block truncate">{matter.title}</span>
-            <span className="text-muted-foreground block truncate text-[11px] font-normal">
-              {contextLabel}
-            </span>
           </span>
         </SidebarMenuButton>
       </div>
@@ -418,18 +439,32 @@ function ProjectTreeItem({
               </span>
             </SidebarMenuSubItem>
           ) : (
-            activeThreads.map((mapping) => (
-              <ConversationLink
-                key={mapping.id}
-                tenantId={tenantId}
-                matterId={matter.id}
-                mapping={mapping}
-                activeThreadId={activeThreadId}
-                currentMembershipId={currentMembershipId}
-                untitledLabel={copy.untitledConversation}
-                copy={copy}
-              />
-            ))
+            <>
+              {visibleThreads?.map((mapping) => (
+                <ConversationLink
+                  key={mapping.id}
+                  tenantId={tenantId}
+                  matterId={matter.id}
+                  mapping={mapping}
+                  activeThreadId={activeThreadId}
+                  currentMembershipId={currentMembershipId}
+                  untitledLabel={copy.untitledConversation}
+                  copy={copy}
+                />
+              ))}
+              {activeThreads.length > 5 && (
+                <SidebarMenuSubItem>
+                  <button
+                    type="button"
+                    className="law-tree-more"
+                    aria-expanded={showAll}
+                    onClick={() => setShowAll((current) => !current)}
+                  >
+                    {showAll ? copy.showLess : copy.showMore}
+                  </button>
+                </SidebarMenuSubItem>
+              )}
+            </>
           )}
         </SidebarMenuSub>
       )}
@@ -437,7 +472,13 @@ function ProjectTreeItem({
   );
 }
 
-export function LegalProjectTree() {
+export function LegalProjectTree({
+  searchRequest = 0,
+  onSearchHandled,
+}: {
+  searchRequest?: number;
+  onSearchHandled?: () => void;
+}) {
   const { locale } = useI18n();
   const copy = COPY[locale];
   const router = useRouter();
@@ -453,7 +494,19 @@ export function LegalProjectTree() {
     () => new Set(),
   );
   const [searchQuery, setSearchQuery] = useState("");
+  const [chooseProjectOpen, setChooseProjectOpen] = useState(false);
+  const searchInput = useRef<HTMLInputElement>(null);
   const mattersQuery = useLawMatters(selectedTenantId);
+  useEffect(() => {
+    if (searchRequest > 0 && searchInput.current) {
+      searchInput.current.focus();
+      onSearchHandled?.();
+    }
+  }, [searchRequest, onSearchHandled]);
+  useEffect(() => {
+    setChooseProjectOpen(false);
+    setSearchQuery("");
+  }, [selectedTenantId]);
 
   useEffect(() => {
     const context = contextQuery.data;
@@ -489,9 +542,75 @@ export function LegalProjectTree() {
   const currentMembershipId = tenantsQuery.data?.find(
     (item) => item.tenant.id === selectedTenantId,
   )?.membership.id;
+  const currentMatterId =
+    contextQuery.data?.tenant_id === selectedTenantId
+      ? contextQuery.data.matter_id
+      : routeTenantId === selectedTenantId
+        ? routeMatterId
+        : null;
+  const currentMatter = mattersQuery.data?.find(
+    (matter) => matter.id === currentMatterId && matter.status !== "archived",
+  );
 
   return (
     <>
+      <div className="law-navigation-actions">
+        {currentMatter && selectedTenantId ? (
+          <NewMatterConversationButton
+            key={`${selectedTenantId}:${currentMatter.id}`}
+            tenantId={selectedTenantId}
+            matterId={currentMatter.id}
+            label={copy.newConversation}
+            title={`${copy.newConversation} · ${currentMatter.title}`}
+          />
+        ) : (
+          <button
+            type="button"
+            className="law-new-conversation"
+            onClick={() => setChooseProjectOpen(true)}
+            disabled={
+              tenantsQuery.isPending ||
+              mattersQuery.isPending ||
+              !selectedTenantId
+            }
+          >
+            <SquarePenIcon className="size-4" strokeWidth={1.6} />
+            <span>{copy.newConversation}</span>
+          </button>
+        )}
+      </div>
+      <Dialog open={chooseProjectOpen} onOpenChange={setChooseProjectOpen}>
+        <DialogContent className="law-workbench sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{copy.chooseProject}</DialogTitle>
+            <DialogDescription>
+              {copy.chooseProjectDescription}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-72 overflow-y-auto">
+            {selectedTenantId &&
+              visibleLawProjects(mattersQuery.data ?? [], "").map((matter) => (
+                <NewMatterConversationButton
+                  key={`${selectedTenantId}:${matter.id}`}
+                  tenantId={selectedTenantId}
+                  matterId={matter.id}
+                  label={matter.title}
+                  onCreated={() => setChooseProjectOpen(false)}
+                />
+              ))}
+            {visibleLawProjects(mattersQuery.data ?? [], "").length === 0 && (
+              <Link
+                href={pathOfNewLawProject(selectedTenantId)}
+                className="law-new-conversation"
+                onClick={() => setChooseProjectOpen(false)}
+              >
+                <PlusIcon className="size-4" />
+                {copy.newProject}
+              </Link>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
       <SidebarGroup className="pb-0 group-data-[collapsible=icon]:hidden">
         <SidebarGroupLabel>{copy.organization}</SidebarGroupLabel>
         <SidebarGroupContent className="space-y-2 px-1">
@@ -521,6 +640,7 @@ export function LegalProjectTree() {
           <div className="relative">
             <SearchIcon className="text-muted-foreground pointer-events-none absolute top-2 left-2 size-4" />
             <SidebarInput
+              ref={searchInput}
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
               placeholder={copy.search}

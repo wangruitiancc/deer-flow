@@ -630,6 +630,58 @@
 }
 
 /* The activity rail never collapses. Only the adjacent matter tree slides away. */
+.law-navigation-actions {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--sidebar);
+  flex-shrink: 0;
+  padding: 8px 12px 12px;
+  border-bottom: 1px solid var(--sidebar-border);
+}
+.law-new-conversation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 500;
+}
+.law-new-conversation:hover,
+.law-tree-more:hover {
+  background: var(--sidebar-accent);
+}
+.law-new-conversation:focus-visible,
+.law-tree-more:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.law-new-conversation:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.law-tree-more {
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: var(--muted-foreground);
+  text-align: left;
+  font-size: 12px;
+}
+.law-tree-panel [data-sidebar="menu-sub"] {
+  margin-left: 20px;
+  padding-left: 8px;
+  border-left: none;
+}
+.law-tree-panel [data-sidebar="menu-sub-button"] {
+  height: 29px;
+  font-size: 13px;
+}
 .law-activity-rail {
   position: relative;
   z-index: 20;

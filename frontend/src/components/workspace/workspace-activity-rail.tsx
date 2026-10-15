@@ -4,6 +4,7 @@ import {
   Building2Icon,
   GaugeIcon,
   HomeIcon,
+  SearchIcon,
   Settings2Icon,
 } from "lucide-react";
 import Link from "next/link";
@@ -22,7 +23,7 @@ import { cn } from "@/lib/utils";
 import { useSettingsDialog } from "./settings";
 import { WorkspaceNavMenu } from "./workspace-nav-menu";
 
-export function WorkspaceActivityRail() {
+export function WorkspaceActivityRail({ onSearch }: { onSearch?: () => void }) {
   const { open, openMobile, isMobile } = useSidebar();
   const expanded = isMobile ? openMobile : open;
   const pathname = usePathname();
@@ -98,6 +99,22 @@ export function WorkspaceActivityRail() {
           </Tooltip>
         ))}
       </div>
+      {onSearch && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-muted-foreground mt-1 size-9 rounded-lg"
+              aria-label="展开并搜索案件"
+              onClick={onSearch}
+            >
+              <SearchIcon className="size-[18px]" strokeWidth={1.7} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="right">搜索案件</TooltipContent>
+        </Tooltip>
+      )}
       <div className="mt-auto flex flex-col items-center gap-2 pb-2">
         <Tooltip>
           <TooltipTrigger asChild>

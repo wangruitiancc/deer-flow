@@ -326,6 +326,15 @@ and collapses off-canvas independently. Existing numeric tree-width preferences
 remain valid. Keep toggle/settings/account controls in the rail and a close
 control inside the mobile drawer. Separator coordinates include the rail offset. Keep generated `ui/` primitives unchanged.
 
+The tree's primary New conversation action uses the existing create-and-bind mutation,
+never a generic unbound chat. Without a selected matter, ask for an authorized project.
+Key the mutation control by tenant/matter; guard duplicate clicks and discard late UI
+navigation after unmount. Header and rail search share a consumed focus request so
+reopening a mobile drawer does not replay an old search. The header bell links to
+the current matter's existing schedule, without invented unread counts. Show five
+bound conversations initially, retaining the active one, with explicit expansion.
+Only actual thread metadata can show a running indicator.
+
 `law/LegalWorkspaceTabs` and `core/law/workspace-tabs.ts` own functional view state.
 The four default functions are proofreading, speech, graph and drafting; memory,
 deadlines, authorities and overview open from the add menu. Resource selection is
