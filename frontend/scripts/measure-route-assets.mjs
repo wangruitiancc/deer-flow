@@ -67,6 +67,10 @@ export function evaluateBudgets(measurements, budgets) {
       failures.push(`${route}: route was not measured`);
       continue;
     }
+    if (actual.error) {
+      failures.push(`${route}: ${actual.error}`);
+      continue;
+    }
     for (const kind of ["css", "js"]) {
       if (actual[kind] <= limits[kind]) continue;
       const overage = actual[kind] - limits[kind];
@@ -81,6 +85,12 @@ export function evaluateBudgets(measurements, budgets) {
 export function formatMeasurementSummary(measurements) {
   const lines = ["Route asset summary"];
   for (const [route, measurement] of Object.entries(measurements)) {
+    if (measurement.error) {
+      lines.push(
+        `${route} [${measurement.buildMode}] UNMEASURED: ${measurement.error}`,
+      );
+      continue;
+    }
     lines.push(
       `${route} [${measurement.buildMode}] JS ${measurement.js} B | CSS ${measurement.css} B | HTML ${measurement.html} B`,
     );
@@ -139,12 +149,70 @@ async function waitForServer(baseUrl, child) {
   throw new Error("Timed out waiting for the Next.js production server");
 }
 
-async function measureRoute(baseUrl, route) {
-  const response = await fetch(`${baseUrl}${route}`, { redirect: "manual" });
-  if (!response.ok) {
-    throw new Error(`${route} returned HTTP ${response.status}`);
+export async function readRouteHtml(baseUrl, route, request = fetch) {
+  const origin = new URL(baseUrl).origin;
+  let current = new URL(route, baseUrl);
+  const visited = new Set();
+  const redirects = [];
+  for (let hop = 0; hop <= 5; hop += 1) {
+    if (current.origin !== origin || current.username || current.password) {
+      throw new Error(
+        `${route} redirected outside the local measurement origin`,
+      );
+    }
+    if (visited.has(current.href)) {
+      throw new Error(`${route} has a redirect cycle`);
+    }
+    visited.add(current.href);
+    const response = await request(current.href, { redirect: "manual" });
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get("location");
+      if (!location)
+        throw new Error(`${route} returned a redirect without a location`);
+      const target = new URL(location, current);
+      if (
+        route !== "/login" &&
+        ["/login", "/setup"].includes(target.pathname)
+      ) {
+        throw new Error(
+          `${route} redirected to authentication instead of its page`,
+        );
+      }
+      redirects.push({
+        from: current.pathname,
+        to: target.pathname,
+        status: response.status,
+      });
+      current = target;
+      continue;
+    }
+    if (!response.ok)
+      throw new Error(`${route} returned HTTP ${response.status}`);
+    const expectedPaths =
+      route === "/"
+        ? ["/admin", "/workspace/law"]
+        : route === "/workspace/chats"
+          ? ["/workspace/law"]
+          : [new URL(route, baseUrl).pathname];
+    if (!expectedPaths.includes(current.pathname)) {
+      throw new Error(
+        `${route} resolved to a different page; assets were not measured`,
+      );
+    }
+    return {
+      html: await response.text(),
+      resolvedRoute: current.pathname,
+      redirects,
+    };
   }
-  const html = await response.text();
+  throw new Error(`${route} exceeded the local redirect limit`);
+}
+
+async function measureRoute(baseUrl, route) {
+  const { html, resolvedRoute, redirects } = await readRouteHtml(
+    baseUrl,
+    route,
+  );
   const assets = extractAssetPaths(html);
   const totals = { css: 0, js: 0 };
   for (const kind of ["css", "js"]) {
@@ -153,7 +221,13 @@ async function measureRoute(baseUrl, route) {
       totals[kind] += (await stat(assetPath)).size;
     }
   }
-  return { ...totals, assets, html: Buffer.byteLength(html) };
+  return {
+    ...totals,
+    assets,
+    html: Buffer.byteLength(html),
+    resolvedRoute,
+    redirects,
+  };
 }
 
 async function measureBuild(routes, staticWebsiteOnly) {
@@ -186,10 +260,19 @@ async function measureBuild(routes, staticWebsiteOnly) {
     await waitForServer(baseUrl, server);
     const measurements = {};
     for (const route of routes) {
-      measurements[route] = {
-        ...(await measureRoute(baseUrl, route)),
-        buildMode: staticWebsiteOnly ? "static-demo" : "normal",
-      };
+      const buildMode = staticWebsiteOnly ? "static-demo" : "normal";
+      try {
+        measurements[route] = {
+          ...(await measureRoute(baseUrl, route)),
+          buildMode,
+        };
+      } catch (error) {
+        measurements[route] = {
+          buildMode,
+          error:
+            error instanceof Error ? error.message : "route measurement failed",
+        };
+      }
     }
     return measurements;
   } finally {

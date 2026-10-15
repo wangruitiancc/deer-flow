@@ -5,6 +5,7 @@ import {
   evaluateBudgets,
   extractAssetPaths,
   formatMeasurementSummary,
+  readRouteHtml,
   ROUTES,
 } from "../../../scripts/measure-route-assets.mjs";
 
@@ -55,6 +56,116 @@ describe("route asset measurement", () => {
       "/ css: 101 bytes exceeds 100 bytes by 1 byte",
       "/en/docs js: 301 bytes exceeds 300 bytes by 1 byte",
     ]);
+  });
+
+  it("measures the final legal page after an intentional local redirect", async () => {
+    const visited: string[] = [];
+    const result = await readRouteHtml(
+      "http://127.0.0.1:4310",
+      "/workspace/chats",
+      async (input) => {
+        const url = String(input);
+        visited.push(url);
+        return url.endsWith("/workspace/chats")
+          ? new Response(null, {
+              status: 307,
+              headers: { location: "/workspace/law" },
+            })
+          : new Response("legal workspace", { status: 200 });
+      },
+    );
+    expect(visited).toEqual([
+      "http://127.0.0.1:4310/workspace/chats",
+      "http://127.0.0.1:4310/workspace/law",
+    ]);
+    expect(result).toEqual({
+      html: "legal workspace",
+      resolvedRoute: "/workspace/law",
+      redirects: [
+        { from: "/workspace/chats", to: "/workspace/law", status: 307 },
+      ],
+    });
+  });
+
+  it("never counts an authentication fallback as workspace performance", async () => {
+    for (const route of ["/", "/workspace/chats"]) {
+      await expect(
+        readRouteHtml(
+          "http://127.0.0.1:4310",
+          route,
+          async () =>
+            new Response(null, {
+              status: 307,
+              headers: { location: "/login?next=%2Fworkspace" },
+            }),
+        ),
+      ).rejects.toThrow("authentication instead of its page");
+    }
+  });
+
+  it("does not fetch a cross-origin redirect destination", async () => {
+    let calls = 0;
+    await expect(
+      readRouteHtml("http://127.0.0.1:4310", "/", async () => {
+        calls += 1;
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://example.com/workspace/law" },
+        });
+      }),
+    ).rejects.toThrow("outside the local measurement origin");
+    expect(calls).toBe(1);
+  });
+
+  it("does not count a retired public route redirect as that page's assets", async () => {
+    await expect(
+      readRouteHtml("http://127.0.0.1:4310", "/en/docs", async (input) =>
+        String(input).endsWith("/en/docs")
+          ? new Response(null, {
+              status: 307,
+              headers: { location: "/workspace/law" },
+            })
+          : new Response("workspace", { status: 200 }),
+      ),
+    ).rejects.toThrow("different page; assets were not measured");
+  });
+
+  it("keeps unavailable routes as explicit failures without zero-byte evidence", () => {
+    const measurements = {
+      "/en/docs": { buildMode: "static-demo", error: "different page" },
+    };
+    expect(
+      evaluateBudgets(measurements, {
+        "/en/docs": { css: 270000, js: 4200000 },
+      }),
+    ).toEqual(["/en/docs: different page"]);
+    expect(formatMeasurementSummary(measurements)).toContain(
+      "UNMEASURED: different page",
+    );
+  });
+
+  it("bounds cyclic and unending local redirects", async () => {
+    await expect(
+      readRouteHtml(
+        "http://127.0.0.1:4310",
+        "/",
+        async () =>
+          new Response(null, { status: 307, headers: { location: "/" } }),
+      ),
+    ).rejects.toThrow("redirect cycle");
+    let calls = 0;
+    await expect(
+      readRouteHtml(
+        "http://127.0.0.1:4310",
+        "/",
+        async () =>
+          new Response(null, {
+            status: 307,
+            headers: { location: `/step-${++calls}` },
+          }),
+      ),
+    ).rejects.toThrow("redirect limit");
+    expect(calls).toBe(6);
   });
 
   it("formats a stable human-readable route summary", () => {

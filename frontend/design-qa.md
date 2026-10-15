@@ -52,6 +52,6 @@ No remaining actionable P0/P1/P2 within this first-integration scope. Existing O
 
 ## Existing performance-tool limitation
 
-The optional full `perf:check` aborts because the existing root route returns307 while its measurement helper requires2xx. The root route, chat index redirect and measurement script are unchanged from baseline d44c466b. No asset ceilings were increased; do not report this tool as passing or interpret it as a measured byte overage. A normal build is retained after the static-demo measurement attempt.
+The original `perf:check` stopped at the existing root307 redirect. The measurement tool now follows bounded same-origin application redirects, rejects authentication fallbacks or unexpected final pages, records the actual destination, and retains unavailable routes as failures. Eleven focused tests and the frontend check pass. A separate source snapshot completes both builds and reports actual budget failures: login, admin-home CSS, legal overview and chat assets exceed unchanged ceilings; retired docs/blog paths are unmeasured because they redirect to the workbench. This engineering gate is not passed. No application route, authentication rule or asset ceiling was changed. Measurements run outside the user preview checkout.
 
 final result: passed
