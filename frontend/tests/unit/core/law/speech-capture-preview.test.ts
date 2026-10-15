@@ -1,6 +1,9 @@
 import { describe, expect, it } from "@rstest/core";
 
-import { mergeSpeechCapturePreview } from "@/core/law/speech-capture-preview";
+import {
+  mergeSpeechCapturePreview,
+  recognizedSpeechCaptureSamples,
+} from "@/core/law/speech-capture-preview";
 import type {
   SpeechCapturePreviewReceipt,
   SpeechCapturePreviewWindow,
@@ -42,6 +45,25 @@ function receipt(
 }
 
 describe("speech capture preview revisions", () => {
+  it("counts computed windows without treating gaps or missing results as recognized audio", () => {
+    const missing = window("missing", 1, 1, "");
+    missing.transcript = null;
+    expect(
+      recognizedSpeechCaptureSamples([
+        window("first", 0, 1, "合成"),
+        missing,
+        window("last", 3, 1, ""),
+      ]),
+    ).toBe(160_000);
+    expect(recognizedSpeechCaptureSamples([missing])).toBe(0);
+  });
+  it("does not count replayed revisions twice and includes computed silence", () => {
+    const merged = mergeSpeechCapturePreview(
+      { revision: 1, windows: [window("first", 0, 1, "旧稿")] },
+      receipt(2, window("first", 0, 2, "修订"), window("silent", 1, 1, "")),
+    );
+    expect(recognizedSpeechCaptureSamples(merged.windows)).toBe(160_000);
+  });
   it("updates a window by revision and keeps windows in sample order", () => {
     const initial = {
       revision: 1,

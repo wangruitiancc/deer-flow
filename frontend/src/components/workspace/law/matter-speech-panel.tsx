@@ -35,6 +35,7 @@ import {
 } from "@/core/law";
 import { speechQueryStatus } from "@/core/law/speech-query-status";
 
+import { SpeechCapturePreview } from "./speech-capture-preview";
 import { useSpeechCapture } from "./use-speech-capture";
 
 export type SpeechWorkspaceActivity = {
@@ -884,24 +885,10 @@ export function MatterSpeechPanel({
                   </section>
                 )}
                 {capture.previewWindows.length > 0 && (
-                  <div
-                    className="space-y-2 rounded border p-3"
-                    aria-label="录音临时识别预览"
-                  >
-                    <p className="text-xs font-medium">
-                      机器预览 · 未审核，不可引用
-                    </p>
-                    {capture.previewWindows.map((window) => (
-                      <div key={window.window_id} className="text-sm">
-                        <span className="text-muted-foreground mr-2 text-xs">
-                          {Math.floor(window.start_sample / 16_000)}–
-                          {Math.floor(window.end_sample / 16_000)} 秒
-                        </span>
-                        {window.transcript?.text ??
-                          "本窗口没有可显示的识别文字。"}
-                      </div>
-                    ))}
-                  </div>
+                  <SpeechCapturePreview
+                    key={capture.captureId}
+                    windows={capture.previewWindows}
+                  />
                 )}
               </div>
             )}

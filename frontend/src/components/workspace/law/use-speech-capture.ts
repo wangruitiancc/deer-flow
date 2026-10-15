@@ -44,7 +44,10 @@ import {
   verifySpeechCaptureStorage,
   type LocalSpeechCaptureSession,
 } from "@/core/law/speech-capture-outbox";
-import { mergeSpeechCapturePreview } from "@/core/law/speech-capture-preview";
+import {
+  mergeSpeechCapturePreview,
+  recognizedSpeechCaptureSamples,
+} from "@/core/law/speech-capture-preview";
 
 export type SpeechCaptureUiState =
   | "idle"
@@ -1583,10 +1586,7 @@ export function useSpeechCapture({
     capturedSamples,
     localSavedSamples,
     serverConfirmedSamples,
-    recognizedSamples: previewWindows.reduce(
-      (latest, item) => Math.max(latest, item.end_sample),
-      0,
-    ),
+    recognizedSamples: recognizedSpeechCaptureSamples(previewWindows),
     previewWindows,
     start,
     stop,

@@ -62,3 +62,22 @@ No remaining actionable P0/P1/P2 within this first-integration scope. Existing O
 - Evidence lives in the paired Matrix Law repository under `docs/design/assets/lawyer-workspace-performance-*.jpg` and the W11 performance record. The UI fixture is read-only synthetic data with microphone disabled; this visual check is not a target login/model/microphone test. T44 and target rollout still remain open.
 
 final result: passed
+
+## W11 preview visibility and recognized duration — 2026-10-15
+
+Preview output now uses a bounded scrolling list with follow-latest behavior.
+Scrolling upward retains the reader's position; “回到最新” resumes following.
+A new capture resets that preference and a closed/inert workspace cannot be
+revealed. Computed silence and missing results have separate labels. Recognized
+duration sums computed windows after revision merging, excluding gaps/nulls.
+
+The numeric-only timing probe now requires each computed-result time label to
+be fully inside the viewport and ancestor overflow clips. Hidden/inert/offscreen
+labels cannot satisfy display timing; scroll/resize can trigger rechecks. This
+keeps the original cold-window, all-window, minimum-20 and P95<=5000ms gates.
+
+Validation: 29 targeted unit/DOM/style tests passed, no skips; full ESLint and
+TypeScript check passed; the real Chromium Worklet clock self-test passed (1).
+The browser test uses a synthetic oscillator and controlled display delay, not
+real ASR. These checks do not close target-machine T44 or authorize claims about
+legal-material recognition quality. No cloud app activation in this change.

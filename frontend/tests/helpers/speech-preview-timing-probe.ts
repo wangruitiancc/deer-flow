@@ -11,7 +11,7 @@ export function installSpeechPreviewTimingProbe() {
   const Original = window.AudioWorkletNode;
   if (typeof Original !== "function")
     throw new Error("native_worklet_required");
-  const selector = '[aria-label="录音临时识别预览"] > div > span';
+  const selector = '[aria-label="录音临时识别预览"] [data-speech-preview-time]';
   const rate = 16_000;
   const windowSamples = 80_000;
   // Chromium's rendering quantum is 128 frames. Subtract a full quantum from
@@ -36,6 +36,49 @@ export function installSpeechPreviewTimingProbe() {
     failure ??= reason;
   };
 
+  function isVisible(element: Element) {
+    const bounds = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+    const clips = new Set(["auto", "scroll", "hidden", "clip"]);
+    for (
+      let parent: Element | null = element;
+      parent;
+      parent = parent.parentElement
+    ) {
+      if (parent.matches('[hidden], [inert], [aria-hidden="true"]'))
+        return false;
+      const style = getComputedStyle(parent);
+      if (
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        style.visibility === "collapse" ||
+        style.opacity === "0"
+      )
+        return false;
+      const clipX = clips.has(style.overflowX || style.overflow);
+      const clipY = clips.has(style.overflowY || style.overflow);
+      if (clipX || clipY) {
+        const rect = parent.getBoundingClientRect();
+        if (clipX) {
+          bounds.left = Math.max(bounds.left, rect.left);
+          bounds.right = Math.min(bounds.right, rect.right);
+        }
+        if (clipY) {
+          bounds.top = Math.max(bounds.top, rect.top);
+          bounds.bottom = Math.min(bounds.bottom, rect.bottom);
+        }
+      }
+    }
+    return Array.from(element.getClientRects()).some(
+      (rect) =>
+        rect.width > 0 &&
+        rect.height > 0 &&
+        rect.left >= bounds.left - 0.5 &&
+        rect.right <= bounds.right + 0.5 &&
+        rect.top >= bounds.top - 0.5 &&
+        rect.bottom <= bounds.bottom + 0.5,
+    );
+  }
+
   function scan() {
     if (disposed || failure || nodes !== 1) return;
     if (document.visibilityState !== "visible") {
@@ -44,7 +87,7 @@ export function installSpeechPreviewTimingProbe() {
     }
     // Only time labels are read. Never read a containing transcript node.
     for (const label of document.querySelectorAll(selector)) {
-      if (baseline.has(label) || label.getClientRects().length === 0) continue;
+      if (baseline.has(label) || !isVisible(label)) continue;
       const match = /^(\d+)\s*–\s*(\d+)\s*秒$/.exec(
         label.textContent?.trim() ?? "",
       );
@@ -177,12 +220,14 @@ export function installSpeechPreviewTimingProbe() {
     childList: true,
     characterData: true,
     attributes: true,
-    attributeFilter: ["hidden", "style", "class"],
+    attributeFilter: ["hidden", "style", "class", "inert", "aria-hidden"],
   });
   const visibility = () => {
     if (nodes && document.visibilityState !== "visible") fail("page_hidden");
   };
   document.addEventListener("visibilitychange", visibility);
+  document.addEventListener("scroll", scheduleScan, true);
+  window.addEventListener("resize", scheduleScan);
   host[key] = {
     snapshot() {
       const expected = Math.floor(sampled / windowSamples);
@@ -236,6 +281,8 @@ export function installSpeechPreviewTimingProbe() {
       observer.disconnect();
       cleanups.forEach((cleanup) => cleanup());
       document.removeEventListener("visibilitychange", visibility);
+      document.removeEventListener("scroll", scheduleScan, true);
+      window.removeEventListener("resize", scheduleScan);
       if (window.AudioWorkletNode === Wrapped)
         window.AudioWorkletNode = Original;
       delete host[key];

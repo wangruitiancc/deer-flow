@@ -12,6 +12,14 @@ Read `window.__w11SpeechTimingProbe.snapshot()` for a bounded numeric report and
 call `dispose()` afterward. Keep the preview visible. A hidden page, a second
 capture, malformed metadata, or an unavailable clock invalidates the run.
 
+Only computed-result time labels carry `data-speech-preview-time`. A pending or
+failed window with no result is not a displayed recognition result. Labels must
+be fully inside the viewport and every ancestor overflow clip; hidden, inert,
+transparent and off-screen labels are excluded. Scroll and resize trigger fresh
+visibility checks. Keep automatic following enabled during the measured journey;
+reading older windows may leave missing measurements and must not be hidden by
+dropping windows from the denominator.
+
 The required Worklet has SHA-256
 `f681fb0594abd8a8c1128955381b86b570d5569aa1e69ef3c2b465a0d5026da1`.
 Older G/J Worklets lack `endFrame` and deliberately cannot produce valid timing

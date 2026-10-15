@@ -40,12 +40,14 @@ function label(start: number, end: number) {
   }
   const row = document.createElement("div");
   const span = document.createElement("span");
+  span.setAttribute("data-speech-preview-time", "");
   span.textContent = `${start}–${end} 秒`;
   span.getClientRects = () =>
     [new DOMRect(0, 0, 100, 20)] as unknown as DOMRectList;
   row.append(span, document.createTextNode("SECRET_TRANSCRIPT_MARKER"));
   root.append(row);
   changed();
+  return span;
 }
 function capture(seconds: number, finish = true) {
   const context = {
@@ -105,6 +107,56 @@ afterEach(() => {
   rs.unstubAllGlobals();
 });
 describe("numeric-only preview timing probe", () => {
+  it("waits until a window outside the viewport is actually visible", () => {
+    installSpeechPreviewTimingProbe();
+    capture(5);
+    const span = label(0, 5);
+    span.getClientRects = () =>
+      [new DOMRect(0, innerHeight + 10, 100, 20)] as unknown as DOMRectList;
+    tick();
+    tick();
+    expect(snapshot().windows).toHaveLength(0);
+    expect(snapshot().p95_ms).toBeNull();
+    span.getClientRects = () =>
+      [new DOMRect(0, 10, 100, 20)] as unknown as DOMRectList;
+    window.dispatchEvent(new Event("resize"));
+    tick();
+    tick();
+    expect(snapshot().state).toBe("complete");
+  });
+  it("does not count a time label clipped by an ancestor until it is scrolled into view", () => {
+    installSpeechPreviewTimingProbe();
+    capture(5);
+    const span = label(0, 5);
+    const parent = span.parentElement!;
+    parent.style.overflowY = "auto";
+    parent.getBoundingClientRect = () => new DOMRect(0, 0, 200, 40);
+    span.getClientRects = () =>
+      [new DOMRect(0, 50, 100, 20)] as unknown as DOMRectList;
+    tick();
+    tick();
+    expect(snapshot().windows).toHaveLength(0);
+    span.getClientRects = () =>
+      [new DOMRect(0, 10, 100, 20)] as unknown as DOMRectList;
+    parent.dispatchEvent(new Event("scroll"));
+    tick();
+    tick();
+    expect(snapshot().state).toBe("complete");
+  });
+  it("does not count an inert panel even if it still has layout rectangles", () => {
+    installSpeechPreviewTimingProbe();
+    capture(5);
+    const span = label(0, 5);
+    span.parentElement!.setAttribute("inert", "");
+    tick();
+    tick();
+    expect(snapshot().windows).toHaveLength(0);
+    span.parentElement!.removeAttribute("inert");
+    changed();
+    tick();
+    tick();
+    expect(snapshot().state).toBe("complete");
+  });
   it("counts worklet-to-main delay, waits for two frames, and exports no transcript or media", () => {
     installSpeechPreviewTimingProbe();
     capture(5);

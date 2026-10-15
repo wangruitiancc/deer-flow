@@ -68,6 +68,7 @@ test("real Worklet timing includes delayed main-thread delivery and exports only
           setTimeout(() => {
             const row = document.createElement("div");
             const label = document.createElement("span");
+            label.setAttribute("data-speech-preview-time", "");
             label.textContent = `${end - 5}–${end} 秒`;
             row.append(label, document.createTextNode("SYNTHETIC_TIMING_ONLY"));
             root.append(row);
