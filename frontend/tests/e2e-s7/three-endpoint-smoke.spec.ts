@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { randomBytes, randomUUID } from "node:crypto";
 
 import { expect, test } from "@playwright/test";
 import type { Browser, Page } from "@playwright/test";
@@ -35,7 +36,6 @@ const firmOneLawyerBPassword = process.env.S7_FIRM_ONE_LAWYER_B_PASSWORD!;
 let activatedTenantId = "";
 let activatedLawyerUserId = "";
 let activatedMatterId = "";
-let activatedCapabilityApiKey = "";
 let secondTenantId = "";
 let secondMatterId = "";
 
@@ -89,7 +89,7 @@ test("S7[owner-activation] public application, platform approval, and activation
   };
   const activationErrorCode = activationPayload.error?.code ?? "unknown_error_code";
   expect(activationResponse.ok(), `activation_http_${activationResponse.status()}_${activationErrorCode}`).toBe(true);
-  activatedCapabilityApiKey = activationPayload.data?.api_key ?? "";
+  const activatedCapabilityApiKey = activationPayload.data?.api_key ?? "";
   expect(activatedCapabilityApiKey.length, "one_time_capability_api_key_present_only_in_memory").toBeGreaterThan(16);
   expect(activationPayload.data?.capability_endpoint, "activation_capability_endpoint_matches_isolated_gateway").toBe(capabilityEndpoint);
   await expect(page.getByRole("heading", { name: "管理员账号已激活" })).toBeVisible({ timeout: 30_000 });
@@ -939,9 +939,12 @@ test("S7[password-reset-and-session-revocation] local STARTTLS reset is one-time
   const replayBody = await replay.text();
   expect(replayBody.includes(resetToken), "reset_token_not_reflected_in_replay_error").toBe(false);
 
-  for (const page of [firstPage, secondPage]) {
-    const staleSessionStatus = await page.evaluate(async () => (await fetch("/api/v1/auth/me", { credentials: "include" })).status);
-    expect(staleSessionStatus, "old_browser_session_revoked").toBe(401);
+  for (const context of [firstContext, secondContext]) {
+    const staleSessionResponse = await context.request.get(
+      `${lawyerUrl}/api/v1/auth/me`,
+      { maxRedirects: 0 },
+    );
+    expect(staleSessionResponse.status(), "old_browser_session_revoked").toBe(401);
   }
   const oldLoginContext = await browser.newContext();
   const oldLoginPage = await oldLoginContext.newPage();
@@ -995,53 +998,128 @@ test("S7[keyboard-and-viewport-accessibility] reset screens remain operable at d
 
 test("S7[finance-billing-readonly] owner enrolls the real relay and finance reads a zero-balance projection", async ({ browser }) => {
   test.setTimeout(180_000);
-  expect(activatedTenantId.length).toBeGreaterThan(0);
-  expect(activatedCapabilityApiKey.length).toBeGreaterThan(16);
+  const slug = `s7-billing-${randomUUID().replaceAll("-", "")}`;
+  const billingOwnerEmail = `${slug}-owner@example.com`;
+  const billingOwnerPassword = `S7-${randomUUID()}!a9`;
+  const billingFinanceEmail = `${slug}-finance@example.com`;
+  const billingFinancePassword = `S7-${randomBytes(24).toString("base64url")}!a9`;
   const ownerContext = await browser.newContext();
   const ownerPage = await ownerContext.newPage();
-  await loginTenant(ownerPage, tenantAdminUrl, ownerEmail, ownerPassword);
-  const connectResult = await ownerPage.evaluate(async ({ tenantId, endpoint, apiKey }) => {
-    const csrf = document.cookie.split("; ").find((part) => part.startsWith("csrf_token="))?.slice("csrf_token=".length) ?? "";
-    const response = await fetch("/api/law/tenants/connect", {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json", "X-CSRF-Token": decodeURIComponent(csrf) },
-      body: JSON.stringify({ tenant_id: tenantId, name: "S7 loopback capability", endpoint_url: endpoint, api_key: apiKey, enabled: true, priority: 10 }),
-    });
-    const body = await response.json().catch(() => ({}));
-    return {
-      status: response.status,
-      connectionStatus: body.data?.connection?.status ?? "",
-      relayEndpoint: body.data?.connection?.relay_endpoint_url ?? "",
-      tenantMatches: body.data?.connection?.tenant_id === tenantId,
-    };
-  }, { tenantId: activatedTenantId, endpoint: capabilityEndpoint, apiKey: activatedCapabilityApiKey });
-  expect(connectResult.status, "real_capability_connect_and_signed_mtls_enrollment_status").toBe(201);
-  expect(connectResult.connectionStatus, "relay_connection_active_after_signed_enrollment").toBe("active");
-  expect(connectResult.relayEndpoint.startsWith("https://127.0.0.1:"), "relay_uses_loopback_mtls_listener").toBe(true);
-  expect(connectResult.tenantMatches, "relay_binding_matches_activated_tenant").toBe(true);
+  let financeContext: Awaited<ReturnType<Browser["newContext"]>> | null = null;
+  let platformContext: Awaited<ReturnType<Browser["newContext"]>> | null = null;
 
-  seedZeroWalletProjection(activatedTenantId);
-  const countsBeforeRead = financeMutationCounts(activatedTenantId);
-  const financeContext = await browser.newContext();
-  const financePage = await financeContext.newPage();
-  await loginTenant(financePage, tenantAdminUrl, financeEmail, financePassword);
-  const projection = await financePage.evaluate(async (tenantId) => {
-    const response = await fetch(`/api/law/tenants/${encodeURIComponent(tenantId)}/finance/billing`, { credentials: "include", cache: "no-store" });
-    const body = await response.json().catch(() => ({}));
-    return { status: response.status, data: body.data ?? null, errorCode: body.error?.code ?? "" };
-  }, activatedTenantId);
-  expect(projection.status, `real_finance_projection_http_${projection.status}_${projection.errorCode}`).toBe(200);
-  expect(projection.data?.wallet?.wallets, "synthetic_wallet_projection_is_zero_balance").toEqual([
-    expect.objectContaining({ currency: "CNY", available_microunits: "0", reserved_microunits: "0" }),
-  ]);
-  expect(projection.data?.wallet?.transactions, "no_wallet_transactions_created").toEqual([]);
-  expect(projection.data?.wallet?.receipts, "no_payment_receipts_created").toEqual([]);
-  expect(projection.data?.wallet?.refunds, "no_refunds_created").toEqual([]);
-  expect(projection.data?.ledger?.entries, "no_billing_ledger_events_created").toEqual([]);
-  expect(projection.data?.ocr?.entries, "no_ocr_charges_created").toEqual([]);
-  expect(financeMutationCounts(activatedTenantId), "finance_get_does_not_mutate_ledger_or_wallet_transactions").toBe(countsBeforeRead);
-  await financeContext.close();
-  await ownerContext.close();
-  activatedCapabilityApiKey = "";
+  try {
+    platformContext = await browser.newContext();
+    const platformPage = await platformContext.newPage();
+    await platformPage.goto(`${platformUrl}/console/register`);
+    await platformPage.getByLabel("律所全称").fill(`S7 合成账务律所 ${slug}`);
+    await platformPage.getByLabel("组织标识").fill(slug);
+    await platformPage.getByLabel("负责人姓名").fill("S7 合成账务负责人");
+    await platformPage.getByLabel("负责人邮箱").fill(billingOwnerEmail);
+    await platformPage.getByRole("button", { name: "提交接入申请" }).click();
+    await expect(platformPage.getByRole("heading", { name: "律所开户申请已提交" })).toBeVisible();
+
+    await platformPage.goto(`${platformUrl}/console/login`);
+    await platformPage.getByLabel("邮箱").fill(platformEmail);
+    await platformPage.getByLabel("密码").fill(platformPassword);
+    await platformPage.getByLabel("密码").press("Enter");
+    await expect(platformPage.getByText("能力运营总览", { exact: true }).first()).toBeVisible();
+    await platformPage.goto(`${platformUrl}/console/law-firms`);
+    const application = platformPage.getByRole("row").filter({ hasText: billingOwnerEmail });
+    await expect(application).toBeVisible();
+    await application.getByRole("button", { name: "批准并签发激活码" }).click();
+    const activationDialog = platformPage.getByRole("dialog", { name: "请安全交付激活码" });
+    await expect(activationDialog).toBeVisible();
+    const activationText = await activationDialog.innerText();
+    const activationCode = /lfa_[A-Za-z0-9_-]{32,128}/.exec(activationText)?.[0];
+    expect(activationCode).toBeTruthy();
+
+    await platformPage.goto(`${platformUrl}/console/activate`);
+    await platformPage.getByLabel("激活码").fill(activationCode!);
+    await platformPage.getByLabel("负责人邮箱").fill(billingOwnerEmail);
+    await platformPage.getByLabel("设置密码").fill(billingOwnerPassword);
+    await platformPage.getByLabel("确认密码").fill(billingOwnerPassword);
+    const activationResponsePromise = platformPage.waitForResponse((response) =>
+      response.url().endsWith("/v1/law-firms/activations/claim") && response.request().method() === "POST",
+    );
+    await platformPage.getByRole("button", { name: "激活账号" }).click();
+    const activationResponse = await activationResponsePromise;
+    const activationPayload = await activationResponse.json().catch(() => ({})) as {
+      error?: { code?: string };
+      data?: { api_key?: string; capability_endpoint?: string };
+    };
+    expect(
+      activationResponse.ok(),
+      `billing_fixture_activation_http_${activationResponse.status()}_${activationPayload.error?.code ?? "unknown_error_code"}`,
+    ).toBe(true);
+    const billingCapabilityApiKey = activationPayload.data?.api_key ?? "";
+    expect(billingCapabilityApiKey.length, "billing_fixture_one_time_api_key_present").toBeGreaterThan(16);
+    expect(activationPayload.data?.capability_endpoint).toBe(capabilityEndpoint);
+    await expect(platformPage.getByRole("heading", { name: "管理员账号已激活" })).toBeVisible({ timeout: 30_000 });
+    await platformContext.close();
+    platformContext = null;
+
+    await loginTenant(ownerPage, tenantAdminUrl, billingOwnerEmail, billingOwnerPassword);
+    const billingTenantId = await ownerPage.locator("#tenant-select").inputValue();
+    expect(billingTenantId, "billing_fixture_tenant_id").toMatch(/^[0-9a-f-]{36}$/i);
+    const billingOwnerIdentity = await authenticatedTenantIdentity(ownerPage);
+    expect(billingOwnerIdentity.email).toBe(billingOwnerEmail);
+    const billingFinanceUserId = await inviteAndClaimMember(
+      ownerPage,
+      browser,
+      billingTenantId,
+      billingFinanceEmail,
+      "S7 合成账务财务",
+      "finance",
+      billingFinancePassword,
+    );
+    expect(billingFinanceUserId, "billing_finance_identity_present").toBeTruthy();
+    expect(billingFinanceUserId, "finance_is_a_distinct_user").not.toBe(billingOwnerIdentity.id);
+
+    const connectResult = await ownerPage.evaluate(async ({ tenantId, endpoint, apiKey }) => {
+      const csrf = document.cookie.split("; ").find((part) => part.startsWith("csrf_token="))?.slice("csrf_token=".length) ?? "";
+      const response = await fetch("/api/law/tenants/connect", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": decodeURIComponent(csrf) },
+        body: JSON.stringify({ tenant_id: tenantId, name: "S7 loopback capability", endpoint_url: endpoint, api_key: apiKey, enabled: true, priority: 10 }),
+      });
+      const body = await response.json().catch(() => ({}));
+      return {
+        status: response.status,
+        connectionStatus: body.data?.connection?.status ?? "",
+        relayEndpoint: body.data?.connection?.relay_endpoint_url ?? "",
+        tenantMatches: body.data?.connection?.tenant_id === tenantId,
+      };
+    }, { tenantId: billingTenantId, endpoint: capabilityEndpoint, apiKey: billingCapabilityApiKey });
+    expect(connectResult.status, "real_capability_connect_and_signed_mtls_enrollment_status").toBe(201);
+    expect(connectResult.connectionStatus, "relay_connection_active_after_signed_enrollment").toBe("active");
+    expect(connectResult.relayEndpoint.startsWith("https://127.0.0.1:"), "relay_uses_loopback_mtls_listener").toBe(true);
+    expect(connectResult.tenantMatches, "relay_binding_matches_activated_tenant").toBe(true);
+
+    seedZeroWalletProjection(billingTenantId);
+    const countsBeforeRead = financeMutationCounts(billingTenantId);
+    financeContext = await browser.newContext();
+    const financePage = await financeContext.newPage();
+    await loginTenant(financePage, tenantAdminUrl, billingFinanceEmail, billingFinancePassword);
+    const projection = await financePage.evaluate(async (tenantId) => {
+      const response = await fetch(`/api/law/tenants/${encodeURIComponent(tenantId)}/finance/billing`, { credentials: "include", cache: "no-store" });
+      const body = await response.json().catch(() => ({}));
+      return { status: response.status, data: body.data ?? null, errorCode: body.error?.code ?? "" };
+    }, billingTenantId);
+    expect(projection.status, `real_finance_projection_http_${projection.status}_${projection.errorCode}`).toBe(200);
+    expect(projection.data?.wallet?.wallets, "synthetic_wallet_projection_is_zero_balance").toEqual([
+      expect.objectContaining({ currency: "CNY", available_microunits: "0", reserved_microunits: "0" }),
+    ]);
+    expect(projection.data?.wallet?.transactions, "no_wallet_transactions_created").toEqual([]);
+    expect(projection.data?.wallet?.receipts, "no_payment_receipts_created").toEqual([]);
+    expect(projection.data?.wallet?.refunds, "no_refunds_created").toEqual([]);
+    expect(projection.data?.ledger?.entries, "no_billing_ledger_events_created").toEqual([]);
+    expect(projection.data?.ocr?.entries, "no_ocr_charges_created").toEqual([]);
+    expect(financeMutationCounts(billingTenantId), "finance_get_does_not_mutate_ledger_or_wallet_transactions").toBe(countsBeforeRead);
+  } finally {
+    await financeContext?.close();
+    await platformContext?.close();
+    await ownerContext.close();
+  }
 });
