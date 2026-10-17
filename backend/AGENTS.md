@@ -315,3 +315,11 @@ See `docs/` directory for detailed documentation:
 ### Matrix Law W19 Gateway process-crash recovery smoke
 
 From backend/, run .venv/bin/python tests/w19_gateway_process_crash_recovery.py to verify that a persisted synthetic run is reconciled after one real Uvicorn Gateway process is killed and a fresh process starts against the same disposable SQLite state. This is a narrow local recovery check only; it does not establish PostgreSQL/Redis/object-store recovery, multi-host availability, or production stability. It uses no provider credentials or legal case data.
+
+### Reviewed forward-schema rollback bridge
+
+`persistence/managed_schema_compatibility.py` declares only the exact W12→W13 heads and complete catalog hashes taken from the independently verified W13 c1 tenant plan. It is not a configurable version range. Managed startup uses one PostgreSQL repeatable-read snapshot; unknown or unreadable catalogs refuse startup. Never add DDL, fake a version marker, relax RLS, or accept a future revision on its name alone.
+
+The public `deerflow_extension_api.managed_schema_catalog` module shares the existing native deployment catalog format and non-secret reader. Its source originated at native reader SHA `06f5803bcfebc49d8f7287702bfc7622c9d40d5232bef19fa8de90f1e25138e2`; its deliberate path fix uses literal `public` instead of `$user,public` so role deerflow cannot resolve the deerflow schema differently from the operator. Keep full section/type validation, grants, roles and security metadata. The operator's existing fingerprints remain unchanged; verify this using an exact signed materialized schema with operator, framework and API roles before shipping.
+
+Run `tests/test_managed_schema_forward_compatibility.py` plus PostgreSQL engine and harness-boundary regressions. An actual candidate gate must additionally prove old-account CRUD, extension readiness and RLS, and refusal of unknown columns, grants, RLS disablement and runtime BYPASSRLS on a disposable copy. Unit fingerprints alone cannot prove deployability. This compatibility bridge is not yet a cloud release.

@@ -34,6 +34,8 @@ Agent、会话、工具、Skill、文件和右侧成果框架，不移植旧桌�
 schema 是否到当前版本；缺表或版本落后时拒绝启动。发布运维必须先显式运行租户迁移 one-shot，覆盖 ORM、LangGraph
 checkpointer/store、法律扩展和 runtime role，再启动 Gateway。开发及本机容器模拟仍可在显式准备阶段执行迁移。
 
+W12→W13 的应用回退兼容版本仍只读检查数据库：仅对源码中明确审核的未来 revision，额外核对完整 PostgreSQL catalog 摘要；未知版本、字段、RLS、grant 或角色变化均拒绝启动。兼容版本必须先于 W13 数据迁移交付，不代表原 W12 包已自动具备兼容性。
+
 ## 核心模块
 
 - 法律模板：`/matrix-law-templates` 可选择六种内置法律 Markdown 模板，按需读取资源，

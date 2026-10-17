@@ -274,16 +274,21 @@ async def _assert_schema_current(engine: AsyncEngine) -> None:
     expected = _get_head_revision()
     try:
         async with engine.connect() as conn:
+            if engine.dialect.name == "postgresql":
+                # A reviewed forward catalog must come from one consistent
+                # snapshot, including the head read below. No startup DDL.
+                conn = await conn.execution_options(isolation_level="REPEATABLE READ")
             result = await conn.execute(text("SELECT version_num FROM alembic_version"))
             applied = {str(row[0]) for row in result.fetchall()}
+            if applied != {expected}:
+                from deerflow.persistence.managed_schema_compatibility import accepts_reviewed_forward_schema
+
+                if await accepts_reviewed_forward_schema(conn, expected=expected, applied=applied, dialect=engine.dialect.name):
+                    return
     except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(
-            "Database migrations are missing or unreadable; run the explicit database migration command before starting the Gateway"
-        ) from exc
+        raise RuntimeError("Database migrations are missing or unreadable; run the explicit database migration command before starting the Gateway") from exc
     if applied != {expected}:
-        raise RuntimeError(
-            f"Database migration head mismatch (expected {expected}); run the explicit database migration command before starting the Gateway"
-        )
+        raise RuntimeError(f"Database migration head mismatch (expected {expected}); run the explicit database migration command before starting the Gateway")
 
 
 def get_session_factory() -> async_sessionmaker[AsyncSession] | None:
