@@ -9,6 +9,8 @@ rs.mock("@/core/config", () => ({
 
 import { fetch } from "@/core/api/fetcher";
 import {
+  claimMatterNotificationIncident,
+  closeMatterNotificationIncident,
   createCitation,
   decideMatterMemoryEntry,
   createMatter,
@@ -62,6 +64,51 @@ function requestBody(init: RequestInit | undefined): string {
 describe("Matrix-Law API client", () => {
   beforeEach(() => {
     mockedFetch.mockReset();
+  });
+
+  it("claims an incident with a valid idempotency key and the expected version", async () => {
+    const receipt = { id: "incident/1", status: "claimed", version: 2 };
+    mockedFetch.mockResolvedValue(jsonResponse({ data: receipt }));
+    await expect(
+      claimMatterNotificationIncident("tenant/a", "matter b", "incident/1", {
+        expected_version: 1,
+      }),
+    ).resolves.toEqual(receipt);
+    const [url, init] = mockedFetch.mock.calls[0]!;
+    expect(url).toBe(
+      "/api/law/tenants/tenant%2Fa/matters/matter%20b/notification-incidents/incident%2F1/claim",
+    );
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(requestBody(init))).toEqual({ expected_version: 1 });
+    expect(new Headers(init?.headers).get("Idempotency-Key")).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it("closes an incident with an idempotency key and preserves its resolution", async () => {
+    const receipt = { id: "incident/1", status: "closed", version: 3 };
+    mockedFetch.mockResolvedValue(jsonResponse({ data: receipt }));
+    const input = {
+      expected_version: 2,
+      resolution_note: "SYNTHETIC: reviewed and closed",
+    };
+    await expect(
+      closeMatterNotificationIncident(
+        "tenant/a",
+        "matter b",
+        "incident/1",
+        input,
+      ),
+    ).resolves.toEqual(receipt);
+    const [url, init] = mockedFetch.mock.calls[0]!;
+    expect(url).toBe(
+      "/api/law/tenants/tenant%2Fa/matters/matter%20b/notification-incidents/incident%2F1/close",
+    );
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(requestBody(init))).toEqual(input);
+    expect(new Headers(init?.headers).get("Idempotency-Key")).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
   });
 
   it("reads citations with current authorization and no browser HTTP cache", async () => {

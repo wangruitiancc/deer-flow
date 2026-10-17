@@ -2266,7 +2266,7 @@ export async function claimMatterNotificationIncident(
 ): Promise<MatterNotificationIncident> {
   return requestLaw<MatterNotificationIncident>(
     `${matterNotificationIncidentsPath(tenantId, matterId)}/${encodeURIComponent(incidentId)}/claim`,
-    jsonRequest("POST", input),
+    idempotencyRequest(input),
     "无法认领期限异常事项。请刷新后核对事项状态。",
   );
 }
@@ -2279,7 +2279,7 @@ export async function closeMatterNotificationIncident(
 ): Promise<MatterNotificationIncident> {
   return requestLaw<MatterNotificationIncident>(
     `${matterNotificationIncidentsPath(tenantId, matterId)}/${encodeURIComponent(incidentId)}/close`,
-    jsonRequest("POST", input),
+    idempotencyRequest(input),
     "无法关闭期限异常事项。请刷新后核对事项状态。",
   );
 }
