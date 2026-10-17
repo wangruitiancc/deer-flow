@@ -127,5 +127,10 @@ async def run_migrations_online() -> None:
 
 if context.is_offline_mode():
     run_migrations_offline()
+elif config.attributes.get("connection") is not None:
+    # The operator owns this connection and its enclosing transaction. Reuse
+    # it before entering asyncio.run so exact revisions and Alembic markers
+    # remain atomic inside SQLAlchemy's active event-loop/greenlet bridge.
+    do_run_migrations(config.attributes["connection"])
 else:
     asyncio.run(run_migrations_online())

@@ -28,7 +28,7 @@ from deerflow.persistence.bootstrap import bootstrap_schema
 pytestmark = pytest.mark.asyncio
 
 
-HEAD = "0020_admin_mfa"
+HEAD = "0022_password_reset_rate_limits"
 
 
 def _url(tmp_path: Path) -> str:

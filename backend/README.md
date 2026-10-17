@@ -604,3 +604,7 @@ a new host-named draft through the existing authorized sandbox and verifies its 
 content. It neither publishes nor saves project versions. Domain authorization and exact
 template rendering stay in Matrix Law's extension; uncertain writes are not replay-safe.
 See `packages/harness/deerflow/extensions/AGENTS.md` for the scope and concurrency limits.
+
+### Operator-owned migration transactions
+
+An explicit operator migration can supply its existing SQLAlchemy connection through Alembic. The environment reuses that connection so schema updates and revision markers remain in the same transaction. Managed deployments with `database.auto_migrate: false` still require the operator migration before Gateway startup.
