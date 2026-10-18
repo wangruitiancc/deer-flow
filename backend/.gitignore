@@ -35,3 +35,6 @@ config.yaml
 # pytest --basetemp workaround dirs (sandbox tmp_path permission)
 .pytest_tmp/
 .pytest_tmp_run/
+
+# Operator-generated extension runtime snapshots (authoritative source is external).
+/extensions/sources/

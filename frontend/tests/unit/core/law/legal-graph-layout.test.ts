@@ -95,6 +95,6 @@ describe("native legal graph layout", () => {
       anchor = { x: 100, y: 80 };
     const next = zoomGraph(view, 2, anchor);
     expect((anchor.x - next.x) / next.k).toBe((anchor.x - view.x) / view.k);
-    expect(zoomGraph(view, 1e6).k).toBe(6);
+    expect(zoomGraph(view, 1e6).k).toBe(8);
   });
 });

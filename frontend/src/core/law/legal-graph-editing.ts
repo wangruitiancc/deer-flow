@@ -8,6 +8,11 @@ import {
 
 export type LegalGraphEdit =
   | { kind: "title"; title: string }
+  | {
+      kind: "analysis";
+      value: NonNullable<LegalGraph["analysis"]>;
+      memberships: { edgeId: string; frameworkIds: string[] }[];
+    }
   | { kind: "node"; value: LegalGraphNode; create?: boolean }
   | { kind: "edge"; value: LegalGraphEdge; create?: boolean }
   | { kind: "delete-node"; id: string }
@@ -30,6 +35,45 @@ export function editLegalGraph(
 ): LegalGraph {
   let next: LegalGraph;
   switch (edit.kind) {
+    case "analysis": {
+      const memberships = new Map(
+        edit.memberships.map((item) => [item.edgeId, item.frameworkIds]),
+      );
+      if (
+        memberships.size !== edit.memberships.length ||
+        edit.memberships.some(
+          (item) =>
+            !graph.edges.some((edge) => edge.id === item.edgeId && edge.legal),
+        )
+      )
+        throw new Error("只能关联已有专业关系，不能重复或补造关系分类。");
+      const frames = new Set(
+        (edit.value.frameworks ?? []).map((frame) => frame.id),
+      );
+      const removed = new Set(
+        (graph.analysis?.frameworks ?? [])
+          .filter((frame) => !frames.has(frame.id))
+          .map((frame) => frame.id),
+      );
+      next = {
+        ...graph,
+        analysis: edit.value,
+        edges: graph.edges.map((edge) =>
+          edge.legal
+            ? {
+                ...edge,
+                legal: {
+                  ...edge.legal,
+                  framework_ids:
+                    memberships.get(edge.id) ??
+                    edge.legal.framework_ids?.filter((id) => !removed.has(id)),
+                },
+              }
+            : edge,
+        ),
+      };
+      break;
+    }
     case "map-source": {
       const current = graph.sources.find((source) => source.id === edit.id);
       const original =
@@ -89,9 +133,44 @@ export function editLegalGraph(
       next = {
         ...graph,
         nodes: graph.nodes.filter((node) => node.id !== edit.id),
-        edges: graph.edges.filter(
-          (edge) => edge.source !== edit.id && edge.target !== edit.id,
-        ),
+        edges: graph.edges
+          .filter((edge) => edge.source !== edit.id && edge.target !== edit.id)
+          .map((edge) =>
+            edge.legal
+              ? {
+                  ...edge,
+                  legal: {
+                    ...edge.legal,
+                    asserted_by:
+                      edge.legal.asserted_by === edit.id
+                        ? null
+                        : edge.legal.asserted_by,
+                    issue_ids: edge.legal.issue_ids.filter(
+                      (id) => id !== edit.id,
+                    ),
+                  },
+                }
+              : edge,
+          ),
+        ...(graph.analysis
+          ? {
+              analysis: {
+                ...graph.analysis,
+                element_node_ids: graph.analysis.element_node_ids.filter(
+                  (id) => id !== edit.id,
+                ),
+                frameworks: graph.analysis.frameworks?.map((frame) => ({
+                  ...frame,
+                  element_node_ids: frame.element_node_ids.filter(
+                    (id) => id !== edit.id,
+                  ),
+                  issue_node_ids: frame.issue_node_ids.filter(
+                    (id) => id !== edit.id,
+                  ),
+                })),
+              },
+            }
+          : {}),
       };
       break;
     case "delete-edge":
@@ -115,6 +194,46 @@ export function editLegalGraph(
       };
       break;
     }
+  }
+  // Keep AI view references valid after explicit manual deletions/endpoint edits.
+  // Selections only shrink; never invent new membership or alter remaining facts.
+  if (next.presentation) {
+    const nodes = new Set(next.nodes.map((node) => node.id));
+    const edges = new Map(next.edges.map((edge) => [edge.id, edge]));
+    const views = next.presentation.views
+      .map((view) => {
+        const node_ids = view.node_ids.filter((id) => nodes.has(id));
+        const selected = new Set(node_ids);
+        return {
+          ...view,
+          node_ids,
+          edge_ids: view.edge_ids.filter((id) => {
+            const edge = edges.get(id);
+            return (
+              edge && selected.has(edge.source) && selected.has(edge.target)
+            );
+          }),
+        };
+      })
+      .filter((view) => view.node_ids.length);
+    next = {
+      ...next,
+      presentation: {
+        ...next.presentation,
+        views,
+        default_view_id: views.some(
+          (view) => view.id === next.presentation!.default_view_id,
+        )
+          ? next.presentation.default_view_id
+          : null,
+        groups: next.presentation.groups
+          .map((group) => ({
+            ...group,
+            node_ids: group.node_ids.filter((id) => nodes.has(id)),
+          }))
+          .filter((group) => group.node_ids.length),
+      },
+    };
   }
   return parseLegalGraph(serializeLegalGraph(next));
 }

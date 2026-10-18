@@ -20,6 +20,20 @@ import pytest
 from fastapi import FastAPI
 
 
+@pytest.fixture(autouse=True)
+def _stub_password_reset_worker(monkeypatch):
+    """Lifespan unit tests do not open the shared authentication database."""
+    import importlib
+
+    gateway_app = importlib.import_module("app.gateway.app")
+    monkeypatch.setattr(gateway_app, "_ensure_admin_user", AsyncMock())
+    monkeypatch.setattr("app.gateway.deps.get_local_provider", lambda: SimpleNamespace(repository=object()))
+    monkeypatch.setattr(
+        "app.gateway.auth.password_reset.PasswordResetMailService",
+        lambda *_args: SimpleNamespace(start=AsyncMock(), stop=AsyncMock()),
+    )
+
+
 @asynccontextmanager
 async def _noop_langgraph_runtime(_app, _startup_config):
     yield

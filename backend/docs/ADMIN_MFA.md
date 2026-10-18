@@ -6,6 +6,11 @@ enrollment and a second factor after password verification. The password step
 then issues only a ten-minute, HttpOnly `mfa_challenge` cookie; it does not
 issue an authenticated session.
 
+An already-enrolled local account must still complete MFA after a system-role
+reduction or when mandatory administrator enrollment is disabled. Only local
+administrators may start a new enrollment. Existing one-use TOTP/recovery
+checks and token-version fences remain in effect.
+
 On first login, an administrator enrolls a TOTP authenticator. The setup page
 shows a secret and ten one-time recovery codes. Save the codes in a secure
 offline location before confirming enrollment. Later logins accept a six-digit
@@ -48,3 +53,15 @@ rate limit for password and MFA attempts.
 The local candidate enables this setting for deployment-path verification.
 That proves only the candidate tenant Gateway flow; it does not establish
 production secret management or cover the capability-platform admin plane.
+
+## Explicit bootstrap owner transition
+
+A signed Matrix Law owner-bootstrap request normally creates a regular user.
+An existing local system administrator is refused unless the operator sets
+`MATRIX_LAW_BOOTSTRAP_OWNER_TRANSITION_EMAIL` to that exact email and another
+system administrator remains. The normal password proof and atomic repository
+comparison of user ID, role, password hash and token version are mandatory.
+The transition preserves the existing identity, password and MFA enrollment,
+increments token version and clears the old challenge. It does not grant a
+firm membership by itself; the signed extension bootstrap owns that transaction.
+Remove the one-time operator setting after successful activation.

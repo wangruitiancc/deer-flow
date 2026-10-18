@@ -14,8 +14,7 @@ async def test_repository_transition_fences_credentials_and_preserves_mfa(tmp_pa
     await init_engine("sqlite", url=f"sqlite+aiosqlite:///{tmp_path}/owner-transition.db", sqlite_dir=str(tmp_path))
     try:
         repo = SQLiteUserRepository(get_session_factory())
-        owner = await repo.create_user(User(email="owner@example.com", password_hash="old-hash", system_role="admin",
-                                           mfa_enabled=True, mfa_secret_ciphertext="kept", mfa_last_counter=12))
+        owner = await repo.create_user(User(email="owner@example.com", password_hash="old-hash", system_role="admin", mfa_enabled=True, mfa_secret_ciphertext="kept", mfa_last_counter=12))
         assert await repo.transition_bootstrap_owner(owner) is None
         await repo.create_user(User(email="operator@example.com", password_hash="operator-hash", system_role="admin"))
         changed = owner.model_copy(update={"password_hash": "new-hash", "token_version": 1})
@@ -34,8 +33,7 @@ async def test_repository_transition_fences_credentials_and_preserves_mfa(tmp_pa
 
 @pytest.mark.asyncio
 async def test_existing_system_admin_requires_explicit_host_transition_and_password_proof(monkeypatch):
-    user = User(email="owner@example.com", password_hash="preserved", system_role="admin", token_version=7,
-                mfa_enabled=True, mfa_secret_ciphertext="preserved-mfa", mfa_challenge_id="old-challenge")
+    user = User(email="owner@example.com", password_hash="preserved", system_role="admin", token_version=7, mfa_enabled=True, mfa_secret_ciphertext="preserved-mfa", mfa_challenge_id="old-challenge")
     updated = []
 
     async def create_user(**_kwargs):

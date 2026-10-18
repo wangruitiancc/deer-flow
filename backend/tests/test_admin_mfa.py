@@ -40,10 +40,15 @@ def test_enrolled_owner_keeps_mfa_after_system_role_is_reduced(tmp_path, monkeyp
 
     async def prepare() -> None:
         await init_engine("sqlite", url=f"sqlite+aiosqlite:///{tmp_path}/owner-mfa.db", sqlite_dir=str(tmp_path))
-        await SQLiteUserRepository(get_session_factory()).create_user(User(
-            email="owner-mfa@example.com", password_hash=hash_password("OwnerMfaPass!384"), system_role="user",
-            mfa_enabled=True, mfa_secret_ciphertext=encrypt_totp_secret(secret),
-        ))
+        await SQLiteUserRepository(get_session_factory()).create_user(
+            User(
+                email="owner-mfa@example.com",
+                password_hash=hash_password("OwnerMfaPass!384"),
+                system_role="user",
+                mfa_enabled=True,
+                mfa_secret_ciphertext=encrypt_totp_secret(secret),
+            )
+        )
 
     asyncio.run(prepare())
     deps._cached_local_provider = None
@@ -140,12 +145,8 @@ def test_sqlite_repository_makes_mfa_challenges_and_recovery_codes_one_use(tmp_p
             assert not await provider.consume_mfa_totp(str(admin.id), admin.token_version, "challenge-totp", counter + 1)
 
             assert await provider.set_mfa_challenge(str(admin.id), admin.token_version, "challenge-recovery")
-            assert await provider.consume_mfa_recovery_code(
-                str(admin.id), admin.token_version, "challenge-recovery", hash_recovery_code(recovery_code)
-            )
-            assert not await provider.consume_mfa_recovery_code(
-                str(admin.id), admin.token_version, "challenge-recovery", hash_recovery_code(recovery_code)
-            )
+            assert await provider.consume_mfa_recovery_code(str(admin.id), admin.token_version, "challenge-recovery", hash_recovery_code(recovery_code))
+            assert not await provider.consume_mfa_recovery_code(str(admin.id), admin.token_version, "challenge-recovery", hash_recovery_code(recovery_code))
             assert await repo.count_users() == 1
         finally:
             await close_engine()
@@ -166,12 +167,9 @@ def test_admin_login_requires_totp_or_one_use_recovery_code(tmp_path, monkeypatc
     async def prepare() -> None:
         await init_engine("sqlite", url=f"sqlite+aiosqlite:///{tmp_path}/admin-mfa-http.db", sqlite_dir=str(tmp_path))
         repo = SQLiteUserRepository(get_session_factory())
-        await repo.create_user(
-            User(email="http-mfa-admin@example.com", password_hash=hash_password("AdminMfaPass!384"), system_role="admin")
-        )
-        await repo.create_user(
-            User(email="http-mfa-user@example.com", password_hash=hash_password("LawyerMfaPass!384"), system_role="user")
-        )
+        await repo.create_user(User(email="http-mfa-admin@example.com", password_hash=hash_password("AdminMfaPass!384"), system_role="admin"))
+        await repo.create_user(User(email="http-mfa-user@example.com", password_hash=hash_password("LawyerMfaPass!384"), system_role="user"))
+
     asyncio.run(prepare())
     deps._cached_local_provider = None
     deps._cached_repo = None

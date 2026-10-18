@@ -608,3 +608,8 @@ See `packages/harness/deerflow/extensions/AGENTS.md` for the scope and concurren
 ### Operator-owned migration transactions
 
 An explicit operator migration can supply its existing SQLAlchemy connection through Alembic. The environment reuses that connection so schema updates and revision markers remain in the same transaction. Managed deployments with `database.auto_migrate: false` still require the operator migration before Gateway startup.
+
+Local accounts retain their enrolled MFA when a system administrator is
+converted to a Matrix Law firm owner by the explicit, password-proven bootstrap
+transition. System initialization and firm administration remain separate roles.
+See [MFA and transition scope](docs/ADMIN_MFA.md).

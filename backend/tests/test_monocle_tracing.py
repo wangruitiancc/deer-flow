@@ -38,6 +38,20 @@ _TRACING_ENV = (
 
 
 @pytest.fixture(autouse=True)
+def _stub_password_reset_worker(monkeypatch):
+    """Lifespan unit tests do not open the shared authentication database."""
+    import importlib
+
+    gateway_app = importlib.import_module("app.gateway.app")
+    monkeypatch.setattr(gateway_app, "_ensure_admin_user", AsyncMock())
+    monkeypatch.setattr("app.gateway.deps.get_local_provider", lambda: SimpleNamespace(repository=object()))
+    monkeypatch.setattr(
+        "app.gateway.auth.password_reset.PasswordResetMailService",
+        lambda *_args: SimpleNamespace(start=AsyncMock(), stop=AsyncMock()),
+    )
+
+
+@pytest.fixture(autouse=True)
 def clear_monocle_env(monkeypatch):
     for name in _TRACING_ENV:
         monkeypatch.delenv(name, raising=False)

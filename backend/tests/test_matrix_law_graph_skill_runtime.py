@@ -21,7 +21,7 @@ from deerflow.agents.middlewares.skill_tool_policy_middleware import SkillToolPo
 from deerflow.skills.storage.local_skill_storage import LocalSkillStorage
 
 ROOT = Path(__file__).resolve().parents[2]
-LEGAL_TOOLS = {"law_list_citations", "law_read_citation", "law_validate_graph", "law_list_evidence_versions", "law_list_ocr_jobs", "law_read_ocr_block", "law_create_citation"}
+LEGAL_TOOLS = {"law_get_current_matter_summary", "law_list_citations", "law_read_citation", "law_validate_graph", "law_list_evidence_versions", "law_list_ocr_jobs", "law_list_proofreading_publications", "law_pin_evidence_manifest", "law_get_evidence_manifest", "law_list_published_material_pages", "law_read_published_material_page", "law_create_published_material_citation", "law_search_saved_authorities", "law_read_saved_authority_version"}
 
 
 class RecordingModel(FakeMessagesListChatModel):
@@ -79,7 +79,7 @@ def test_packaged_graph_skill_uses_native_activation_and_middleware_tools():
         result = await graph.ainvoke({"messages": [HumanMessage(content="/matrix-law-graph 生成这次零散法律咨询的人物关系图")]}, context={EXTENSION_TASK_STORE_KEY: store})
         # The registry intentionally withholds raw OCR reads/citation writes:
         # Agent material reads must use immutable proofreading publications.
-        readable = LEGAL_TOOLS - {"law_read_ocr_block", "law_create_citation"}
+        readable = LEGAL_TOOLS
         assert model.bound_names and all(readable <= set(names) for names in model.bound_names)
         assert all(not {"law_read_ocr_block", "law_create_citation"} & set(names) for names in model.bound_names)
         assert all("unrelated_test_tool" not in names for names in model.bound_names)

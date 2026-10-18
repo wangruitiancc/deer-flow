@@ -18,6 +18,7 @@ import {
   detachMatterConversation,
   fetchEvidenceContent,
   getCitation,
+  getMatter,
   getMatterContextByThread,
   getOcrPageDraft,
   getOcrProofreadingCollection,
@@ -130,6 +131,19 @@ describe("Matrix-Law API client", () => {
     expect(JSON.parse(requestBody(init))).toEqual(input);
     expect(new Headers(init?.headers).get("Idempotency-Key")).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it("rechecks matter metadata without the browser HTTP cache before analysis edits", async () => {
+    const matter = { id: "matter", version: 2, cause: "Synthetic" };
+    mockedFetch.mockResolvedValue(jsonResponse({ data: { matter } }));
+    const controller = new AbortController();
+    await expect(
+      getMatter("tenant", "matter", controller.signal),
+    ).resolves.toEqual(matter);
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/law/tenants/tenant/matters/matter",
+      { signal: controller.signal, cache: "no-store" },
     );
   });
 

@@ -9,6 +9,8 @@ import {
 } from "d3-force";
 
 import { type LegalGraph, type LegalGraphNode } from "./legal-graph";
+import { type GraphExplorerOptions } from "./legal-graph-explorer";
+import { legalNodeRole } from "./legal-graph-semantics";
 
 export const GRAPH_WIDTH = 800;
 export const GRAPH_HEIGHT = 500;
@@ -38,9 +40,48 @@ export interface GraphLayoutNode extends SimulationNodeDatum {
   timeline: boolean;
   radius: number;
 }
+export function createLegalAnalysisLayout(
+  graph: LegalGraph,
+): GraphLayoutNode[] {
+  const columns = {
+    subject: 0,
+    claim: 1,
+    defense: 1,
+    issue: 2,
+    element: 3,
+    act: 4,
+    fact: 4,
+    asset: 4,
+    evidence: 5,
+    rule: 6,
+    procedure: 7,
+    other: 4,
+  } as const;
+  const rows = new Map<number, number>();
+  return graph.nodes.map((node) => {
+    const column = columns[legalNodeRole(node)];
+    const row = rows.get(column) ?? 0;
+    rows.set(column, row + 1);
+    return {
+      id: node.id,
+      x: 100 + column * 220,
+      y: 100 + row * 150,
+      radius: 11,
+      timeline: false,
+    };
+  });
+}
 
-export function createGraphSimulation(graph: LegalGraph) {
-  const timeline = timelineEntries(graph.nodes);
+export function createGraphSimulation(
+  graph: LegalGraph,
+  explorer?: Pick<
+    GraphExplorerOptions,
+    "centerForce" | "repelForce" | "linkForce" | "linkDistance"
+  >,
+  previous: { id: string; x: number; y: number }[] = [],
+) {
+  const timeline = explorer ? [] : timelineEntries(graph.nodes);
+  const positions = new Map(previous.map((node) => [node.id, node]));
   const order = new Map(timeline.map((entry, index) => [entry.node.id, index]));
   const degree = new Map<string, number>();
   for (const edge of graph.edges) {
@@ -56,16 +97,20 @@ export function createGraphSimulation(graph: LegalGraph) {
     const x =
       eventIndex !== undefined
         ? 100
-        : (node.position?.x ?? center + Math.cos(angle) * spread);
+        : (node.position?.x ??
+          positions.get(node.id)?.x ??
+          center + Math.cos(angle) * spread);
     const y =
       eventIndex !== undefined
         ? 60 + eventIndex * 65
-        : (node.position?.y ?? height / 2 + Math.sin(angle) * spread);
+        : (node.position?.y ??
+          positions.get(node.id)?.y ??
+          height / 2 + Math.sin(angle) * spread);
     return {
       id: node.id,
       x,
       y,
-      radius: 7 + Math.min(7, degree.get(node.id) ?? 0),
+      radius: 6 + Math.min(12, Math.sqrt(degree.get(node.id) ?? 0) * 3),
       timeline: eventIndex !== undefined,
       fx: eventIndex !== undefined || node.position ? x : null,
       fy: eventIndex !== undefined || node.position ? y : null,
@@ -74,7 +119,7 @@ export function createGraphSimulation(graph: LegalGraph) {
   // D3 mutates its own simulation copies, never the immutable artifact payload.
   return forceSimulation(nodes)
     .stop()
-    .force("charge", forceManyBody().strength(-300))
+    .force("charge", forceManyBody().strength(-(explorer?.repelForce ?? 300)))
     .force(
       "link",
       forceLink<GraphLayoutNode, { source: string; target: string }>(
@@ -84,19 +129,19 @@ export function createGraphSimulation(graph: LegalGraph) {
         })),
       )
         .id((node) => node.id)
-        .distance(105)
-        .strength(0.4),
+        .distance(explorer?.linkDistance ?? 105)
+        .strength(explorer?.linkForce ?? 0.4),
     )
     .force(
       "x",
       forceX<GraphLayoutNode>(center).strength((node) =>
-        node.timeline ? 0 : 0.08,
+        node.timeline ? 0 : (explorer?.centerForce ?? 0.08),
       ),
     )
     .force(
       "y",
       forceY<GraphLayoutNode>(height / 2).strength((node) =>
-        node.timeline ? 0 : 0.06,
+        node.timeline ? 0 : (explorer?.centerForce ?? 0.06),
       ),
     )
     .force(
@@ -109,6 +154,18 @@ export interface GraphView {
   k: number;
   x: number;
   y: number;
+}
+export function graphEdgePath(
+  a: GraphLayoutNode,
+  b: GraphLayoutNode,
+  offset = 0,
+): string {
+  if (a.id === b.id)
+    return `M ${a.x + a.radius} ${a.y} C ${a.x + 65 + offset} ${a.y - 85 - offset}, ${a.x - 65 - offset} ${a.y - 85 - offset}, ${a.x - a.radius} ${a.y}`;
+  const length = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+  const x = (a.x + b.x) / 2 - ((b.y - a.y) / length) * offset;
+  const y = (a.y + b.y) / 2 + ((b.x - a.x) / length) * offset;
+  return `M ${a.x} ${a.y} Q ${x} ${y} ${b.x} ${b.y}`;
 }
 export function fitGraph(nodes: GraphLayoutNode[]): GraphView {
   if (!nodes.length) return { k: 1, x: 0, y: 0 };
@@ -133,7 +190,7 @@ export function zoomGraph(
   factor: number,
   anchor = { x: 400, y: 250 },
 ): GraphView {
-  const k = Math.max(0.005, Math.min(6, view.k * factor));
+  const k = Math.max(1 / 128, Math.min(8, view.k * factor));
   return {
     k,
     x: anchor.x - ((anchor.x - view.x) / view.k) * k,

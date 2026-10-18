@@ -430,6 +430,7 @@ def test_matrix_law_profile_applies_thread_mounts_network_security_and_limits(mo
     )
     config.skills = types.SimpleNamespace(container_path="/mnt/skills")
     monkeypatch.setattr("deerflow.community.boxlite.provider.get_app_config", lambda: config)
+    monkeypatch.setattr("deerflow.config.get_app_config", lambda: config)
     paths = __import__("deerflow.config.paths", fromlist=["Paths"]).Paths(tmp_path)
     monkeypatch.setattr("deerflow.config.paths.get_paths", lambda: paths)
 
