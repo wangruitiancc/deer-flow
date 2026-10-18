@@ -240,6 +240,11 @@ export interface Membership {
   updated_at: string;
 }
 
+export interface ManagementTenantListItem {
+  tenant: Pick<Tenant, "id" | "name">;
+  membership: Membership;
+}
+
 export interface TenantListItem {
   tenant: Tenant;
   membership: Membership;

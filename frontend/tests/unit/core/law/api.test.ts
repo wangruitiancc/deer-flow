@@ -29,6 +29,7 @@ import {
   listOcrJobs,
   listOcrReviewQueue,
   listTenants,
+  listManagementTenants,
   acceptTenantMembershipInvitation,
   proposeOcrBlockCorrection,
   publishOcrProofreading,
@@ -64,6 +65,27 @@ function requestBody(init: RequestInit | undefined): string {
 describe("Matrix-Law API client", () => {
   beforeEach(() => {
     mockedFetch.mockReset();
+  });
+
+  it("reads finance-safe management metadata without caching or querying case data", async () => {
+    const items = [
+      {
+        tenant: { id: "firm", name: "Synthetic" },
+        membership: { role: "finance", status: "active" },
+      },
+    ];
+    mockedFetch.mockResolvedValue(jsonResponse({ data: { items } }));
+    await expect(listManagementTenants()).resolves.toEqual(items);
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    expect(mockedFetch.mock.calls[0]?.[0]).toBe("/api/law/management/tenants");
+    expect(mockedFetch.mock.calls[0]?.[1]?.cache).toBe("no-store");
+  });
+
+  it("preserves management failures instead of inventing a finance role", async () => {
+    mockedFetch.mockResolvedValue(
+      jsonResponse({ error: { message: "Unavailable" } }, 503),
+    );
+    await expect(listManagementTenants()).rejects.toThrow();
   });
 
   it("claims an incident with a valid idempotency key and the expected version", async () => {

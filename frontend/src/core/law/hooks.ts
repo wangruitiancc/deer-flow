@@ -86,6 +86,7 @@ import {
   listOcrWorkflows,
   listOcrReviewQueue,
   listTenants,
+  listManagementTenants,
   getMyTenantCapabilities,
   proposeOcrBlockCorrection,
   rerunOcrJob,
@@ -390,6 +391,16 @@ function upsertOcrJob(current: OcrJob[] | undefined, job: OcrJob): OcrJob[] {
 
 export function useLawTenants() {
   return useQuery({ queryKey: lawKeys.tenants, queryFn: listTenants });
+}
+
+// Resolve non-workspace identities only after a successful empty legal list.
+export function useLawManagementTenants(enabled: boolean) {
+  return useQuery({
+    queryKey: ["law", "management-tenants"],
+    queryFn: listManagementTenants,
+    enabled,
+    retry: false,
+  });
 }
 
 export function useMyTenantCapabilities(tenantId: string | null) {

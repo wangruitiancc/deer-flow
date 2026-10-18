@@ -61,6 +61,7 @@ import {
   useLawMatters,
   useLawMatterThreads,
   useLawTenants,
+  useLawManagementTenants,
   pathOfLawProject,
   type MatterClassification,
   type MatterKind,
@@ -68,6 +69,7 @@ import {
   type MatterMemberRole,
   type MatterMemberStatus,
 } from "@/core/law";
+import { hasFinanceEntry } from "@/core/law/finance-entry";
 import { pathOfThread } from "@/core/threads/utils";
 import { cn } from "@/lib/utils";
 
@@ -341,6 +343,17 @@ export default function LawMattersPage() {
     ? requestedView!
     : "overview";
   const tenantsQuery = useLawTenants();
+  const needsManagementEntry =
+    tenantsQuery.isSuccess && tenantsQuery.data.length === 0;
+  const managementQuery = useLawManagementTenants(needsManagementEntry);
+  const financeEntry =
+    needsManagementEntry &&
+    managementQuery.isSuccess &&
+    hasFinanceEntry(managementQuery.data);
+
+  useEffect(() => {
+    if (financeEntry) window.location.replace("/law-admin/");
+  }, [financeEntry]);
   const [selectedTenantId, setSelectedTenantId] = useState<string | null>(null);
   const [selectedMatterId, setSelectedMatterId] = useState<string | null>(null);
   const [matterDialogOpen, setMatterDialogOpen] = useState(false);
@@ -596,6 +609,18 @@ export default function LawMattersPage() {
                   message={errorMessage(tenantsQuery.error, copy.requestFailed)}
                   retry={copy.retry}
                   onRetry={() => void tenantsQuery.refetch()}
+                />
+              ) : needsManagementEntry &&
+                (managementQuery.isPending || financeEntry) ? (
+                <PageSkeleton />
+              ) : needsManagementEntry && managementQuery.isError ? (
+                <ErrorState
+                  message={errorMessage(
+                    managementQuery.error,
+                    copy.requestFailed,
+                  )}
+                  retry={copy.retry}
+                  onRetry={() => void managementQuery.refetch()}
                 />
               ) : !tenantsQuery.data?.length ? (
                 <EmptyState

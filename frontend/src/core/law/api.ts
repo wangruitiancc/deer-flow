@@ -2,6 +2,7 @@ import { fetch as fetchWithAuth } from "@/core/api/fetcher";
 import { getBackendBaseURL } from "@/core/config";
 
 import type {
+  ManagementTenantListItem,
   CreateMatterInput,
   CreatedMatterConversation,
   CreateCitationInput,
@@ -224,6 +225,17 @@ export async function listTenants(): Promise<TenantListItem[]> {
     "/tenants",
     undefined,
     "Failed to load legal workspaces.",
+  );
+  return data.items;
+}
+
+export async function listManagementTenants(): Promise<
+  ManagementTenantListItem[]
+> {
+  const data = await requestLaw<{ items: ManagementTenantListItem[] }>(
+    "/management/tenants",
+    { cache: "no-store" },
+    "Failed to load law firm management access.",
   );
   return data.items;
 }
