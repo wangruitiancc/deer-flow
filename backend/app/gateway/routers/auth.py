@@ -243,7 +243,7 @@ async def _require_mfa_challenge(request: Request, response: Response, expected_
         _clear_mfa_challenge_cookie(response, request)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="MFA challenge is invalid or expired")
     user = await get_local_provider().get_user(challenge.sub)
-    if user is None or user.system_role != "admin" or user.token_version != challenge.ver or user.mfa_challenge_id != challenge.jti:
+    if user is None or (user.system_role != "admin" and not (expected_mode == "verify" and user.mfa_enabled)) or user.token_version != challenge.ver or user.mfa_challenge_id != challenge.jti:
         _clear_mfa_challenge_cookie(response, request)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="MFA challenge is invalid or expired")
     return challenge, user
@@ -519,7 +519,7 @@ async def login_local(
 
     _record_login_success(client_ip)
     auth_config = get_auth_config()
-    if auth_config.mfa_required_for_admins and user.system_role == "admin":
+    if user.mfa_enabled or (auth_config.mfa_required_for_admins and user.system_role == "admin"):
         mode = "verify" if user.mfa_enabled else "setup"
         if mode == "setup":
             try:
@@ -607,9 +607,7 @@ async def confirm_admin_mfa_setup(request: Request, response: Response, body: MF
 
 @router.post("/mfa/verify", response_model=LoginResponse)
 async def verify_admin_mfa(request: Request, response: Response, body: MFAInput):
-    """Consume a TOTP step or one recovery code, then issue the admin session."""
-    if not get_auth_config().mfa_required_for_admins:
-        raise HTTPException(status_code=404, detail="Administrator MFA is disabled")
+    """Consume a TOTP step or recovery code for an enrolled local identity."""
     client_ip = _get_client_ip(request)
     await _check_rate_limit(client_ip)
     challenge, user = await _require_mfa_challenge(request, response, "verify")

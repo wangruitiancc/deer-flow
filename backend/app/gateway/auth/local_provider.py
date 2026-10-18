@@ -105,6 +105,9 @@ class LocalAuthProvider(AuthProvider):
         """Update an existing user."""
         return await self._repo.update_user(user)
 
+    async def transition_bootstrap_owner(self, user: User) -> User | None:
+        return await self._repo.transition_bootstrap_owner(user)
+
     async def reset_password_if_token_version(self, user_id: str, expected_version: int, new_password: str) -> bool:
         """Hash and atomically apply a password reset once."""
         password_hash = await hash_password_async(new_password)

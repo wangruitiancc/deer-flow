@@ -303,6 +303,22 @@ class SQLiteUserRepository(UserRepository):
             await session.commit()
         return user
 
+    async def transition_bootstrap_owner(self, user: User) -> User | None:
+        admin_count = select(func.count()).select_from(UserRow).where(UserRow.system_role == "admin").correlate(None).scalar_subquery()
+        stmt = (
+            update(UserRow)
+            .where(UserRow.id == str(user.id), UserRow.system_role == "admin", UserRow.token_version == user.token_version,
+                   UserRow.password_hash == user.password_hash, admin_count > 1)
+            .values(system_role="user", token_version=UserRow.token_version + 1, mfa_challenge_id=None)
+            .returning(UserRow)
+            .execution_options(synchronize_session=False)
+        )
+        async with self._sf() as session:
+            row = (await session.execute(stmt)).scalar_one_or_none()
+            result = self._row_to_user(row) if row is not None else None
+            await session.commit()
+            return result
+
     async def set_password_if_token_version(self, user_id: str, expected_version: int, password_hash: str) -> bool:
         """Atomically consume a reset token by advancing the session version."""
         stmt = (
@@ -473,7 +489,7 @@ class SQLiteUserRepository(UserRepository):
             return all(counts[key] <= limit for key, limit in buckets.items())
 
     async def set_mfa_challenge(self, user_id: str, expected_version: int, challenge_id: str) -> bool:
-        stmt = update(UserRow).where(UserRow.id == user_id, UserRow.token_version == expected_version, UserRow.system_role == "admin").values(mfa_challenge_id=challenge_id).execution_options(synchronize_session=False)
+        stmt = update(UserRow).where(UserRow.id == user_id, UserRow.token_version == expected_version, or_(UserRow.system_role == "admin", UserRow.mfa_enabled.is_(True))).values(mfa_challenge_id=challenge_id).execution_options(synchronize_session=False)
         async with self._sf() as session:
             result = await session.execute(stmt)
             await session.commit()
@@ -536,7 +552,6 @@ class SQLiteUserRepository(UserRepository):
             .where(
                 UserRow.id == user_id,
                 UserRow.token_version == expected_version,
-                UserRow.system_role == "admin",
                 UserRow.mfa_enabled.is_(True),
                 UserRow.mfa_challenge_id == challenge_id,
                 UserRow.mfa_last_counter < counter,
@@ -558,7 +573,6 @@ class SQLiteUserRepository(UserRepository):
                         .where(
                             UserRow.id == user_id,
                             UserRow.token_version == expected_version,
-                            UserRow.system_role == "admin",
                             UserRow.mfa_enabled.is_(True),
                             UserRow.mfa_challenge_id == challenge_id,
                         )
