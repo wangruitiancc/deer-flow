@@ -12,6 +12,27 @@ Its shared acceptance fixture lives in the packaged Matrix Law extension
 at `matrix_law_extension/contracts/legal_graph_v1.examples.json`. Citation IDs are not proof
 of factual correctness or current access; source opens must reauthorize through the existing
 legal APIs. Never execute legacy reference strings or treat EXTRACTED as human approval.
+Optional v1 `analysis`, node `role` and edge `legal` fields bind candidate cause/offense
+frameworks to issues, elements and explicit relationship membership. Pair frontend and
+extension releases; do not infer legal roles or framework membership from labels. The
+backend checks registered cause and matter version before publishing/saving analysis.
+`legal-graph-explorer.ts` owns bounded inert queries and local traversal; filtering must
+never rewrite the artifact. Canvas uses an inert geometry-only Worker with bounded RAF
+fallback; display settings and searches remain memory-only. The analysis-column layout
+is a reading aid, not an inference engine. Structural questions do not prove missing
+evidence, legal causation, fulfilled elements or human review. Professional synthetic
+fixtures live alongside the existing shared contract as `legal_graph_professional.example.json`.
+Optional v1 `presentation` contains AI-authored bounded color groups and topic views of
+explicit existing IDs, paired with the analysis baseline. Automatically apply its initial
+view/layout/colors; keep complete artifact data and opposing evidence intact, show visible
+and total counts, and provide full-graph/reset controls. Manual color groups override AI
+colors. Do not persist settings or execute model-authored expressions. Manual deletions
+prune only deleted view references; source authority and lawyer review remain unchanged.
+`LegalGraphAnalysisEditor` pins graph/scope, reauthorizes matter reads on open and apply,
+clears metadata/confirmation on denial, and requires renewed acknowledgment when metadata
+changes during apply. This acknowledgment is a draft operation, never a review receipt.
+Framework deletion removes membership only. Read-only framework/source panels must unmount
+protected source reads on close and reauthorize every quote reopening.
 `legal-graph-editing.ts` owns validated local graph transactions. The native artifact Edit
 action enables node/edge/title forms and non-event drag pinning; the same provider-memory
 draft, explicit file Save, SHA conflict guard and project-version promotion remain authoritative.

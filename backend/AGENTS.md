@@ -276,7 +276,7 @@ rate limit.
 Local Gateway administrator MFA is implemented in `auth/mfa.py` and
 `routers/auth.py`, with persistence in migration `0020_admin_mfa`. It is
 opt-in through `AUTH_MFA_REQUIRED_FOR_ADMINS`; the Matrix Law candidate enables
-it explicitly. It covers local password admins only. Do not imply OIDC or
+it explicitly. It mandates enrollment for local password admins; already-enrolled users retain MFA after role reduction. Do not imply OIDC or
 capability-platform admins are covered. Keep the 32-byte
 `AUTH_MFA_ENCRYPTION_KEY` in the tenant secret store and consistent across
 workers. MFA has no supported audited reset command yet; production rollout

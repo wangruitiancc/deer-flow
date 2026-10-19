@@ -1,5 +1,12 @@
 import { z } from "zod";
 
+import {
+  legalNodeRoles,
+  legalRelationFamilies,
+  legalRelationKinds,
+  legalStatements,
+} from "./legal-graph-semantics";
+
 export const MAX_LEGAL_GRAPH_BYTES = 2 * 1024 * 1024;
 export function isLegalGraphFile(filepath: string): boolean {
   return filepath.toLowerCase().endsWith(".law-graph.json");
@@ -70,6 +77,7 @@ const node = z
     id,
     label: text(200),
     type: z.enum(legalGraphNodeTypes),
+    role: z.enum(legalNodeRoles).nullable().optional(),
     category,
     date: graphDate.nullable().optional(),
     position: z
@@ -98,6 +106,19 @@ const edge = z
     confidence: z.enum(["EXTRACTED", "INFERRED", "AMBIGUOUS"]),
     angle: category.nullable().optional(),
     source_ids: sources,
+    legal: z
+      .object({
+        family: z.enum(legalRelationFamilies),
+        kind: z.enum(legalRelationKinds),
+        statement: z.enum(legalStatements),
+        asserted_by: id.nullable().optional(),
+        issue_ids: z.array(id).max(16),
+        framework_ids: z.array(id).max(8).nullable().optional(),
+        questions: z.array(text(240)).max(8),
+      })
+      .strict()
+      .nullable()
+      .optional(),
   })
   .strict();
 
@@ -162,6 +183,68 @@ export const legalGraphSchema = z
     format: z.literal("matrix-law.legal-graph"),
     schema_version: z.literal(1),
     title: text(240),
+    presentation: z
+      .object({
+        summary: text(1000),
+        default_view_id: id.nullable(),
+        groups: z
+          .array(
+            z
+              .object({
+                id,
+                label: text(120),
+                color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+                node_ids: z.array(id).min(1).max(500),
+              })
+              .strict(),
+          )
+          .max(16),
+        views: z
+          .array(
+            z
+              .object({
+                id,
+                label: text(120),
+                description: text(1000),
+                layout: z.enum(["force", "analysis"]),
+                node_ids: z.array(id).min(1).max(500),
+                edge_ids: z.array(id).max(2000),
+              })
+              .strict(),
+          )
+          .max(16),
+      })
+      .strict()
+      .nullable()
+      .optional(),
+    analysis: z
+      .object({
+        case_labels: z.array(text(240)).min(1).max(8),
+        registered_cause: text(240).nullable(),
+        matter_version: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+        framework_source_ids: z.array(id).max(32),
+        element_node_ids: z.array(id).max(64),
+        notes: z.array(text(1000)).max(16),
+        frameworks: z
+          .array(
+            z
+              .object({
+                id,
+                label: text(240),
+                case_label: text(240),
+                source_ids: z.array(id).max(32),
+                element_node_ids: z.array(id).max(64),
+                issue_node_ids: z.array(id).max(64),
+              })
+              .strict(),
+          )
+          .max(8)
+          .nullable()
+          .optional(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
     nodes: z.array(node).max(500),
     edges: z.array(edge).max(2000),
     sources: z.array(source).max(500),
@@ -176,9 +259,99 @@ export const legalGraphSchema = z
     }
     const nodeIds = new Set(graph.nodes.map((item) => item.id));
     const sourceIds = new Set(graph.sources.map((item) => item.id));
+    if (graph.presentation) {
+      const plan = graph.presentation;
+      const unique = (ids: string[]) => new Set(ids).size === ids.length;
+      if (
+        !graph.analysis ||
+        !unique(plan.groups.map((group) => group.id)) ||
+        !unique(plan.views.map((view) => view.id)) ||
+        (plan.default_view_id !== null &&
+          !plan.views.some((view) => view.id === plan.default_view_id))
+      )
+        issue("图谱编排需要案件分析基线和有效的唯一视图标识");
+      for (const group of plan.groups)
+        if (
+          !unique(group.node_ids) ||
+          group.node_ids.some((id) => !nodeIds.has(id))
+        )
+          issue("图谱颜色分组关联无效");
+      const edges = new Map(graph.edges.map((edge) => [edge.id, edge]));
+      for (const view of plan.views) {
+        const nodes = new Set(view.node_ids);
+        if (
+          !unique(view.node_ids) ||
+          !unique(view.edge_ids) ||
+          view.node_ids.some((id) => !nodeIds.has(id)) ||
+          view.edge_ids.some((id) => {
+            const edge = edges.get(id);
+            return !edge || !nodes.has(edge.source) || !nodes.has(edge.target);
+          })
+        )
+          issue("图谱主题视图存在悬空节点或关系");
+      }
+    }
+    const frameworks = graph.analysis?.frameworks ?? [];
+    const frameworkIds = new Set(frameworks.map((framework) => framework.id));
+    if (frameworkIds.size !== frameworks.length) issue("法律分析框架标识重复");
+    for (const frame of frameworks) {
+      if (
+        !graph.analysis!.case_labels.includes(frame.case_label) ||
+        new Set(frame.source_ids).size !== frame.source_ids.length ||
+        new Set(frame.element_node_ids).size !==
+          frame.element_node_ids.length ||
+        new Set(frame.issue_node_ids).size !== frame.issue_node_ids.length ||
+        frame.source_ids.some((id) => !sourceIds.has(id)) ||
+        frame.element_node_ids.some(
+          (id) =>
+            !graph.nodes.some(
+              (node) => node.id === id && node.role === "element",
+            ),
+        ) ||
+        frame.issue_node_ids.some(
+          (id) =>
+            !graph.nodes.some(
+              (node) => node.id === id && node.role === "issue",
+            ),
+        )
+      )
+        issue("案由／罪名框架的角色或来源关联无效");
+    }
+    if (graph.analysis) {
+      if (
+        new Set(graph.analysis.case_labels).size !==
+          graph.analysis.case_labels.length ||
+        new Set(graph.analysis.framework_source_ids).size !==
+          graph.analysis.framework_source_ids.length ||
+        new Set(graph.analysis.element_node_ids).size !==
+          graph.analysis.element_node_ids.length ||
+        graph.analysis.framework_source_ids.some((id) => !sourceIds.has(id)) ||
+        graph.analysis.element_node_ids.some(
+          (id) =>
+            !graph.nodes.some(
+              (node) => node.id === id && node.role === "element",
+            ),
+        )
+      )
+        issue("案由／罪名分析基线的来源或要件关联无效");
+    }
     for (const item of graph.edges) {
+      if (
+        item.legal?.framework_ids &&
+        (new Set(item.legal.framework_ids).size !==
+          item.legal.framework_ids.length ||
+          item.legal.framework_ids.some((id) => !frameworkIds.has(id)))
+      )
+        issue("关系引用了无效的法律分析框架");
       if (!nodeIds.has(item.source) || !nodeIds.has(item.target))
         issue("关系端点不存在");
+      if (
+        item.legal &&
+        ((item.legal.asserted_by && !nodeIds.has(item.legal.asserted_by)) ||
+          item.legal.issue_ids.some((id) => !nodeIds.has(id)) ||
+          new Set(item.legal.issue_ids).size !== item.legal.issue_ids.length)
+      )
+        issue("法律关系的主张人或争点关联无效");
     }
     for (const item of [...graph.nodes, ...graph.edges]) {
       if (

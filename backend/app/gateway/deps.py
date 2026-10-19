@@ -791,7 +791,17 @@ async def _extension_ensure_owner_bootstrap_identity(email: str, password: str) 
     try:
         return await provider.create_user(email=email, password=password, system_role="user")
     except ValueError:
-        return await provider.authenticate({"email": email, "password": password})
+        user = await provider.authenticate({"email": email, "password": password})
+        if user is None or user.system_role != "admin":
+            return user
+        # This callback is injected only into the trusted owner listener,
+        # after its dedicated mTLS and signed activation checks. A host must
+        # explicitly opt in its one bootstrap account and retain another
+        # system administrator before reducing that account's system role.
+        allowed_email = os.environ.get("MATRIX_LAW_BOOTSTRAP_OWNER_TRANSITION_EMAIL", "").strip().lower()
+        if not allowed_email or user.email.lower() != allowed_email or await provider.count_admin_users() < 2:
+            return None
+        return await provider.transition_bootstrap_owner(user)
 
 
 def get_pat_repo(request: Request):

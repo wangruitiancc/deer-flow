@@ -16,7 +16,7 @@ import {
 } from "@/core/law";
 
 export const LEGAL_GRAPH_START_PROMPT =
-  "/matrix-law-graph 请基于当前项目中我有权访问的材料建立案情图谱。先列出当前材料与引用覆盖情况；如果范围或角度不明确，先向我确认。按人物关系、事件时间线、资金/证据链、法条/判例关联四个角度中有依据的部分组织，明确区分材料明示、模型推断与存疑关系，不要补造事实。使用 law_validate_graph 校验后写入新的 .law-graph.json，回读并在右侧展示；尚未保存为项目版本或人工审核前，不要声称已定稿。";
+  "/matrix-law-graph 请结合本案详情与本案案由或罪名建立专业案情图谱。先用 law_get_current_matter_summary 读取当前项目元数据，核对案由／罪名、程序阶段和本轮分析立场；信息不足或存在多种候选时先向我确认。基于本案授权材料、已读取的法律依据与适用版本，形成该案特有的争点和要件框架，再将本案主体、行为、事实、请求／指控、抗辩与证据映射进去。缺乏规范依据的要件框架只列为待核验的分析假设，不预设指控或案由成立。保留支持、反驳、矛盾和未覆盖事项，分别展示多种法律关系；标记材料明示、模型推断、存疑以及材料记载、当事人主张、分析假设，不补造事实或法条。同时由 AI 自动生成 presentation：按本案法律问题组织有说明的主题视图、颜色分组、初始重点和布局，让律师打开即可阅读，无需先手动配置搜索、过滤和着色。每个主题保留相关支持与相反路径，全部数据留在全图。记录 analysis 分析基线、node.role 和 edge.legal；沿用来源引用、人工修改与稳定 ID。先列出材料与引用覆盖情况，使用 law_validate_graph 校验后写入新的 .law-graph.json，回读并在右侧展示；尚未保存为项目版本或人工审核前，不声称已定稿。";
 
 export function LegalGraphStarter({ threadId }: { threadId: string }) {
   const composer = usePromptInputController();

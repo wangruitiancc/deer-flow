@@ -764,7 +764,8 @@
     left: 48px;
   }
   .law-workbench [data-collapsible="offcanvas"] > .law-navigation-panel {
-    visibility: hidden;
-    pointer-events: none;
+    /* Descendants can override visibility; remove the closed drawer from layout
+       and keyboard navigation while keeping its React state mounted. */
+    display: none;
   }
 }

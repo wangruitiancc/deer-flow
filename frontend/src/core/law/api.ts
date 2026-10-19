@@ -884,7 +884,7 @@ export async function getMatter(
 ): Promise<Matter> {
   const data = await requestLaw<{ matter: Matter }>(
     `/tenants/${encodeURIComponent(tenantId)}/matters/${encodeURIComponent(matterId)}`,
-    signal ? { signal } : undefined,
+    signal ? { signal, cache: "no-store" } : { cache: "no-store" },
     "Failed to load matter.",
   );
   return data.matter;

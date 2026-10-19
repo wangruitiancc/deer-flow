@@ -25,6 +25,53 @@ from app.gateway.auth.repositories.sqlite import SQLiteUserRepository
 _TEST_JWT_SECRET = "test-secret-for-admin-mfa-tests-at-least-32-chars"
 
 
+def test_enrolled_owner_keeps_mfa_after_system_role_is_reduced(tmp_path, monkeypatch) -> None:
+    from app.gateway import deps
+    from app.gateway.app import create_app
+    from deerflow.persistence.engine import close_engine, get_session_factory, init_engine
+
+    monkeypatch.delenv("DEER_FLOW_AUTH_DISABLED", raising=False)
+    monkeypatch.setenv("AUTH_JWT_SECRET", _TEST_JWT_SECRET)
+    monkeypatch.setenv("AUTH_MFA_ENCRYPTION_KEY", "e5" * 32)
+    # Existing enrollment remains mandatory even if mandatory *admin*
+    # enrollment policy is disabled later.
+    set_auth_config(AuthConfig(jwt_secret=_TEST_JWT_SECRET, mfa_required_for_admins=False))
+    secret = generate_totp_secret()
+
+    async def prepare() -> None:
+        await init_engine("sqlite", url=f"sqlite+aiosqlite:///{tmp_path}/owner-mfa.db", sqlite_dir=str(tmp_path))
+        await SQLiteUserRepository(get_session_factory()).create_user(
+            User(
+                email="owner-mfa@example.com",
+                password_hash=hash_password("OwnerMfaPass!384"),
+                system_role="user",
+                mfa_enabled=True,
+                mfa_secret_ciphertext=encrypt_totp_secret(secret),
+            )
+        )
+
+    asyncio.run(prepare())
+    deps._cached_local_provider = None
+    deps._cached_repo = None
+    try:
+        client = TestClient(create_app())
+        login = client.post("/api/v1/auth/login/local", data={"username": "owner-mfa@example.com", "password": "OwnerMfaPass!384"})
+        assert login.status_code == 200
+        assert login.json()["mfa_required"] is True
+        assert "access_token" not in client.cookies
+        code = _totp_at_counter(secret, int(time.time() // 30))
+        verified = client.post("/api/v1/auth/mfa/verify", json={"code": code})
+        assert verified.status_code == 200
+        assert client.get("/api/v1/auth/me").json()["system_role"] == "user"
+        client.cookies.delete("access_token")
+        client.post("/api/v1/auth/login/local", data={"username": "owner-mfa@example.com", "password": "OwnerMfaPass!384"})
+        assert client.post("/api/v1/auth/mfa/verify", json={"code": code}).status_code == 401
+    finally:
+        deps._cached_local_provider = None
+        deps._cached_repo = None
+        asyncio.run(close_engine())
+
+
 def test_totp_uses_rfc6238_window_and_rejects_replay() -> None:
     secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
     # RFC 6238's SHA-1 test vector at 59 seconds is 287082 with 6 digits.
@@ -98,12 +145,8 @@ def test_sqlite_repository_makes_mfa_challenges_and_recovery_codes_one_use(tmp_p
             assert not await provider.consume_mfa_totp(str(admin.id), admin.token_version, "challenge-totp", counter + 1)
 
             assert await provider.set_mfa_challenge(str(admin.id), admin.token_version, "challenge-recovery")
-            assert await provider.consume_mfa_recovery_code(
-                str(admin.id), admin.token_version, "challenge-recovery", hash_recovery_code(recovery_code)
-            )
-            assert not await provider.consume_mfa_recovery_code(
-                str(admin.id), admin.token_version, "challenge-recovery", hash_recovery_code(recovery_code)
-            )
+            assert await provider.consume_mfa_recovery_code(str(admin.id), admin.token_version, "challenge-recovery", hash_recovery_code(recovery_code))
+            assert not await provider.consume_mfa_recovery_code(str(admin.id), admin.token_version, "challenge-recovery", hash_recovery_code(recovery_code))
             assert await repo.count_users() == 1
         finally:
             await close_engine()
@@ -124,12 +167,9 @@ def test_admin_login_requires_totp_or_one_use_recovery_code(tmp_path, monkeypatc
     async def prepare() -> None:
         await init_engine("sqlite", url=f"sqlite+aiosqlite:///{tmp_path}/admin-mfa-http.db", sqlite_dir=str(tmp_path))
         repo = SQLiteUserRepository(get_session_factory())
-        await repo.create_user(
-            User(email="http-mfa-admin@example.com", password_hash=hash_password("AdminMfaPass!384"), system_role="admin")
-        )
-        await repo.create_user(
-            User(email="http-mfa-user@example.com", password_hash=hash_password("LawyerMfaPass!384"), system_role="user")
-        )
+        await repo.create_user(User(email="http-mfa-admin@example.com", password_hash=hash_password("AdminMfaPass!384"), system_role="admin"))
+        await repo.create_user(User(email="http-mfa-user@example.com", password_hash=hash_password("LawyerMfaPass!384"), system_role="user"))
+
     asyncio.run(prepare())
     deps._cached_local_provider = None
     deps._cached_repo = None

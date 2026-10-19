@@ -104,8 +104,8 @@ for (const width of [320, 768, 1024, 1440]) {
       }),
     );
     await page.goto(`/workspace/chats/${thread}`);
-    await page.getByTestId("artifact-trigger").click();
-    await page.getByText("contract.law-graph.json", { exact: true }).click();
+    await page.getByRole("tab", { name: "案情图谱", exact: true }).click();
+    await page.getByRole("button", { name: /contract.law-graph.json/ }).click();
     const region = page.getByRole("region", { name: "案情图谱" });
     await expect(region).toBeVisible();
     await region.getByRole("button", { name: "关系画布", exact: true }).click();
@@ -134,6 +134,58 @@ for (const width of [320, 768, 1024, 1440]) {
       path: info.outputPath("graph-canvas.png"),
       animations: "disabled",
     });
+    if (width === 1440) {
+      await region
+        .getByRole("button", { name: "图谱设置", exact: true })
+        .click();
+      const settings = region.getByRole("complementary", { name: "图谱设置" });
+      await settings.getByLabel("局部图谱中心").selectOption("party-a");
+      await settings.getByLabel("出向关系", { exact: true }).uncheck();
+      await settings.getByLabel("入向关系", { exact: true }).uncheck();
+      await expect(
+        region.getByText("当前 1 个节点 / 0 条关系 · 局部图"),
+      ).toBeVisible();
+      await settings.getByRole("button", { name: "恢复默认设置" }).click();
+      await settings.locator("summary").filter({ hasText: "分组着色" }).click();
+      await settings.getByRole("button", { name: "添加颜色分组" }).click();
+      await settings.getByLabel("分组 1 查询").fill("type:party");
+      await expect(
+        region.locator('[data-node-id="party-a"] circle').nth(1),
+      ).toHaveAttribute("fill", "#60a5fa");
+      await settings.getByRole("button", { name: "添加颜色分组" }).click();
+      await settings.getByLabel("分组 2 查询").fill("type:party");
+      await settings.getByRole("button", { name: "分组 1 下移" }).click();
+      await expect(
+        region.locator('[data-node-id="party-a"] circle').nth(1),
+      ).toHaveAttribute("fill", "#fbbf24");
+      await settings.getByRole("button", { name: "恢复默认设置" }).click();
+      await region.getByRole("button", { name: "关闭图谱设置" }).click();
+      await region.getByRole("button", { name: "返回全图" }).click();
+      await expect(
+        region.getByText("当前 2 个节点 / 1 条关系 · 全图"),
+      ).toBeVisible();
+      await region
+        .getByRole("button", { name: "待细分关系", exact: true })
+        .click();
+      await expect(
+        region.getByText("当前 2 个节点 / 1 条关系 · 全图"),
+      ).toBeVisible();
+      await region
+        .getByRole("button", { name: "证据与证明", exact: true })
+        .click();
+      await expect(region.getByText("没有匹配的节点或关系。")).toBeVisible();
+      await region
+        .getByRole("button", { name: "全部关系", exact: true })
+        .click();
+      await expect(
+        region.getByRole("button", { name: "导出图片" }),
+      ).toBeEnabled();
+      const download = page.waitForEvent("download");
+      await region.getByRole("button", { name: "导出图片" }).click();
+      const exported = await download;
+      expect(exported.suggestedFilename()).toBe("legal-graph.png");
+      await exported.saveAs(info.outputPath("graph-export.png"));
+    }
     await region.getByRole("button", { name: "时间线", exact: true }).click();
     await expect(region.getByText("2024-02", { exact: true })).toBeVisible();
     await region.getByRole("button", { name: /2024-02 合成签约事件/ }).click();
@@ -158,7 +210,7 @@ for (const width of [320, 768, 1024, 1440]) {
       "scrollWidth",
       page.viewportSize()!.width,
     );
-    await page.getByRole("tab", { name: "项目已保存成果" }).click();
+    await page.getByLabel("案情图谱当前文件").selectOption("");
     await page.getByRole("button", { name: /合成图谱已保存/ }).click();
     await expect(region).toBeVisible();
     await expect(page.getByText(/只读快照/)).toBeVisible();
@@ -291,8 +343,8 @@ for (const width of [320, 1440]) {
       return route.fulfill({ json: { data, meta: {} } });
     });
     await page.goto(`/workspace/chats/${thread}`);
-    await page.getByTestId("artifact-trigger").click();
-    await page.getByText("contract.law-graph.json", { exact: true }).click();
+    await page.getByRole("tab", { name: "案情图谱", exact: true }).click();
+    await page.getByRole("button", { name: /contract.law-graph.json/ }).click();
     const region = page.getByRole("region", { name: "案情图谱" });
     await expect(region.getByRole("button", { name: "新增节点" })).toHaveCount(
       0,
@@ -418,7 +470,7 @@ for (const width of [320, 1440]) {
     expect(multipart).toContain(stored);
     expect(multipart).toContain('name="expected_version"');
     expect(multipart).not.toContain('name="review_status"');
-    await page.getByRole("tab", { name: "项目已保存成果" }).click();
+    await page.getByLabel("案情图谱当前文件").selectOption("");
     await page.getByRole("button", { name: /合成图谱已保存/ }).click();
     await region.getByRole("button", { name: "节点与关系" }).click();
     await expect(
@@ -431,7 +483,9 @@ for (const width of [320, 1440]) {
     await expect(
       region.getByRole("button", { name: /合成乙方 组织/ }),
     ).toHaveCount(0);
-    await page.getByRole("tab", { name: "本会话文件" }).click();
+    await page
+      .getByLabel("案情图谱当前文件")
+      .selectOption({ label: "contract.law-graph.json" });
     await page.getByRole("button", { name: "Edit", exact: true }).click();
     await region.getByRole("button", { name: "节点与关系" }).click();
     await region.getByRole("button", { name: /合成甲方 当事人/ }).click();

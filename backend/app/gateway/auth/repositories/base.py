@@ -84,6 +84,10 @@ class UserRepository(ABC):
         """
         raise NotImplementedError
 
+    async def transition_bootstrap_owner(self, user: User) -> User | None:
+        """Reduce a proven bootstrap identity, fencing concurrent credential changes."""
+        raise NotImplementedError
+
     @abstractmethod
     async def set_password_if_token_version(self, user_id: str, expected_version: int, password_hash: str) -> bool:
         """Replace a local password once, fenced by the current session version.

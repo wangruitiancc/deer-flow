@@ -3,6 +3,7 @@ import { useEffect } from "react";
 
 import { useI18n } from "@/core/i18n/hooks";
 import type { AgentThreadState } from "@/core/threads";
+import { cn } from "@/lib/utils";
 
 import { useThreadChat } from "./chats";
 import { FlipDisplay } from "./flip-display";
@@ -18,6 +19,7 @@ export function ThreadTitle({
   threadId,
   thread,
   canonicalTitle,
+  className,
 }: ThreadTitleProps) {
   const { t } = useI18n();
   const { isNewThread } = useThreadChat();
@@ -48,5 +50,14 @@ export function ThreadTitle({
   if (!title) {
     return null;
   }
-  return <FlipDisplay uniqueKey={threadId}>{title}</FlipDisplay>;
+  return (
+    <FlipDisplay
+      uniqueKey={threadId}
+      className={cn("max-w-full min-w-0", className)}
+    >
+      <span className="block truncate" title={title}>
+        {title}
+      </span>
+    </FlipDisplay>
+  );
 }

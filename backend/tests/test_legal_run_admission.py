@@ -265,8 +265,13 @@ def test_matrix_law_product_accepts_only_the_dedicated_lead_agent(monkeypatch) -
 def test_matrix_law_product_does_not_mount_generic_control_plane(monkeypatch) -> None:
     monkeypatch.setenv("MATRIX_LAW_PRODUCT_REQUIRED", "1")
 
-    from app.gateway.app import create_app
+    from pathlib import Path
 
+    from app.gateway.app import create_app
+    from deerflow.config.app_config import AppConfig
+
+    config = AppConfig.from_file(str(Path(__file__).resolve().parents[2] / "config.example.yaml"))
+    monkeypatch.setattr("app.gateway.app.get_app_config", lambda: config)
     product_app = create_app()
     paths = {route.path for route in product_app.routes}
 

@@ -26,6 +26,16 @@ import {
   legalGraphNodeTypeLabels,
   type LegalGraphEdit,
 } from "@/core/law/legal-graph-editing";
+import {
+  legalFamilyLabels,
+  legalKindLabels,
+  legalNodeRoles,
+  legalRelationFamilies,
+  legalRelationKinds,
+  legalRoleLabels,
+  legalStatementLabels,
+  legalStatements,
+} from "@/core/law/legal-graph-semantics";
 
 export type GraphEditorTarget =
   | { kind: "title" }
@@ -213,6 +223,28 @@ export function LegalGraphEditor({
                     </select>,
                   )}
                 </div>
+                {field(
+                  "法律分析角色",
+                  <select
+                    aria-label="法律分析角色"
+                    className={selectClass}
+                    value={node.role ?? ""}
+                    onChange={(event) =>
+                      setNode({
+                        ...node,
+                        role: (event.target.value ||
+                          null) as LegalGraphNode["role"],
+                      })
+                    }
+                  >
+                    <option value="">未标注（按已有节点类型展示）</option>
+                    {legalNodeRoles.map((role) => (
+                      <option key={role} value={role}>
+                        {legalRoleLabels[role]}
+                      </option>
+                    ))}
+                  </select>,
+                )}
                 {node.type === "event" ? (
                   <>
                     {field(
@@ -228,7 +260,7 @@ export function LegalGraphEditor({
                       id={`${prefix}-date`}
                       className="text-muted-foreground text-xs"
                     >
-                      保留材料的日期精度；修改日期标为用户提供。事件位置由固定时间线决定。
+                      保留材料的日期精度；修改日期标为用户提供。时间线视图按日期排列，关系画布支持自由探索。
                     </p>
                   </>
                 ) : (
@@ -274,6 +306,211 @@ export function LegalGraphEditor({
             )}
             {edge && (
               <>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(edge.legal)}
+                    onChange={(event) =>
+                      setEdge({
+                        ...edge,
+                        legal: event.target.checked
+                          ? {
+                              family: "issues",
+                              kind: "other",
+                              statement: "analysis_hypothesis",
+                              asserted_by: null,
+                              issue_ids: [],
+                              questions: [],
+                            }
+                          : null,
+                      })
+                    }
+                  />
+                  细分法律专业关系
+                </label>
+                {edge.legal && (
+                  <div className="space-y-3 rounded-md border p-3">
+                    {Boolean(graph.analysis?.frameworks?.length) &&
+                      field(
+                        "归属案由／罪名框架（可多选）",
+                        <select
+                          multiple
+                          className={selectClass}
+                          value={edge.legal.framework_ids ?? []}
+                          onChange={(event) =>
+                            setEdge({
+                              ...edge,
+                              legal: {
+                                ...edge.legal!,
+                                framework_ids: Array.from(
+                                  event.target.selectedOptions,
+                                  (option) => option.value,
+                                ),
+                              },
+                            })
+                          }
+                        >
+                          {graph.analysis!.frameworks!.map((frame) => (
+                            <option key={frame.id} value={frame.id}>
+                              {frame.case_label} · {frame.label}
+                            </option>
+                          ))}
+                        </select>,
+                      )}
+                    {field(
+                      "法律关系视角",
+                      <select
+                        className={selectClass}
+                        value={edge.legal.family}
+                        onChange={(event) =>
+                          setEdge({
+                            ...edge,
+                            legal: {
+                              ...edge.legal!,
+                              family: event.target.value as NonNullable<
+                                LegalGraphEdge["legal"]
+                              >["family"],
+                            },
+                          })
+                        }
+                      >
+                        {legalRelationFamilies.map((family) => (
+                          <option key={family} value={family}>
+                            {legalFamilyLabels[family]}
+                          </option>
+                        ))}
+                      </select>,
+                    )}
+                    {field(
+                      "专业关系类型",
+                      <select
+                        className={selectClass}
+                        value={edge.legal.kind}
+                        onChange={(event) =>
+                          setEdge({
+                            ...edge,
+                            legal: {
+                              ...edge.legal!,
+                              kind: event.target.value as NonNullable<
+                                LegalGraphEdge["legal"]
+                              >["kind"],
+                            },
+                          })
+                        }
+                      >
+                        {legalRelationKinds.map((kind) => (
+                          <option key={kind} value={kind}>
+                            {legalKindLabels[kind]}
+                          </option>
+                        ))}
+                      </select>,
+                    )}
+                    {field(
+                      "陈述性质",
+                      <select
+                        className={selectClass}
+                        value={edge.legal.statement}
+                        onChange={(event) =>
+                          setEdge({
+                            ...edge,
+                            legal: {
+                              ...edge.legal!,
+                              statement: event.target.value as NonNullable<
+                                LegalGraphEdge["legal"]
+                              >["statement"],
+                            },
+                          })
+                        }
+                      >
+                        {legalStatements.map((statement) => (
+                          <option key={statement} value={statement}>
+                            {legalStatementLabels[statement]}
+                          </option>
+                        ))}
+                      </select>,
+                    )}
+                    {field(
+                      "主张主体（可留空）",
+                      <select
+                        className={selectClass}
+                        value={edge.legal.asserted_by ?? ""}
+                        onChange={(event) =>
+                          setEdge({
+                            ...edge,
+                            legal: {
+                              ...edge.legal!,
+                              asserted_by: event.target.value || null,
+                            },
+                          })
+                        }
+                      >
+                        <option value="">未指定</option>
+                        {graph.nodes.map((node) => (
+                          <option key={node.id} value={node.id}>
+                            {node.label}
+                          </option>
+                        ))}
+                      </select>,
+                    )}
+                    {field(
+                      "关联争点（可多选）",
+                      <select
+                        multiple
+                        className={selectClass}
+                        value={edge.legal.issue_ids}
+                        onChange={(event) =>
+                          setEdge({
+                            ...edge,
+                            legal: {
+                              ...edge.legal!,
+                              issue_ids: Array.from(
+                                event.target.selectedOptions,
+                                (option) => option.value,
+                              ),
+                            },
+                          })
+                        }
+                      >
+                        {graph.nodes.map((node) => (
+                          <option key={node.id} value={node.id}>
+                            {node.label}
+                          </option>
+                        ))}
+                      </select>,
+                    )}
+                    {field(
+                      "待核查问题（每行一项，最多 8 项）",
+                      <textarea
+                        rows={3}
+                        className={selectClass}
+                        value={edge.legal.questions.join("\n")}
+                        onChange={(event) =>
+                          setEdge({
+                            ...edge,
+                            legal: {
+                              ...edge.legal!,
+                              questions: event.target.value.split("\n"),
+                            },
+                          })
+                        }
+                        onBlur={() =>
+                          setEdge({
+                            ...edge,
+                            legal: {
+                              ...edge.legal!,
+                              questions: edge
+                                .legal!.questions.map((value) => value.trim())
+                                .filter(Boolean),
+                            },
+                          })
+                        }
+                      />,
+                    )}
+                    <p className="text-muted-foreground text-xs">
+                      这是待复核的分析标注；主张、材料记载和分析假设均不等于事实认定。
+                    </p>
+                  </div>
+                )}
                 {field(
                   "关系名称",
                   <Input
