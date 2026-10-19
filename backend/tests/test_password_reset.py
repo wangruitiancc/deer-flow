@@ -2,6 +2,7 @@
 
 import asyncio
 import secrets
+import smtplib
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 from urllib.parse import urlsplit
@@ -16,6 +17,89 @@ from app.gateway.auth.jwt import create_access_token, create_password_reset_toke
 from app.gateway.auth.password_reset import PasswordResetMailService, allow_password_reset_request, password_reset_request_buckets, send_password_reset_email
 
 _TEST_SECRET = "password-reset-tests-secret-with-enough-entropy"
+
+
+class _CleanupFailureSMTP:
+    """Model an acknowledged DATA followed by a failing QUIT."""
+
+    def __init__(self, quit_error: Exception, delivery_error: Exception | None = None):
+        self.quit_error = quit_error
+        self.delivery_error = delivery_error
+        self.send_count = 0
+        self.closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        self.quit()
+
+    def ehlo(self):
+        return 250, b"synthetic fixture"
+
+    def starttls(self, *, context):
+        assert context.check_hostname
+        return 220, b"synthetic fixture"
+
+    def send_message(self, _message):
+        self.send_count += 1
+        if self.delivery_error is not None:
+            raise self.delivery_error
+        return {}
+
+    def quit(self):
+        raise self.quit_error
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.mark.parametrize("security", ["ssl", "starttls"])
+@pytest.mark.parametrize("quit_error", [smtplib.SMTPResponseException(421, b"synthetic quit"), smtplib.SMTPResponseException(550, b"synthetic quit"), OSError("synthetic quit")])
+def test_password_reset_accepted_mail_is_not_retried_for_quit_failure(monkeypatch, security, quit_error):
+    config = _enabled_config().model_copy(update={"password_reset_smtp_security": security})
+    transport = _CleanupFailureSMTP(quit_error)
+    factory = Mock(return_value=transport)
+    monkeypatch.setattr(smtplib, "SMTP_SSL" if security == "ssl" else "SMTP", factory)
+
+    send_password_reset_email(config, "cleanup@example.com", "synthetic-token")
+
+    assert transport.send_count == 1
+    assert transport.closed
+    if security == "ssl":
+        assert factory.call_args.kwargs["context"].check_hostname
+
+
+@pytest.mark.parametrize("delivery_error", [smtplib.SMTPDataError(451, b"synthetic data"), smtplib.SMTPDataError(550, b"synthetic data"), smtplib.SMTPServerDisconnected("synthetic data response lost")])
+def test_password_reset_preserves_delivery_failure_when_quit_also_fails(monkeypatch, delivery_error):
+    transport = _CleanupFailureSMTP(smtplib.SMTPResponseException(421, b"synthetic quit"), delivery_error)
+    monkeypatch.setattr(smtplib, "SMTP", Mock(return_value=transport))
+
+    with pytest.raises(type(delivery_error)) as raised:
+        send_password_reset_email(_enabled_config(), "cleanup@example.com", "synthetic-token")
+
+    assert raised.value is delivery_error
+    assert transport.closed
+
+
+@pytest.mark.parametrize("security", ["ssl", "starttls"])
+def test_password_reset_outbox_finishes_once_when_only_quit_fails(auth_runtime, monkeypatch, security):
+    from app.gateway.deps import get_local_provider
+
+    config = _enabled_config().model_copy(update={"password_reset_smtp_security": security})
+    set_auth_config(config)
+    client = _client()
+    email = _email("cleanup-outbox")
+    assert client.post("/api/v1/auth/register", json={"email": email, "password": "OldStr0ngPwd!"}).status_code == 201
+    assert client.post("/api/v1/auth/password-reset/request", json={"email": email}).status_code == 202
+    transport = _CleanupFailureSMTP(smtplib.SMTPResponseException(421, b"synthetic quit"))
+    monkeypatch.setattr(smtplib, "SMTP_SSL" if security == "ssl" else "SMTP", Mock(return_value=transport))
+    mailer = PasswordResetMailService(get_local_provider().repository, config)
+    now = datetime.now(UTC)
+
+    assert asyncio.run(mailer.run_once(now=now)) is True
+    assert asyncio.run(mailer.run_once(now=now + timedelta(seconds=60))) is False
+    assert transport.send_count == 1
 
 
 @pytest.fixture()
@@ -611,7 +695,7 @@ class _LoopbackStartTlsServer:
                     else:
                         connection.sendall(b"250 message accepted\r\n")
                 elif command == b"QUIT":
-                    connection.sendall(b"221 closing\r\n")
+                    connection.sendall(b"421 synthetic quit failure\r\n" if self.behavior == "quit-temporary" else b"221 closing\r\n")
                     return
                 else:
                     connection.sendall(b"250 accepted\r\n")
@@ -682,6 +766,7 @@ def loopback_smtp_certificate(tmp_path_factory):
         ("accept", False, "erased", False),
         ("disconnect-before-data", True, "erased", False),
         ("disconnect-after-data", True, "erased", True),
+        ("quit-temporary", True, "erased", True),
     ],
 )
 def test_password_reset_smtp_tls_outbox_protocol_matrix(

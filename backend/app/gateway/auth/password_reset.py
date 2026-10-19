@@ -8,6 +8,7 @@ import hmac
 import logging
 import smtplib
 import ssl
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 
@@ -64,9 +65,10 @@ def encrypt_password_reset_token(config: AuthConfig, token: str) -> str:
 def send_password_reset_email(config: AuthConfig, email: str, token: str) -> None:
     """Deliver one reset link over operator-configured, verified-TLS SMTP.
 
-    SMTP failures intentionally propagate so the outbox worker can retry only
+    Delivery failures propagate so the outbox worker can retry only
     explicit 4xx responses. Transport errors can happen after DATA and are
     terminal to avoid resending a message the server may already have accepted.
+    QUIT is cleanup: its failure must not replace the known delivery outcome.
     """
     if not config.password_reset_enabled:
         return
@@ -80,29 +82,32 @@ def send_password_reset_email(config: AuthConfig, email: str, token: str) -> Non
     message.set_content(f"A password reset was requested for this account.\n\nOpen this link within 20 minutes to choose a new password:\n{reset_url}\n\nIf you did not request this, you can ignore this message.")
 
     context = ssl.create_default_context()
+    server: smtplib.SMTP | None = None
     try:
         if config.password_reset_smtp_security == "ssl":
-            with smtplib.SMTP_SSL(
+            server = smtplib.SMTP_SSL(
                 config.password_reset_smtp_host,
                 config.password_reset_smtp_effective_port,
                 timeout=10,
                 context=context,
-            ) as server:
-                _authenticate_if_configured(server, config)
-                server.send_message(message)
+            )
         else:
-            with smtplib.SMTP(
+            server = smtplib.SMTP(
                 config.password_reset_smtp_host,
                 config.password_reset_smtp_effective_port,
                 timeout=10,
-            ) as server:
-                server.ehlo()
-                server.starttls(context=context)
-                server.ehlo()
-                _authenticate_if_configured(server, config)
-                server.send_message(message)
-    except (OSError, smtplib.SMTPException):
-        raise
+            )
+            server.ehlo()
+            server.starttls(context=context)
+            server.ehlo()
+        _authenticate_if_configured(server, config)
+        server.send_message(message)
+    finally:
+        if server is not None:
+            with suppress(OSError, smtplib.SMTPException):
+                server.quit()
+            with suppress(OSError, smtplib.SMTPException):
+                server.close()
 
 
 def _authenticate_if_configured(server: smtplib.SMTP, config: AuthConfig) -> None:
