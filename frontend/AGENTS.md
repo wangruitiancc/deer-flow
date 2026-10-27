@@ -357,6 +357,20 @@ from these URL/build helpers. Only a requested command menu/editor/matter panel
 loads its heavy UI. Preserve keyboard listeners, closable loading states, drafts,
 expected-version checks and active capture mounts.
 
+Unauthenticated workspace requests do not render protected children. Only
+`WorkspaceLoginRedirect` preserves the existing pathname, search and hash in the
+browser as the login `next` value. Existing login verification, role routing and
+backend ACL behavior remain unchanged.
+
+If reading a saved version's content or source receipt fails, the user may retry
+in place; existing authorization and content validation still apply, and review
+gating is not bypassed.
+
+Saving an existing project artifact refreshes its version list; explicitly
+reopening an updated artifact from the list reads its latest metadata, while
+historical versions remain manually selectable and workspace file drafts are
+not remounted.
+
 `perf:check` retains all numeric ceilings. The disabled generic docs/blog entries
 have explicit HTTP307 contracts in `performance-budgets.json`; they must still
 redirect to `/workspace/law`. A returned page or another destination fails that

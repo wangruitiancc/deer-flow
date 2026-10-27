@@ -383,9 +383,12 @@ function LegalDocumentWorkspace({
     dispatch({ type: "open", id });
   const openTab = (tab: WorkTab) => {
     const functionId = category(tab);
-    setTabs((current) =>
-      current.some((row) => row.id === tab.id) ? current : [...current, tab],
-    );
+    setTabs((current) => {
+      if (!current.some((row) => row.id === tab.id)) return [...current, tab];
+      if (tab.kind === "saved")
+        return current.map((row) => (row.id === tab.id ? tab : row));
+      return current;
+    });
     setSelected((current) => ({ ...current, [functionId]: tab.id }));
     openFunction(functionId);
   };
@@ -791,6 +794,7 @@ function LegalDocumentWorkspace({
                     />
                   ) : (
                     <ProjectArtifactDetail
+                      key={`${tab.item.id}:${tab.item.version}`}
                       artifact={tab.item}
                       threadId={threadId}
                       canReview={["owner", "lead", "lawyer"].includes(
@@ -1153,6 +1157,7 @@ function ProjectArtifactContent({
   const [content, setContent] = useState<{ text?: string; url: string } | null>(
     null,
   );
+  const [contentAttempt, setContentAttempt] = useState(0);
   const [error, setError] = useState("");
   const [navigationError, setNavigationError] = useState("");
   const [downloading, setDownloading] = useState(false);
@@ -1267,6 +1272,8 @@ function ProjectArtifactContent({
   useEffect(() => {
     const active = new AbortController();
     let objectUrl: string | undefined;
+    setError("");
+    setContent(null);
     void (async () => {
       try {
         const blob = await fetchProjectArtifactContent(version, active.signal);
@@ -1289,7 +1296,7 @@ function ProjectArtifactContent({
       active.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [version, isText]);
+  }, [version, isText, contentAttempt]);
 
   async function openSource() {
     setNavigationError("");
@@ -1471,9 +1478,17 @@ function ProjectArtifactContent({
         {version.media_type === "text/markdown" && (
           <div className="space-y-2">
             {sourcesQuery.isError ? (
-              <p role="alert" className="text-destructive text-xs">
-                来源回执读取失败；重新读取成功前不能审核此版本。
-              </p>
+              <div role="alert" className="text-destructive text-xs">
+                <p>来源回执读取失败；重新读取成功前不能审核此版本。</p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={sourcesQuery.isFetching}
+                  onClick={() => void sourcesQuery.refetch()}
+                >
+                  {sourcesQuery.isFetching ? "正在重新读取…" : "重新读取来源"}
+                </Button>
+              </div>
             ) : sourcesQuery.isPending ? (
               <p role="status" className="text-muted-foreground text-xs">
                 正在核验此版本的来源回执…
@@ -1639,9 +1654,16 @@ function ProjectArtifactContent({
         )}
       </div>
       {error ? (
-        <p role="alert" className="p-4">
-          {error}
-        </p>
+        <div role="alert" className="space-y-2 p-4">
+          <p>{error}</p>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setContentAttempt((attempt) => attempt + 1)}
+          >
+            重新读取正文
+          </Button>
+        </div>
       ) : !content ? (
         <p role="status" className="p-4">
           正在核验并扫描所选版本…

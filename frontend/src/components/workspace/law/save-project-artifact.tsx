@@ -233,6 +233,17 @@ export function SaveProjectArtifact({
           scope.matter_id,
         ],
       });
+      if (target) {
+        void queryClient.invalidateQueries({
+          queryKey: [
+            "law",
+            "project-artifact-versions",
+            scope.tenant_id,
+            scope.matter_id,
+            target.id,
+          ],
+        });
+      }
     } catch (cause) {
       if (!active.signal.aborted)
         setError(
