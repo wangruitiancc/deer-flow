@@ -366,6 +366,11 @@ If reading a saved version's content or source receipt fails, the user may retry
 in place; existing authorization and content validation still apply, and review
 gating is not bypassed.
 
+Saving an existing project artifact refreshes its version list; explicitly
+reopening an updated artifact from the list reads its latest metadata, while
+historical versions remain manually selectable and workspace file drafts are
+not remounted.
+
 `perf:check` retains all numeric ceilings. The disabled generic docs/blog entries
 have explicit HTTP307 contracts in `performance-budgets.json`; they must still
 redirect to `/workspace/law`. A returned page or another destination fails that

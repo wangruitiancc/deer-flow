@@ -383,9 +383,12 @@ function LegalDocumentWorkspace({
     dispatch({ type: "open", id });
   const openTab = (tab: WorkTab) => {
     const functionId = category(tab);
-    setTabs((current) =>
-      current.some((row) => row.id === tab.id) ? current : [...current, tab],
-    );
+    setTabs((current) => {
+      if (!current.some((row) => row.id === tab.id)) return [...current, tab];
+      if (tab.kind === "saved")
+        return current.map((row) => (row.id === tab.id ? tab : row));
+      return current;
+    });
     setSelected((current) => ({ ...current, [functionId]: tab.id }));
     openFunction(functionId);
   };
@@ -791,6 +794,7 @@ function LegalDocumentWorkspace({
                     />
                   ) : (
                     <ProjectArtifactDetail
+                      key={`${tab.item.id}:${tab.item.version}`}
                       artifact={tab.item}
                       threadId={threadId}
                       canReview={["owner", "lead", "lawyer"].includes(
