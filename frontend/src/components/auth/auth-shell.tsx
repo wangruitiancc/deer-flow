@@ -122,7 +122,7 @@ export function AuthShell({
         <div className="hidden space-y-2 text-sm tracking-[0.08em] text-white/62 lg:block">
           <p>Matrix-Law</p>
           <p className="tracking-normal">
-            每个租户独立记账，每位律师独立承担 LLM 用量。
+            整理材料、分析案情、核验引用、起草文书。
           </p>
         </div>
       </aside>

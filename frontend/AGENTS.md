@@ -357,6 +357,11 @@ from these URL/build helpers. Only a requested command menu/editor/matter panel
 loads its heavy UI. Preserve keyboard listeners, closable loading states, drafts,
 expected-version checks and active capture mounts.
 
+Unauthenticated workspace requests do not render protected children. Only
+`WorkspaceLoginRedirect` preserves the existing pathname, search and hash in the
+browser as the login `next` value. Existing login verification, role routing and
+backend ACL behavior remain unchanged.
+
 `perf:check` retains all numeric ceilings. The disabled generic docs/blog entries
 have explicit HTTP307 contracts in `performance-budgets.json`; they must still
 redirect to `/workspace/law`. A returned page or another destination fails that

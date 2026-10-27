@@ -5,6 +5,7 @@ import "@/styles/law-workspace.css";
 
 import { redirect } from "next/navigation";
 
+import { WorkspaceLoginRedirect } from "@/components/auth/workspace-login-redirect";
 import { GatewayOfflineFallback } from "@/components/workspace/gateway-offline-fallback";
 import { AuthProvider } from "@/core/auth/AuthProvider";
 import { getServerSideUser } from "@/core/auth/server";
@@ -37,7 +38,8 @@ export default async function WorkspaceLayout({
     case "system_setup_required":
       redirect("/setup");
     case "unauthenticated":
-      redirect("/login");
+      content = <WorkspaceLoginRedirect />;
+      break;
     case "gateway_unavailable":
       // GatewayOfflineFallback supplies the AuthProvider; WorkspaceContent
       // already mounts the banner inside its sidebar layout, so renderBanner
